@@ -3,6 +3,8 @@ package io.github.ilyaandreev05.audiomatrix;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.config.ConfigStore;
 import io.github.ilyaandreev05.audiomatrix.config.ConfigValidator;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphPipeWireCompiler;
 import io.github.ilyaandreev05.audiomatrix.ui.AppShell;
 import javafx.application.Application;
 import javafx.scene.Scene;
@@ -66,7 +68,22 @@ public class AudioMatrixApp extends Application {
             var mapper = mapperFor(path);
             Map<String, Object> config = mapper.readValue(path.toFile(), new com.fasterxml.jackson.core.type.TypeReference<>() {});
             List<String> errors = ConfigValidator.validate(config);
-            if (errors.isEmpty()) { System.out.println("Configuration is valid: " + path.toAbsolutePath()); return; }
+            if (errors.isEmpty()) {
+                String activeRoute = String.valueOf(config.getOrDefault("active_route", ""));
+                if (!activeRoute.isBlank()) {
+                    List<?> routes = config.get("route_library") instanceof List<?> list ? list : List.of();
+                    Map<String,Object> route = null;
+                    for (Object candidate : routes) if (candidate instanceof Map<?,?> item && activeRoute.equals(item.get("id"))) {
+                        Map<String,Object> selected = new java.util.LinkedHashMap<>();
+                        for (Map.Entry<?,?> entry : item.entrySet()) selected.put(String.valueOf(entry.getKey()), entry.getValue());
+                        route = selected;
+                        break;
+                    }
+                    if (route == null) throw new IllegalArgumentException("The active route could not be found in route_library.");
+                    GraphPipeWireCompiler.compile(GraphCodec.fromMap(route), config);
+                }
+                System.out.println("Configuration and active graph are valid: " + path.toAbsolutePath()); return;
+            }
             errors.forEach(error -> System.err.println("- " + error)); System.exit(1);
         } catch (Exception e) { System.err.println("Configuration could not be validated: " + e.getMessage()); System.exit(1); }
     }

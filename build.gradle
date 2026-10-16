@@ -98,6 +98,7 @@ tasks.register('packageDeb', Exec) {
         def packageControl = new File(extracted, 'DEBIAN/control')
         def controlText = java.nio.file.Files.readString(packageControl.toPath())
         controlText = controlText.replaceFirst(/(?m)^Version:.*$/, "Version: ${project.version}")
+        controlText = controlText.replaceFirst(/(?m)^Depends: (.*)$/, 'Depends: $1, python3')
         java.nio.file.Files.writeString(packageControl.toPath(), controlText)
         def unitDirectory = new File(extracted, 'opt/audiomatrix/lib/systemd/user')
         unitDirectory.mkdirs()
@@ -111,12 +112,20 @@ tasks.register('packageDeb', Exec) {
         def extensionDirectory = new File(extracted, "opt/audiomatrix/lib/gnome-shell/extensions/${extensionId}")
         extensionDirectory.mkdirs()
         copy { from file('gnome/audio-matrix-quick-settings'); include 'metadata.json', 'extension.js'; into extensionDirectory }
+        def chromeExtensionDirectory = new File(extracted, 'opt/audiomatrix/lib/chrome/tab-capture')
+        chromeExtensionDirectory.mkdirs()
+        copy { from file('chrome/tab-capture'); into chromeExtensionDirectory }
+        def chromeHostDirectory = new File(extracted, 'opt/audiomatrix/lib/chrome/native-host')
+        chromeHostDirectory.mkdirs()
+        copy { from file('chrome/native-host'); exclude 'test_host.py', '__pycache__/**'; into chromeHostDirectory }
+        new File(chromeHostDirectory, 'audio-matrix-tab-capture.py').setExecutable(true, false)
         def helperDirectory = new File(extracted, 'opt/audiomatrix/bin')
         helperDirectory.mkdirs()
         copy { from file('src/main/systemd/user/audiomatrix-system-sink.sh'); into helperDirectory }
         copy { from files('scripts/enable-audiomatrix-events-service.sh', 'scripts/disable-audiomatrix-events-service.sh',
                 'scripts/enable-audiomatrix-service.sh', 'scripts/disable-audiomatrix-service.sh',
-                'scripts/install-gnome-quick-settings.sh', 'scripts/uninstall-gnome-quick-settings.sh'); into helperDirectory }
+                'scripts/install-gnome-quick-settings.sh', 'scripts/uninstall-gnome-quick-settings.sh',
+                'scripts/install-chrome-tab-capture.sh', 'scripts/uninstall-chrome-tab-capture.sh'); into helperDirectory }
         new File(helperDirectory, 'audiomatrix-system-sink.sh').setExecutable(true, false)
         new File(helperDirectory, 'enable-audiomatrix-events-service.sh').setExecutable(true, false)
         new File(helperDirectory, 'disable-audiomatrix-events-service.sh').setExecutable(true, false)
@@ -124,6 +133,8 @@ tasks.register('packageDeb', Exec) {
         new File(helperDirectory, 'disable-audiomatrix-service.sh').setExecutable(true, false)
         new File(helperDirectory, 'install-gnome-quick-settings.sh').setExecutable(true, false)
         new File(helperDirectory, 'uninstall-gnome-quick-settings.sh').setExecutable(true, false)
+        new File(helperDirectory, 'install-chrome-tab-capture.sh').setExecutable(true, false)
+        new File(helperDirectory, 'uninstall-chrome-tab-capture.sh').setExecutable(true, false)
         def rebuilt = new File(dest, packageFile.name + '.rebuilt')
         runCommand(['dpkg-deb', '--build', '--root-owner-group', extracted.absolutePath, rebuilt.absolutePath])
         java.nio.file.Files.move(rebuilt.toPath(), packageFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)

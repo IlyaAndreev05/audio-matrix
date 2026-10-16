@@ -1,0 +1,7 @@
+{
+  "name": "io.github.ilyaandreev05.audiomatrix.chrome_tab_capture",
+  "description": "Audio Matrix Chrome tab capture PCM bridge",
+  "path": "/opt/audiomatrix/lib/chrome/native-host/audio-matrix-tab-capture.py",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://hkhjefdofjmbfkdmhmjpdfkeijccnkgi/"]
+}

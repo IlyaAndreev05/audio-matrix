@@ -1,0 +1,17 @@
+:root { color-scheme: light dark; font: 14px system-ui, sans-serif; }
+body { width: 360px; margin: 0; background: #202124; color: #e8eaed; }
+main { padding: 16px; }
+h1 { margin: 0; font-size: 18px; }
+h2 { margin: 18px 0 8px; font-size: 13px; color: #bdc1c6; text-transform: uppercase; letter-spacing: .04em; }
+p { margin: 6px 0 12px; }
+#status { min-height: 1.2em; color: #bdc1c6; }
+.tab-title { overflow-wrap: anywhere; }
+button { min-height: 36px; border: 0; border-radius: 18px; padding: 0 16px; background: #d54e20; color: white; font: inherit; cursor: pointer; }
+button:disabled { cursor: default; opacity: .5; }
+button:focus-visible { outline: 2px solid #8ab4f8; outline-offset: 2px; }
+ul { max-height: 260px; overflow: auto; margin: 0; padding: 0; list-style: none; }
+li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; align-items: center; padding: 7px 0; border-top: 1px solid #3c4043; }
+.title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab-action { min-height: 30px; padding: 0 10px; background: #3c4043; }
+.tab-action[aria-pressed="true"] { background: #5f2d20; }
+footer { margin-top: 14px; color: #bdc1c6; font-size: 12px; line-height: 1.45; }

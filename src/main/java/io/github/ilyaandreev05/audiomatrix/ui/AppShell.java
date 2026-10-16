@@ -138,6 +138,7 @@ public final class AppShell extends BorderPane {
     private final PipeWireBackend backend;
     private final PipeWireRouteManager routeManager = new PipeWireRouteManager();
     private final ArrayDeque<RouteHistoryEntry> routeHistory = new ArrayDeque<>();
+    private final ArrayDeque<RouteHistoryEntry> routeRedoHistory = new ArrayDeque<>();
     private final ThemeManager themes;
     private final GnomeControlBridge gnomeBridge;
     private final ExecutorService archiveIo = Executors.newSingleThreadExecutor(r -> { Thread thread = new Thread(r, "audio-matrix-config-archive"); thread.setDaemon(true); return thread; });
@@ -975,16 +976,18 @@ public final class AppShell extends BorderPane {
                 "History is kept for this session. Undo saves the previous JSON; if a route graph is active, Audio Matrix updates it to match the restored configuration."), "muted"));
         if (routeHistory.isEmpty()) {
             history.getChildren().add(label(t("Изменений маршрутов в этом сеансе пока нет.", "No route changes in this session yet."), "muted"));
-            return history;
-        }
-        int shown = 0;
-        for (RouteHistoryEntry entry : routeHistory) {
-            if (shown++ == 10) break;
-            history.getChildren().add(label("• " + entry.description(), "muted"));
+        } else {
+            int shown = 0;
+            for (RouteHistoryEntry entry : routeHistory) {
+                if (shown++ == 10) break;
+                history.getChildren().add(label("• " + entry.description(), "muted"));
+            }
         }
         Button undo = actionButton(t("Отменить последнее изменение", "Undo latest change"), this::undoLastRouteChange);
-        undo.setDisable(routeUndoInProgress);
-        history.getChildren().add(undo);
+        undo.setDisable(routeUndoInProgress || routeHistory.isEmpty());
+        Button redo = actionButton(t("Повторить изменение", "Redo change"), this::redoLastRouteChange);
+        redo.setDisable(routeUndoInProgress || routeRedoHistory.isEmpty());
+        history.getChildren().add(new HBox(8, undo, redo));
         return history;
     }
 
@@ -992,6 +995,7 @@ public final class AppShell extends BorderPane {
         if (routeUndoInProgress || routeHistory.isEmpty()) return;
         if (store.revision() != routeHistoryRevision) {
             routeHistory.clear();
+            routeRedoHistory.clear();
             routeHistoryRevision = -1;
             setNotice(t("История устарела после другого изменения конфигурации; откат не выполнен.",
                     "Route history is stale after another configuration change; undo was not applied."), true);
@@ -999,18 +1003,55 @@ public final class AppShell extends BorderPane {
             return;
         }
         RouteHistoryEntry entry = routeHistory.peekFirst();
+        Map<String,Object> currentSnapshot = store.snapshot();
         routeUndoInProgress = true;
         showPage(Page.ROUTES);
         store.restoreIfRevisionAsync(entry.previousSnapshot(), routeHistoryRevision).whenComplete((revision, error) -> Platform.runLater(() -> {
             routeUndoInProgress = false;
             if (error != null) {
                 routeHistory.clear();
+                routeRedoHistory.clear();
                 routeHistoryRevision = -1;
                 setNotice(t("Откат маршрута не сохранён: ", "Route undo was not saved: ") + rootMessage(error), true);
             } else {
                 routeHistory.removeFirst();
+                routeRedoHistory.addFirst(new RouteHistoryEntry(entry.description(), currentSnapshot));
+                while (routeRedoHistory.size() > 20) routeRedoHistory.removeLast();
                 routeHistoryRevision = revision;
                 setNotice(t("Отменено: ", "Undid: ") + entry.description(), false);
+            }
+            showPage(Page.ROUTES);
+        }));
+    }
+
+    private void redoLastRouteChange() {
+        if (routeUndoInProgress || routeRedoHistory.isEmpty()) return;
+        if (store.revision() != routeHistoryRevision) {
+            routeHistory.clear();
+            routeRedoHistory.clear();
+            routeHistoryRevision = -1;
+            setNotice(t("История устарела после другого изменения конфигурации; повтор не выполнен.",
+                    "Route history is stale after another configuration change; redo was not applied."), true);
+            showPage(Page.ROUTES);
+            return;
+        }
+        RouteHistoryEntry entry = routeRedoHistory.peekFirst();
+        Map<String,Object> currentSnapshot = store.snapshot();
+        routeUndoInProgress = true;
+        showPage(Page.ROUTES);
+        store.restoreIfRevisionAsync(entry.previousSnapshot(), routeHistoryRevision).whenComplete((revision, error) -> Platform.runLater(() -> {
+            routeUndoInProgress = false;
+            if (error != null) {
+                routeHistory.clear();
+                routeRedoHistory.clear();
+                routeHistoryRevision = -1;
+                setNotice(t("Повтор изменения маршрута не сохранён: ", "Route redo was not saved: ") + rootMessage(error), true);
+            } else {
+                routeRedoHistory.removeFirst();
+                routeHistory.addFirst(new RouteHistoryEntry(entry.description(), currentSnapshot));
+                while (routeHistory.size() > 20) routeHistory.removeLast();
+                routeHistoryRevision = revision;
+                setNotice(t("Повторено: ", "Redid: ") + entry.description(), false);
             }
             showPage(Page.ROUTES);
         }));
@@ -1039,6 +1080,7 @@ public final class AppShell extends BorderPane {
             return;
         }
         if (!routeHistory.isEmpty() && routeHistoryRevision != saved.beforeRevision()) routeHistory.clear();
+        routeRedoHistory.clear();
         routeHistory.addFirst(new RouteHistoryEntry(description, saved.previousSnapshot()));
         while (routeHistory.size() > 20) routeHistory.removeLast();
         routeHistoryRevision = saved.afterRevision();
