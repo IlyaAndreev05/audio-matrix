@@ -95,15 +95,35 @@ tasks.register('packageDeb', Exec) {
             if (process.waitFor() != 0) throw new GradleException("Command failed: ${command.first()}")
         }
         runCommand(['dpkg-deb', '--raw-extract', packageFile.absolutePath, extracted.absolutePath])
+        def packageControl = new File(extracted, 'DEBIAN/control')
+        def controlText = java.nio.file.Files.readString(packageControl.toPath())
+        controlText = controlText.replaceFirst(/(?m)^Version:.*$/, "Version: ${project.version}")
+        java.nio.file.Files.writeString(packageControl.toPath(), controlText)
         def unitDirectory = new File(extracted, 'opt/audiomatrix/lib/systemd/user')
         unitDirectory.mkdirs()
         copy { from file('src/main/systemd/user'); into unitDirectory }
         new File(unitDirectory, 'audiomatrix-events-loopback.sh').setExecutable(true, false)
+        new File(unitDirectory, 'audiomatrix-system-sink.sh').setExecutable(true, false)
+        def pipewireDropInDirectory = new File(extracted, 'opt/audiomatrix/lib/pipewire/pipewire.conf.d')
+        pipewireDropInDirectory.mkdirs()
+        copy { from file('src/main/pipewire/pipewire.conf.d/90-audiomatrix-system-sink.conf'); into pipewireDropInDirectory }
+        def extensionId = 'audio-matrix-quick-settings@ilyaandreev05'
+        def extensionDirectory = new File(extracted, "opt/audiomatrix/lib/gnome-shell/extensions/${extensionId}")
+        extensionDirectory.mkdirs()
+        copy { from file('gnome/audio-matrix-quick-settings'); include 'metadata.json', 'extension.js'; into extensionDirectory }
         def helperDirectory = new File(extracted, 'opt/audiomatrix/bin')
         helperDirectory.mkdirs()
-        copy { from files('scripts/enable-audiomatrix-events-service.sh', 'scripts/disable-audiomatrix-events-service.sh'); into helperDirectory }
+        copy { from file('src/main/systemd/user/audiomatrix-system-sink.sh'); into helperDirectory }
+        copy { from files('scripts/enable-audiomatrix-events-service.sh', 'scripts/disable-audiomatrix-events-service.sh',
+                'scripts/enable-audiomatrix-service.sh', 'scripts/disable-audiomatrix-service.sh',
+                'scripts/install-gnome-quick-settings.sh', 'scripts/uninstall-gnome-quick-settings.sh'); into helperDirectory }
+        new File(helperDirectory, 'audiomatrix-system-sink.sh').setExecutable(true, false)
         new File(helperDirectory, 'enable-audiomatrix-events-service.sh').setExecutable(true, false)
         new File(helperDirectory, 'disable-audiomatrix-events-service.sh').setExecutable(true, false)
+        new File(helperDirectory, 'enable-audiomatrix-service.sh').setExecutable(true, false)
+        new File(helperDirectory, 'disable-audiomatrix-service.sh').setExecutable(true, false)
+        new File(helperDirectory, 'install-gnome-quick-settings.sh').setExecutable(true, false)
+        new File(helperDirectory, 'uninstall-gnome-quick-settings.sh').setExecutable(true, false)
         def rebuilt = new File(dest, packageFile.name + '.rebuilt')
         runCommand(['dpkg-deb', '--build', '--root-owner-group', extracted.absolutePath, rebuilt.absolutePath])
         java.nio.file.Files.move(rebuilt.toPath(), packageFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)

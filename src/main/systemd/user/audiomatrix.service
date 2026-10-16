@@ -1,0 +1,18 @@
+[Unit]
+Description=Audio Matrix background audio engine
+After=graphical-session.target pipewire.service wireplumber.service
+Requires=audiomatrix-system-sink.service
+After=audiomatrix-system-sink.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/opt/audiomatrix/bin/AudioMatrix --background
+ExecStop=/opt/audiomatrix/bin/AudioMatrix --quit
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=25
+KillMode=control-group
+
+[Install]
+WantedBy=graphical-session.target

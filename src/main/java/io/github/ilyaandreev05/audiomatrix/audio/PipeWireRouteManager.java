@@ -112,6 +112,8 @@ public final class PipeWireRouteManager implements AutoCloseable {
             for (String busId : plan.buses().keySet()) if (!targetBuses.contains(busId))
                 branchGain += pathGain(busId, sink.name(), plan.buses(), outgoing, new HashSet<>());
         }
+        branchGain *= plan.masterVolume();
+        if (plan.masterMuted()) return HeadroomEstimate.unavailable("No active route reaches the selected output");
         if (branchGain <= 0) return HeadroomEstimate.unavailable("No active route reaches the selected output");
         branchGain *= dbToLinear(positiveEqGain(outputFilters));
         double preLimiter = AudioMeterMath.dbfs(branchGain);
@@ -240,6 +242,17 @@ public final class PipeWireRouteManager implements AutoCloseable {
             activeTransitionMs = transitionMillis(config);
             return reportAppliedPlan(plan);
         }
+        if (active && appliedPlan != null && processesAlive() && sameRoutingTopology(appliedPlan, plan)) {
+            try {
+                updateLiveLevels(plan);
+                activeTransitionMs = transitionMillis(config);
+                appliedPlan = plan;
+                appliedSignature = signature;
+                return reportAppliedPlan(plan);
+            } catch (Exception error) {
+                transitionWarnings.add("live level update failed; graph rebuild used instead: " + message(error));
+            }
+        }
         int transitionMs = transitionMillis(config);
         int fadeOutMs = active && appliedPlan != null ? transitionMs / 2 : 0;
         int fadeInMs = active && appliedPlan != null ? transitionMs - fadeOutMs : transitionMs;
@@ -285,11 +298,12 @@ public final class PipeWireRouteManager implements AutoCloseable {
             }
             for (RoutePlan route : plan.routes()) {
                 int nodeId = findNodeId(route.playbackNodeName());
-                double volume = MixLevelMath.effectiveRouteVolume(route.volume(), route.gainDb());
-                double initialVolume = fadeInMs > 0 || route.muted() ? 0.0 : volume;
+                double volume = effectiveRoutePlaybackVolume(plan, route);
+                boolean muted = effectiveRoutePlaybackMuted(plan, route);
+                double initialVolume = fadeInMs > 0 || muted ? 0.0 : volume;
                 run(List.of("wpctl", "set-volume", Integer.toString(nodeId), Double.toString(initialVolume),
                         "--limit", Double.toString(MixLevelMath.maxRouteVolume())), COMMAND_TIMEOUT);
-                run(List.of("wpctl", "set-mute", Integer.toString(nodeId), route.muted() ? "1" : "0"), COMMAND_TIMEOUT);
+                run(List.of("wpctl", "set-mute", Integer.toString(nodeId), muted ? "1" : "0"), COMMAND_TIMEOUT);
             }
 
             Map<String, List<String>> inputs = ports("-i");
@@ -430,8 +444,8 @@ public final class PipeWireRouteManager implements AutoCloseable {
         try {
             for (RoutePlan route : plan.routes()) {
                 int nodeId = findNodeId(route.playbackNodeName());
-                double configured = MixLevelMath.effectiveRouteVolume(route.volume(), route.gainDb());
-                double full = route.muted() ? 0.0 : configured;
+                double configured = effectiveRoutePlaybackVolume(plan, route);
+                double full = effectiveRoutePlaybackMuted(plan, route) ? 0.0 : configured;
                 nodes.add(new FadeNode(nodeId, fadeOut ? full : 0.0, fadeOut ? 0.0 : full));
             }
             long startNanos = System.nanoTime();
@@ -460,13 +474,13 @@ public final class PipeWireRouteManager implements AutoCloseable {
                 .findFirst().orElseGet(() -> maps(config.get("profiles")).stream().findFirst().orElse(Map.of()));
         String profileMode = text(profile.get("mode"), "hybrid");
         boolean profileOff = "off".equals(profileMode);
-        if (profileOff) return new Plan(Map.of(), List.of(), List.of(), Map.of(), List.of(), true);
+        if (profileOff) return new Plan(Map.of(), List.of(), List.of(), Map.of(), List.of(), true, 1.0, false);
         Set<String> activeBuses = new HashSet<>(strings(profile.get("active_buses")));
         Set<String> activeRoutes = new HashSet<>(strings(profile.get("active_routes")));
         Map<String, Map<String, Object>> busConfig = new LinkedHashMap<>();
         for (Map<String, Object> bus : maps(config.get("buses"))) busConfig.put(text(bus.get("id")), bus);
-        List<AudioNode> physicalSinks = snapshot.sinks().stream().filter(node ->
-                !node.name().startsWith("audiomatrix_bus_") && !node.name().startsWith("audiomatrix_route_")).toList();
+        List<AudioNode> physicalSinks = snapshot.sinks().stream()
+                .filter(node -> !node.name().startsWith("audiomatrix_")).toList();
         List<Map<String, Object>> devices = maps(config.get("devices"));
         List<String> warnings = new ArrayList<>();
         List<RoutePlan> routes = new ArrayList<>();
@@ -589,8 +603,7 @@ public final class PipeWireRouteManager implements AutoCloseable {
             Map<String, Object> bus = busConfig.get(id);
             String layout = text(bus.get("channels"), "stereo");
             buses.put(id, new BusPlan(id, busNodeName(id), layout, positions(layout),
-                    MixLevelMath.effectiveBusVolume(number(bus.get("volume"), 1), masterVolume),
-                    MixLevelMath.effectiveBusMute(Boolean.TRUE.equals(bus.get("mute")), masterMuted)));
+                    number(bus.get("volume"), 1), Boolean.TRUE.equals(bus.get("mute"))));
         }
         List<StreamPlan> streams = new ArrayList<>();
         if (!profileOff && !routes.isEmpty()) {
@@ -616,7 +629,86 @@ public final class PipeWireRouteManager implements AutoCloseable {
                 streams.add(new StreamPlan(stream, busId, filters, positions, key, input, output));
             }
         }
-        return new Plan(buses, routes, streams, outputPlans, warnings, profileOff);
+        return new Plan(buses, routes, streams, outputPlans, warnings, profileOff, masterVolume, masterMuted);
+    }
+
+    static double effectiveRoutePlaybackVolume(Plan plan, RoutePlan route) {
+        double routeVolume = MixLevelMath.effectiveRouteVolume(route.volume(), route.gainDb());
+        return route.sink() == null ? routeVolume : routeVolume * plan.masterVolume();
+    }
+
+    static boolean effectiveRoutePlaybackMuted(Plan plan, RoutePlan route) {
+        return route.muted() || (route.sink() != null && plan.masterMuted());
+    }
+
+    static boolean sameRoutingTopology(Plan previous, Plan next) {
+        if (!previous.buses().keySet().equals(next.buses().keySet())
+                || !previous.outputs().keySet().equals(next.outputs().keySet())
+                || previous.routes().size() != next.routes().size()
+                || previous.streams().size() != next.streams().size()) return false;
+        for (String id : previous.buses().keySet()) {
+            BusPlan left = previous.buses().get(id), right = next.buses().get(id);
+            if (!left.nodeName().equals(right.nodeName()) || !left.channelLayout().equals(right.channelLayout())
+                    || !left.positions().equals(right.positions())) return false;
+        }
+        Map<String, RoutePlan> nextRoutes = new LinkedHashMap<>();
+        next.routes().forEach(route -> nextRoutes.put(route.id(), route));
+        for (RoutePlan left : previous.routes()) {
+            RoutePlan right = nextRoutes.get(left.id());
+            if (right == null || !left.fromBusId().equals(right.fromBusId())
+                    || !java.util.Objects.equals(left.targetBusId(), right.targetBusId())
+                    || !sameSink(left.sink(), right.sink())
+                    || !left.channelMap().equals(right.channelMap()) || !left.positions().equals(right.positions())
+                    || !java.util.Objects.equals(left.channelMatrix(), right.channelMatrix())
+                    || Double.compare(left.delayMs(), right.delayMs()) != 0 || left.priority() != right.priority()
+                    || !left.filters().equals(right.filters())
+                    || !left.captureNodeName().equals(right.captureNodeName())
+                    || !left.playbackNodeName().equals(right.playbackNodeName())
+                    || !left.filterInputNodeName().equals(right.filterInputNodeName())
+                    || !left.filterOutputNodeName().equals(right.filterOutputNodeName())
+                    || !left.matrixInputNodeName().equals(right.matrixInputNodeName())
+                    || !left.matrixOutputNodeName().equals(right.matrixOutputNodeName())) return false;
+        }
+        for (String name : previous.outputs().keySet()) {
+            OutputPlan left = previous.outputs().get(name), right = next.outputs().get(name);
+            if (!sameSink(left.sink(), right.sink()) || !left.positions().equals(right.positions())
+                    || !left.filters().equals(right.filters()) || !left.limiterFilters().equals(right.limiterFilters())
+                    || !left.filterInputNodeName().equals(right.filterInputNodeName())
+                    || !left.filterOutputNodeName().equals(right.filterOutputNodeName())
+                    || !left.limiterInputNodeName().equals(right.limiterInputNodeName())
+                    || !left.limiterOutputNodeName().equals(right.limiterOutputNodeName())) return false;
+        }
+        Map<String, StreamPlan> nextStreams = new LinkedHashMap<>();
+        next.streams().forEach(stream -> nextStreams.put(stream.node().name(), stream));
+        for (StreamPlan left : previous.streams()) {
+            StreamPlan right = nextStreams.get(left.node().name());
+            if (right == null || left.node().id() != right.node().id() || !left.busId().equals(right.busId())
+                    || !left.filters().equals(right.filters()) || !left.positions().equals(right.positions())
+                    || !left.filterProcessKey().equals(right.filterProcessKey())
+                    || !left.filterInputNodeName().equals(right.filterInputNodeName())
+                    || !left.filterOutputNodeName().equals(right.filterOutputNodeName())) return false;
+        }
+        return true;
+    }
+
+    private static boolean sameSink(AudioNode left, AudioNode right) {
+        return left == null ? right == null : right != null && left.id() == right.id() && left.name().equals(right.name());
+    }
+
+    private void updateLiveLevels(Plan plan) throws Exception {
+        for (BusPlan bus : plan.buses().values()) {
+            int id = findNodeId(bus.nodeName());
+            run(List.of("wpctl", "set-volume", Integer.toString(id), Double.toString(bus.volume())), COMMAND_TIMEOUT);
+            run(List.of("wpctl", "set-mute", Integer.toString(id), bus.muted() ? "1" : "0"), COMMAND_TIMEOUT);
+        }
+        for (RoutePlan route : plan.routes()) {
+            int id = findNodeId(route.playbackNodeName());
+            double volume = effectiveRoutePlaybackVolume(plan, route);
+            boolean muted = effectiveRoutePlaybackMuted(plan, route);
+            run(List.of("wpctl", "set-volume", Integer.toString(id), Double.toString(muted ? 0.0 : volume),
+                    "--limit", Double.toString(MixLevelMath.maxRouteVolume())), COMMAND_TIMEOUT);
+            run(List.of("wpctl", "set-mute", Integer.toString(id), muted ? "1" : "0"), COMMAND_TIMEOUT);
+        }
     }
 
     private static Map<String,Object> explicitEventApplicationRule(List<Map<String,Object>> rules) {
@@ -1154,7 +1246,8 @@ public final class PipeWireRouteManager implements AutoCloseable {
                 .map(output -> output.sink().name() + ":" + output.positions() + ":" + output.filters().hashCode() + ":" + output.limiterFilters().hashCode())
                 .sorted().toList();
         List<String> sinkNames = snapshot.sinks().stream().filter(sink -> !sink.name().startsWith("audiomatrix_")).map(AudioNode::name).sorted().toList();
-        return plan.buses().hashCode() + ":" + plan.routes().hashCode() + ":" + streamPlans + ":" + outputPlans + ":" + sinkNames + ":" + snapshot.defaultSinkId();
+        return plan.masterVolume() + ":" + plan.masterMuted() + ":" + plan.buses().hashCode() + ":" + plan.routes().hashCode()
+                + ":" + streamPlans + ":" + outputPlans + ":" + sinkNames + ":" + snapshot.defaultSinkId();
     }
 
     private static Map<String, List<Link>> deepLinks(Map<String, List<Link>> source) {
@@ -1258,7 +1351,8 @@ public final class PipeWireRouteManager implements AutoCloseable {
         private StreamPlan { filters = List.copyOf(filters); positions = List.copyOf(positions); }
     }
     record Plan(Map<String, BusPlan> buses, List<RoutePlan> routes, List<StreamPlan> streams,
-                        Map<String, OutputPlan> outputs, List<String> warnings, boolean profileOff) {
+                        Map<String, OutputPlan> outputs, List<String> warnings, boolean profileOff,
+                        double masterVolume, boolean masterMuted) {
         List<String> routedStreamNames() { return streams.stream().map(plan -> plan.node().name()).toList(); }
     }
 }

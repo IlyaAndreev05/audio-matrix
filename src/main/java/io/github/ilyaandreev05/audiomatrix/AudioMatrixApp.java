@@ -10,6 +10,7 @@ import javafx.stage.Stage;
 import javafx.application.Platform;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
@@ -18,6 +19,7 @@ public class AudioMatrixApp extends Application {
     private PipeWireBackend backend;
     private ThemeManager themeManager;
     private AppShell shell;
+    private InstanceControlServer instanceControl;
     private boolean closeInProgress;
     private boolean servicesClosed;
 
@@ -31,11 +33,32 @@ public class AudioMatrixApp extends Application {
             exportDefaultConfig(path); System.exit(0); return;
         }
         if (args.length > 0 && "--diagnose-pipewire".equals(args[0])) { diagnosePipeWire(); System.exit(0); return; }
+        if (args.length > 0 && "--quit".equals(args[0])) {
+            try { InstanceControlServer.requestQuitAndWait(Duration.ofSeconds(20)); }
+            catch (Exception e) { System.err.println("Could not stop Audio Matrix cleanly: " + e.getMessage()); System.exit(1); }
+            return;
+        }
         if ("root".equals(System.getProperty("user.name"))) {
             System.err.println("Audio Matrix refuses to run as root. Start it in the logged-in desktop session.");
             System.exit(2);
         }
-        launch(args);
+        boolean background = List.of(args).contains("--background");
+        try {
+            InstanceControlServer server = InstanceControlServer.acquireOrForward(background ? "background" : "open");
+            if (server == null) {
+                if (background) {
+                    System.err.println("Audio Matrix is already running; stop the existing process before starting its background service.");
+                    System.exit(3);
+                }
+                return;
+            }
+            currentInstanceControl = server;
+            launch(args);
+        } catch (Exception e) {
+            if (currentInstanceControl != null) currentInstanceControl.close();
+            System.err.println("Could not establish the Audio Matrix user-session instance: " + e.getMessage());
+            System.exit(3);
+        }
     }
 
     private static void validateConfig(Path path) {
@@ -75,6 +98,7 @@ public class AudioMatrixApp extends Application {
     }
 
     @Override public void start(Stage stage) throws Exception {
+        Platform.setImplicitExit(false);
         configStore = new ConfigStore(ConfigStore.defaultPath());
         backend = new PipeWireBackend();
         themeManager = new ThemeManager();
@@ -86,18 +110,34 @@ public class AudioMatrixApp extends Application {
         stage.setTitle("Audio Matrix");
         stage.setMinWidth(1024); stage.setMinHeight(680);
         stage.setScene(scene);
-        stage.show();
+        boolean background = getParameters().getRaw().contains("--background");
+        if (!background) stage.show();
         shell.start();
+        instanceControl = currentInstanceControl;
+        if (instanceControl != null) instanceControl.setHandler(command -> Platform.runLater(() -> {
+            if ("open".equals(command)) {
+                stage.setIconified(false);
+                stage.show();
+                stage.toFront();
+                stage.requestFocus();
+            } else if ("quit".equals(command)) {
+                shutdownApplication();
+            }
+        }));
         stage.setOnCloseRequest(event -> {
-            if (servicesClosed) return;
             event.consume();
-            if (closeInProgress) return;
-            closeInProgress = true;
-            shell.closeAsync().whenComplete((ignored, error) -> Platform.runLater(() -> {
-                closeServicesAfterRoutes();
-                stage.close();
-            }));
+            stage.hide();
         });
+    }
+
+    private void shutdownApplication() {
+        if (servicesClosed || closeInProgress) return;
+        closeInProgress = true;
+        shell.closeAsync().whenComplete((ignored, error) -> Platform.runLater(() -> {
+            if (error != null) System.err.println("Audio Matrix cleanup reported: " + error.getMessage());
+            closeServicesAfterRoutes();
+            Platform.exit();
+        }));
     }
 
     private void closeServices() {
@@ -107,6 +147,9 @@ public class AudioMatrixApp extends Application {
         if (themeManager != null) themeManager.close();
         if (backend != null) backend.close();
         if (configStore != null) configStore.close();
+        if (instanceControl != null) instanceControl.close();
+        else if (currentInstanceControl != null) currentInstanceControl.close();
+        currentInstanceControl = null;
     }
 
     private void closeServicesAfterRoutes() {
@@ -115,6 +158,11 @@ public class AudioMatrixApp extends Application {
         if (themeManager != null) themeManager.close();
         if (backend != null) backend.close();
         if (configStore != null) configStore.close();
+        if (instanceControl != null) instanceControl.close();
+        else if (currentInstanceControl != null) currentInstanceControl.close();
+        currentInstanceControl = null;
     }
     @Override public void stop() { closeServices(); }
+
+    private static volatile InstanceControlServer currentInstanceControl;
 }
