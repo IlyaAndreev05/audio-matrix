@@ -52,6 +52,7 @@ public final class GraphRouteLibrary {
         sourceLayout.forEach((oldNode,value)->{String newNode=nodeIds.get(oldNode);if(newNode!=null)copiedLayout.put(newNode,deepValue(value));});
         if(!copiedLayout.isEmpty())layouts.put(newRouteId,copiedLayout);
         Map<String,Object> scales=mutableMap(config,"graph_ui_scale");Object scale=scales.get(routeId);if(scale instanceof Number)scales.put(newRouteId,scale);
+        GraphSubgraphLibrary.duplicateRoute(config, routeId, newRouteId, nodeIds);
         return copy;
     }
 
@@ -65,6 +66,7 @@ public final class GraphRouteLibrary {
         routes.removeIf(route -> routeId.equals(route.get("id")));
         mutableMap(config,"graph_ui_layout").remove(routeId);
         mutableMap(config,"graph_ui_scale").remove(routeId);
+        mutableMap(config,"graph_ui_subgraphs").remove(routeId);
     }
 
     public static String createGroup(Map<String, Object> config, String name) {
@@ -108,6 +110,7 @@ public final class GraphRouteLibrary {
         copy.put("route", deep(route)); copy.put("active", false);
         copy.put("ui_layout",deep(map(mutableMap(config,"graph_ui_layout").get(routeId))));
         Object scale=mutableMap(config,"graph_ui_scale").get(routeId);if(scale instanceof Number)copy.put("ui_scale",scale);
+        copy.put("ui_subgraphs",GraphSubgraphLibrary.encoded(GraphSubgraphLibrary.forRoute(config,routeId)));
         mutableList(config, "saved_copies").add(copy);
         return String.valueOf(copy.get("id"));
     }
@@ -122,8 +125,9 @@ public final class GraphRouteLibrary {
         Map<String,Object> source=new LinkedHashMap<>(snapshot);source.put("id",temporaryId);routes.add(source);
         Map<String,Object> layouts=mutableMap(config,"graph_ui_layout");Map<String,Object> savedLayout=map(copy.get("ui_layout"));if(!savedLayout.isEmpty())layouts.put(temporaryId,deep(savedLayout));
         Map<String,Object> scales=mutableMap(config,"graph_ui_scale");if(copy.get("ui_scale") instanceof Number scale)scales.put(temporaryId,scale);
+        Map<String,Object> subgraphs=mutableMap(config,"graph_ui_subgraphs");Object savedSubgraphs=copy.get("ui_subgraphs");if(savedSubgraphs instanceof List<?> list)subgraphs.put(temporaryId,deepValue(list));
         try{return duplicateRoute(config,temporaryId,newName==null||newName.isBlank()?graph.name()+" (копия)":newName);}
-        finally{routes.removeIf(route->temporaryId.equals(route.get("id")));layouts.remove(temporaryId);scales.remove(temporaryId);}
+        finally{routes.removeIf(route->temporaryId.equals(route.get("id")));layouts.remove(temporaryId);scales.remove(temporaryId);subgraphs.remove(temporaryId);}
     }
 
     public static void deleteSavedCopy(Map<String,Object> config,String copyId) {

@@ -27,6 +27,8 @@ import io.github.ilyaandreev05.audiomatrix.graph.GraphConnection;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphPipeWireCompiler;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphRouteLibrary;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphSubgraph;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphSubgraphLibrary;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphValidator;
 import io.github.ilyaandreev05.audiomatrix.graph.MatrixNode;
 import io.github.ilyaandreev05.audiomatrix.graph.MixerNode;
@@ -180,6 +182,7 @@ public final class AppShell extends BorderPane {
     private boolean dspReferenceUpdateInProgress;
     private String selectedGraphRouteId = "";
     private GraphPortRef pendingGraphOutput;
+    private final Set<String> selectedSubgraphNodeIds = ConcurrentHashMap.newKeySet();
     private CheckBox dspReferenceToggle;
     private boolean autoApplySuppressedUntilRestart;
     private String lastRouteInputSignature = "";
@@ -684,7 +687,7 @@ public final class AppShell extends BorderPane {
 
     private VBox graphCanvasCard(AudioGraph graph){
         VBox box=card(t("Схема маршрута","Route canvas"));
-        box.getChildren().add(label(t("Перетаскивай ноды и соединяй порты: сначала выходной, затем входной. Масштаб и положение сохраняются отдельно от аудиосхемы.","Drag nodes and connect ports: choose an output port, then an input port. Zoom and positions are saved separately from the audio graph."),"muted"));
+        box.getChildren().add(label(t("Перетаскивай ноды и соединяй порты. Внешние связи свёрнутой ноды проходят через её граничные порты. Масштаб и положение хранятся отдельно от аудиосхемы.","Drag nodes and connect ports. External links cross a collapsed subgraph through its boundary ports. Canvas layout is saved separately from the audio graph."),"muted"));
         int tallestColumn=Math.max((int)graph.nodes().stream().filter(SourceNode.class::isInstance).count(),(int)graph.nodes().stream().filter(OutputNode.class::isInstance).count());
         tallestColumn=Math.max(tallestColumn,(int)graph.nodes().stream().filter(node->!(node instanceof SourceNode)&&!(node instanceof OutputNode)).count());
         double canvasHeight=Math.max(390,tallestColumn*112+55);
@@ -705,9 +708,6 @@ public final class AppShell extends BorderPane {
         Map<String,Object> routeLayout=map(allLayouts.get(graph.id()));
         Map<String,Node> views=new LinkedHashMap<>();Map<String,Line> lines=new LinkedHashMap<>();
         Map<String,GraphNode> nodes=new LinkedHashMap<>();graph.nodes().forEach(node->nodes.put(node.id(),node));
-        for(GraphConnection edge:graph.connections()){
-            Line line=new Line();line.setStroke(edge.enabled()?javafx.scene.paint.Color.web("#37b5a5"):javafx.scene.paint.Color.web("#62666f"));line.setStrokeWidth(edge.enabled()?2.5:1.0);if(!edge.enabled())line.getStrokeDashArray().setAll(6.0,5.0);line.setMouseTransparent(true);lines.put(edge.id(),line);canvas.getChildren().add(line);
-        }
         int sourceIndex=0,processIndex=0,outputIndex=0;
         Map<String,double[]> initial=new LinkedHashMap<>();
         for(GraphNode node:graph.nodes()){
@@ -716,6 +716,24 @@ public final class AppShell extends BorderPane {
             else if(node instanceof OutputNode){defaultX=810;defaultY=25+outputIndex++*112;}
             else{defaultX=360;defaultY=25+processIndex++*95;}
             Map<String,Object> saved=map(routeLayout.get(node.id()));double x=number(saved.get("x"),defaultX),y=number(saved.get("y"),defaultY);
+            initial.put(node.id(),new double[]{x,y});
+        }
+        List<GraphSubgraph> groups=GraphSubgraphLibrary.forRoute(store.snapshot(),graph.id()).stream().filter(GraphSubgraph::collapsed).toList();
+        Map<String,GraphSubgraph> collapsedForNode=new LinkedHashMap<>();groups.forEach(group->group.nodeIds().forEach(nodeId->collapsedForNode.put(nodeId,group)));
+        Map<String,VBox> groupViews=new LinkedHashMap<>();
+        for(GraphSubgraph group:groups){
+            List<GraphSubgraph.BoundaryPort> boundary=GraphSubgraph.boundaryPorts(graph,group.nodeIds());
+            VBox groupView=new VBox(5);groupView.setPrefWidth(285);groupView.setStyle("-fx-background-color: #123b3a; -fx-border-color: #37b5a5; -fx-border-width: 2; -fx-border-radius: 9; -fx-background-radius: 9; -fx-padding: 9;");
+            Label title=label(group.name(),"card-title");title.setWrapText(true);Label description=label(t("Подграф · ","Subgraph · ")+group.nodeIds().size()+t(" нод"," nodes"),"muted");groupView.getChildren().addAll(title,description);
+            for(GraphSubgraph.BoundaryPort port:boundary)groupView.getChildren().add(label((port.direction()==GraphSubgraph.Direction.INPUT?"← ":"→ ")+port.label(),"muted"));
+            groupView.getChildren().add(actionButton(t("Развернуть","Expand"),()->setSubgraphCollapsed(graph.id(),group.id(),false)));
+            double x=0,y=0;for(String nodeId:group.nodeIds()){double[] point=initial.get(nodeId);x+=point[0];y+=point[1];}x/=group.nodeIds().size();y/=group.nodeIds().size();
+            groupView.setLayoutX(x);groupView.setLayoutY(y);groupViews.put(group.id(),groupView);canvas.getChildren().add(groupView);
+            for(String nodeId:group.nodeIds())views.put(nodeId,groupView);
+        }
+        for(GraphNode node:graph.nodes()){
+            if(collapsedForNode.containsKey(node.id()))continue;
+            double[] position=initial.get(node.id());double x=position[0],y=position[1];
             VBox card=new VBox(5);card.setPrefWidth(250);card.setMinHeight(82);card.setLayoutX(x);card.setLayoutY(y);card.setStyle("-fx-background-color: #292d35; -fx-border-color: #656b77; -fx-border-radius: 8; -fx-background-radius: 8; -fx-padding: 8;");
             Label title=label(node.name(),"card-title");title.setWrapText(true);title.setMaxWidth(160);
             Label type=label(node.type(),"muted");
@@ -723,23 +741,48 @@ public final class AppShell extends BorderPane {
             for(AudioPort port:node.inputs()){Button button=graphPortButton("◉ "+port.id());button.setAccessibleText(t("Входной порт ","Input port ")+node.name()+" · "+port.id());button.setOnAction(event->selectGraphPort(graph.id(),node.id(),port));inputButtons.getChildren().add(button);}
             for(AudioPort port:node.outputs()){Button button=graphPortButton(port.id()+" ◉");button.setAccessibleText(t("Выходной порт ","Output port ")+node.name()+" · "+port.id());button.setOnAction(event->selectGraphPort(graph.id(),node.id(),port));outputButtons.getChildren().add(button);}
             VBox description=new VBox(3,title,type);HBox portRow=new HBox(4,inputButtons,description,outputButtons);HBox.setHgrow(description,Priority.ALWAYS);
-            card.getChildren().add(portRow);views.put(node.id(),card);initial.put(node.id(),new double[]{x,y});canvas.getChildren().add(card);
+            card.getChildren().add(portRow);views.put(node.id(),card);canvas.getChildren().add(card);
+        }
+        for(GraphConnection edge:graph.connections()){
+            Line line=new Line();line.setStroke(edge.enabled()?javafx.scene.paint.Color.web("#37b5a5"):javafx.scene.paint.Color.web("#62666f"));line.setStrokeWidth(edge.enabled()?2.5:1.0);if(!edge.enabled())line.getStrokeDashArray().setAll(6.0,5.0);line.setMouseTransparent(true);lines.put(edge.id(),line);canvas.getChildren().add(0,line);
         }
         Runnable refreshLines=()->{
             for(GraphConnection edge:graph.connections()){
                 Node from=views.get(edge.fromNode()),to=views.get(edge.toNode());Line line=lines.get(edge.id());if(from==null||to==null||line==null)continue;
+                GraphSubgraph fromGroup=collapsedForNode.get(edge.fromNode()),toGroup=collapsedForNode.get(edge.toNode());
+                if(fromGroup!=null&&toGroup!=null&&fromGroup.id().equals(toGroup.id())){line.setVisible(false);continue;}line.setVisible(true);
                 GraphNode source=nodes.get(edge.fromNode()),target=nodes.get(edge.toNode());int fromPort=Math.max(0,source.outputs().stream().map(AudioPort::id).toList().indexOf(edge.fromPort()));int toPort=Math.max(0,target.inputs().stream().map(AudioPort::id).toList().indexOf(edge.toPort()));
-                line.setStartX(from.getLayoutX()+from.getBoundsInLocal().getWidth());line.setStartY(from.getLayoutY()+28+fromPort*22);line.setEndX(to.getLayoutX());line.setEndY(to.getLayoutY()+28+toPort*22);
+                double startY=fromGroup==null?from.getLayoutY()+28+fromPort*22:subgraphBoundaryY(graph,fromGroup,edge,GraphSubgraph.Direction.OUTPUT,from);
+                double endY=toGroup==null?to.getLayoutY()+28+toPort*22:subgraphBoundaryY(graph,toGroup,edge,GraphSubgraph.Direction.INPUT,to);
+                line.setStartX(from.getLayoutX()+from.getBoundsInLocal().getWidth());line.setStartY(startY);line.setEndX(to.getLayoutX());line.setEndY(endY);
             }
         };
         refreshLines.run();
         for(GraphNode node:graph.nodes()){
+            if(collapsedForNode.containsKey(node.id()))continue;
             Node view=views.get(node.id());double[] start=initial.get(node.id());double[] pointer=new double[2];boolean[] moved={false};
             view.setOnMousePressed(event->{if(isButtonTarget(event.getTarget(),view))return;pointer[0]=event.getSceneX();pointer[1]=event.getSceneY();start[0]=view.getLayoutX();start[1]=view.getLayoutY();moved[0]=false;event.consume();});
             view.setOnMouseDragged(event->{if(isButtonTarget(event.getTarget(),view))return;double scale=Math.max(.5,zoom.getValue());double x=Math.max(0,Math.min(canvasWidth-260,start[0]+(event.getSceneX()-pointer[0])/scale));double y=Math.max(0,Math.min(canvasHeight-90,start[1]+(event.getSceneY()-pointer[1])/scale));view.setLayoutX(x);view.setLayoutY(y);moved[0]=true;refreshLines.run();event.consume();});
             view.setOnMouseReleased(event->{if(!isButtonTarget(event.getTarget(),view)&&moved[0])saveGraphNodePosition(graph.id(),node.id(),view.getLayoutX(),view.getLayoutY());});
         }
+        for(GraphSubgraph group:groups){
+            Node view=groupViews.get(group.id());double[] start={view.getLayoutX(),view.getLayoutY()};double[] pointer=new double[2];boolean[] moved={false};
+            view.setOnMousePressed(event->{if(isButtonTarget(event.getTarget(),view))return;pointer[0]=event.getSceneX();pointer[1]=event.getSceneY();start[0]=view.getLayoutX();start[1]=view.getLayoutY();moved[0]=false;event.consume();});
+            view.setOnMouseDragged(event->{if(isButtonTarget(event.getTarget(),view))return;double scale=Math.max(.5,zoom.getValue());double x=Math.max(0,Math.min(canvasWidth-300,start[0]+(event.getSceneX()-pointer[0])/scale));double y=Math.max(0,Math.min(canvasHeight-100,start[1]+(event.getSceneY()-pointer[1])/scale));view.setLayoutX(x);view.setLayoutY(y);moved[0]=true;refreshLines.run();event.consume();});
+            view.setOnMouseReleased(event->{if(!isButtonTarget(event.getTarget(),view)&&moved[0])saveSubgraphPosition(graph.id(),group,view.getLayoutX()-start[0],view.getLayoutY()-start[1],initial);});
+        }
         box.getChildren().add(viewport);return box;
+    }
+
+    private double subgraphBoundaryY(AudioGraph graph,GraphSubgraph group,GraphConnection edge,GraphSubgraph.Direction direction,Node view){
+        String nodeId=direction==GraphSubgraph.Direction.INPUT?edge.toNode():edge.fromNode();String portId=direction==GraphSubgraph.Direction.INPUT?edge.toPort():edge.fromPort();
+        List<GraphSubgraph.BoundaryPort> ports=GraphSubgraph.boundaryPorts(graph,group.nodeIds());int index=0;
+        for(int i=0;i<ports.size();i++){GraphSubgraph.BoundaryPort port=ports.get(i);if(port.direction()==direction&&port.nodeId().equals(nodeId)&&port.portId().equals(portId)){index=i;break;}}
+        return view.getLayoutY()+42+index*20;
+    }
+
+    private void saveSubgraphPosition(String routeId,GraphSubgraph group,double deltaX,double deltaY,Map<String,double[]> initial){
+        updateRouteConfig(t("Переместить подграф","Move subgraph"),config->{Map<String,Object>layouts=map(config.get("graph_ui_layout"));config.put("graph_ui_layout",layouts);Map<String,Object>route=map(layouts.get(routeId));layouts.put(routeId,route);for(String nodeId:group.nodeIds()){double[] point=initial.get(nodeId);route.put(nodeId,Map.of("x",Math.rint(point[0]+deltaX),"y",Math.rint(point[1]+deltaY)));}});
     }
 
     private Button graphPortButton(String text){Button button=new Button(text);button.setFocusTraversable(true);button.setStyle("-fx-font-size: 10px; -fx-padding: 2 5 2 5; -fx-background-color: #20242b; -fx-border-color: #37b5a5; -fx-border-radius: 8; -fx-background-radius: 8;");return button;}
@@ -825,9 +868,23 @@ public final class AppShell extends BorderPane {
         VBox box=card(t("Ноды", "Nodes"));
         HBox add=new HBox(9);ComboBox<String> type=new ComboBox<>();type.getItems().setAll("source","output","gain","gate","switch","multi_switch","selector","matrix","mixer","filter");type.getSelectionModel().select("source");
         add.getChildren().addAll(type,actionButton(t("Добавить ноду", "Add node"),()->addGraphNode(graph,type.getValue())));box.getChildren().add(add);
+        HBox subgraphAction=new HBox(10);subgraphAction.setAlignment(Pos.CENTER_LEFT);
+        Label selectionCount=label(selectedSubgraphNodeIds.size()+t(" нод выбрано"," nodes selected"),"muted");
+        Button createSubgraph=actionButton(t("Свернуть выбранные в подграф","Collapse selected into subgraph"),()->createGraphSubgraph(graph));createSubgraph.setDisable(selectedSubgraphNodeIds.size()<2);
+        subgraphAction.getChildren().addAll(selectionCount,createSubgraph);box.getChildren().add(subgraphAction);
+        List<GraphSubgraph> subgraphs=GraphSubgraphLibrary.forRoute(store.snapshot(),graph.id());
+        if(!subgraphs.isEmpty()){
+            VBox groups=new VBox(5);groups.getChildren().add(label(t("Подграфы","Subgraphs"),"card-title"));
+            for(GraphSubgraph group:subgraphs){
+                HBox row=new HBox(9);row.setAlignment(Pos.CENTER_LEFT);row.getChildren().add(label(group.name()+" · "+group.nodeIds().size()+t(" нод"," nodes"),"card-title"));
+                row.getChildren().add(actionButton(group.collapsed()?t("Развернуть","Expand"):t("Свернуть","Collapse"),()->setSubgraphCollapsed(graph.id(),group.id(),!group.collapsed())));
+                row.getChildren().add(actionButton(t("Удалить","Delete"),()->deleteGraphSubgraph(graph.id(),group.id())));groups.getChildren().add(row);
+            }
+            box.getChildren().add(groups);
+        }
         if(graph.nodes().isEmpty()){box.getChildren().add(label(t("Граф пуст.","Graph is empty."),"muted"));return box;}
         for(GraphNode node:graph.nodes()){
-            HBox row=new HBox(12);row.setAlignment(Pos.CENTER_LEFT);row.getChildren().add(label(node.name()+" · "+node.type(),"card-title"));
+            HBox row=new HBox(12);row.setAlignment(Pos.CENTER_LEFT);CheckBox subgraphSelection=new CheckBox();subgraphSelection.setAccessibleText(t("Выбрать ноду для подграфа: ","Select node for subgraph: ")+node.name());subgraphSelection.setSelected(selectedSubgraphNodeIds.contains(node.id()));subgraphSelection.setOnAction(event->{if(subgraphSelection.isSelected())selectedSubgraphNodeIds.add(node.id());else selectedSubgraphNodeIds.remove(node.id());selectionCount.setText(selectedSubgraphNodeIds.size()+t(" нод выбрано"," nodes selected"));createSubgraph.setDisable(selectedSubgraphNodeIds.size()<2);});row.getChildren().addAll(subgraphSelection,label(node.name()+" · "+node.type(),"card-title"));
             if(node instanceof GainNode gain){Slider level=new Slider(0,1,gain.gain());level.setPrefWidth(180);Label value=label(volumeLabel(gain.gain()),"muted");level.valueProperty().addListener((o,a,v)->value.setText(volumeLabel(v.doubleValue())));level.setOnMouseReleased(e->updateGraphNodeParameters(graph.id(),node.id(),parameters->parameters.put("gain",Math.round(level.getValue()*1000)/1000.0)));level.setOnKeyReleased(e->updateGraphNodeParameters(graph.id(),node.id(),parameters->parameters.put("gain",Math.round(level.getValue()*1000)/1000.0)));CheckBox mute=new CheckBox(t("Mute","Mute"));mute.setSelected(gain.muted());mute.setOnAction(e->updateGraphNodeParameters(graph.id(),node.id(),parameters->parameters.put("muted",mute.isSelected())));row.getChildren().addAll(level,value,mute);}
             else if(node instanceof OutputNode output){
                 ComboBox<String> channelTarget=new ComboBox<>();channelTarget.getItems().setAll(
@@ -868,6 +925,21 @@ public final class AppShell extends BorderPane {
             Region space=new Region();HBox.setHgrow(space,Priority.ALWAYS);row.getChildren().add(space);row.getChildren().add(actionButton(t("Удалить","Delete"),()->removeGraphNode(graph.id(),node.id())));box.getChildren().add(row);
         }
         return box;
+    }
+
+    private void createGraphSubgraph(AudioGraph graph){
+        List<String> selected=graph.nodes().stream().map(GraphNode::id).filter(selectedSubgraphNodeIds::contains).toList();
+        if(selected.size()<2){setNotice(t("Для подграфа выбери минимум две ноды.","Select at least two nodes for a subgraph."),true);return;}
+        TextInputDialog dialog=new TextInputDialog(t("Новый подграф","New subgraph"));dialog.setTitle(t("Свернуть в подграф","Collapse into subgraph"));dialog.setHeaderText(t("Выбранные ноды останутся в графе, но будут показаны одним блоком.","Selected nodes stay in the graph but appear as one block."));styleDialog(dialog);
+        dialog.showAndWait().map(String::trim).filter(name->!name.isBlank()).ifPresent(name->{updateRouteConfig(t("Создать подграф","Create subgraph"),config->GraphSubgraphLibrary.create(config,graph,name,selected));selected.forEach(selectedSubgraphNodeIds::remove);});
+    }
+
+    private void setSubgraphCollapsed(String routeId,String subgraphId,boolean collapsed){
+        updateRouteConfig(t(collapsed?"Свернуть подграф":"Развернуть подграф",collapsed?"Collapse subgraph":"Expand subgraph"),config->GraphSubgraphLibrary.setCollapsed(config,routeId,subgraphId,collapsed));
+    }
+
+    private void deleteGraphSubgraph(String routeId,String subgraphId){
+        updateRouteConfig(t("Удалить подграф","Delete subgraph"),config->GraphSubgraphLibrary.delete(config,routeId,subgraphId));
     }
 
     private VBox graphConnectionCard(AudioGraph graph){
@@ -958,7 +1030,7 @@ public final class AppShell extends BorderPane {
     private void updateGraph(String routeId,Consumer<List<GraphNode>> nodeChange){updateRouteConfig(t("Изменить граф","Edit graph"),config->{Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->routeId.equals(item.get("id"))).findFirst().orElseThrow();AudioGraph old=GraphCodec.fromMap(route);List<GraphNode> nodes=new ArrayList<>(old.nodes());nodeChange.accept(nodes);AudioGraph changed=new AudioGraph(old.id(),old.name(),nodes,old.connections());GraphRouteLibrary.saveRoute(config,changed,string(route.get("group_id"),""));});}
     private void saveGraph(String routeId,AudioGraph graph){updateRouteConfig(t("Сохранить граф","Save graph"),config->{Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->routeId.equals(item.get("id"))).findFirst().orElseThrow();GraphRouteLibrary.saveRoute(config,graph,string(route.get("group_id"),""));});}
     private void updateGraphNodeParameters(String routeId,String nodeId,Consumer<Map<String,Object>> change){Map<String,Object> config=store.snapshot();Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->routeId.equals(item.get("id"))).findFirst().orElse(null);if(route==null)return;Map<String,Object> node=maps(route.get("nodes")).stream().filter(item->nodeId.equals(item.get("id"))).findFirst().orElse(null);if(node==null)return;Map<String,Object> parameters=map(node.get("parameters"));node.put("parameters",parameters);try{change.accept(parameters);AudioGraph graph=GraphCodec.fromMap(route);List<String> errors=GraphValidator.validate(graph);if(!errors.isEmpty())throw new IllegalArgumentException(String.join("; ",errors));saveGraph(routeId,graph);}catch(RuntimeException invalid){setNotice(t("Параметр ноды не сохранён: ","Node parameter was not saved: ")+invalid.getMessage(),true);showPage(Page.GRAPH);}}
-    private void removeGraphNode(String routeId,String nodeId){updateRouteConfig(t("Удалить ноду","Delete node"),config->{Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->routeId.equals(item.get("id"))).findFirst().orElseThrow();maps(route.get("nodes")).removeIf(node->nodeId.equals(node.get("id")));maps(route.get("connections")).removeIf(edge->nodeId.equals(edge.get("from_node"))||nodeId.equals(edge.get("to_node")));});}
+    private void removeGraphNode(String routeId,String nodeId){updateRouteConfig(t("Удалить ноду","Delete node"),config->{Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->routeId.equals(item.get("id"))).findFirst().orElseThrow();maps(route.get("nodes")).removeIf(node->nodeId.equals(node.get("id")));maps(route.get("connections")).removeIf(edge->nodeId.equals(edge.get("from_node"))||nodeId.equals(edge.get("to_node")));GraphSubgraphLibrary.removeNode(config,routeId,nodeId);});}
     private void connectGraphNodes(String routeId,GraphNode source,AudioPort sourcePort,GraphNode target,AudioPort targetPort){if(source==null||target==null||sourcePort==null||targetPort==null)return;Map<String,Object> config=store.snapshot();Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->routeId.equals(item.get("id"))).findFirst().orElse(null);if(route==null)return;AudioGraph old=GraphCodec.fromMap(route);GraphConnection edge=new GraphConnection("link-"+UUID.randomUUID(),source.id(),sourcePort.id(),target.id(),targetPort.id(),true,1);List<GraphConnection> edges=new ArrayList<>(old.connections());edges.add(edge);AudioGraph next=new AudioGraph(old.id(),old.name(),old.nodes(),edges);List<String> errors=GraphValidator.validate(next);if(!errors.isEmpty()){setNotice(String.join("; ",errors),true);showPage(Page.GRAPH);return;}saveGraph(routeId,next);}
     private void setGraphConnectionEnabled(String routeId,String connectionId,boolean enabled){mutateGraphConnection(routeId,connectionId,edge->new GraphConnection(edge.id(),edge.fromNode(),edge.fromPort(),edge.toNode(),edge.toPort(),enabled,edge.gain()));}
     private void setGraphConnectionGain(String routeId,String connectionId,double gain){mutateGraphConnection(routeId,connectionId,edge->new GraphConnection(edge.id(),edge.fromNode(),edge.fromPort(),edge.toNode(),edge.toPort(),edge.enabled(),gain));}
