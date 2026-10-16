@@ -3,6 +3,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as QuickSettings from 'resource:///org/gnome/shell/ui/quickSettings.js';
 import Gio from 'gi://Gio';
+import GioUnix from 'gi://GioUnix';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 
@@ -218,7 +219,7 @@ export default class AudioMatrixQuickSettingsExtension extends Extension {
             return;
         }
         try {
-            const app = Gio.DesktopAppInfo.new('audiomatrix-AudioMatrix.desktop');
+            const app = GioUnix.DesktopAppInfo.new('audiomatrix-AudioMatrix.desktop');
             if (app?.launch([], null))
                 return;
         } catch (error) {

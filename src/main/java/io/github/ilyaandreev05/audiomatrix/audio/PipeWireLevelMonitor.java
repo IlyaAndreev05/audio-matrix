@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -15,24 +16,31 @@ public final class PipeWireLevelMonitor implements AutoCloseable {
     private volatile Process process;
     private volatile Target target;
     private volatile boolean closed;
+    private volatile long generation;
+    private boolean starting;
 
     public synchronized void setTarget(AudioNode sink) { setTarget(sink, "output"); }
     public synchronized void setInputTarget(AudioNode source) { setTarget(source, "input"); }
 
     private synchronized void setTarget(AudioNode node, String expectedKind) {
+        if (closed) return;
         Target next = node == null || !expectedKind.equals(node.kind()) ? null
                 : new Target(node.id(), node.name(), Math.max(1, Math.min(8, node.channels())), expectedKind);
         if (next == null) {
-            stopCapture();
+            generation++;
             target = null;
+            starting = false;
+            stopCapture();
             reading.set(Reading.unavailable("No " + expectedKind + " selected"));
             return;
         }
-        if (closed || next.equals(target) && process != null && process.isAlive()) return;
+        if (next.equals(target) && (starting || process != null && process.isAlive())) return;
+        long nextGeneration = ++generation;
         stopCapture();
         target = next;
+        starting = true;
         reading.set(Reading.waiting());
-        Thread.ofVirtual().name("audio-matrix-output-meter-" + next.nodeId()).start(() -> capture(next));
+        Thread.ofVirtual().name("audio-matrix-output-meter-" + next.nodeId()).start(() -> capture(next, nextGeneration));
     }
 
     public Reading reading() {
@@ -42,30 +50,40 @@ public final class PipeWireLevelMonitor implements AutoCloseable {
         return current;
     }
 
-    private void capture(Target selected) {
+    private void capture(Target selected, long selectedGeneration) {
         Process started = null;
         try {
             if (!executable("pw-cat")) throw new IOException("pw-cat is not installed");
-            List<String> command = List.of("pw-cat", "--record", "--target", Integer.toString(selected.nodeId()),
-                    "--raw", "--format", "f32", "--rate", Integer.toString(RATE),
-                    "--channels", Integer.toString(selected.channels()), "--channel-map", defaultMap(selected.channels()), "-");
+            List<String> command = captureCommand(selected.name(), selected.channels(), "output".equals(selected.kind()));
             started = new ProcessBuilder(command).redirectError(ProcessBuilder.Redirect.DISCARD).start();
             synchronized (this) {
-                if (closed || !selected.equals(target)) { started.destroyForcibly(); return; }
+                if (closed || selectedGeneration != generation || !selected.equals(target)) { started.destroyForcibly(); return; }
                 process = started;
+                starting = false;
             }
-            readSamples(started.getInputStream(), selected);
+            readSamples(started.getInputStream(), selected, selectedGeneration);
             int exit = started.waitFor();
-            if (!closed && selected.equals(target)) reading.set(Reading.unavailable(label(selected.kind()) + " monitor stopped (pw-cat " + exit + ")"));
+            if (!closed && selectedGeneration == generation && selected.equals(target)) reading.set(Reading.unavailable(label(selected.kind()) + " monitor stopped (pw-cat " + exit + ")"));
         } catch (Exception e) {
-            if (!closed && selected.equals(target)) reading.set(Reading.unavailable(label(selected.kind()) + " monitor unavailable: " + safeMessage(e)));
+            if (!closed && selectedGeneration == generation && selected.equals(target)) reading.set(Reading.unavailable(label(selected.kind()) + " monitor unavailable: " + safeMessage(e)));
         } finally {
             if (started != null) started.destroy();
-            synchronized (this) { if (process == started) process = null; }
+            synchronized (this) {
+                if (process == started) process = null;
+                if (selectedGeneration == generation) starting = false;
+            }
         }
     }
 
-    private void readSamples(InputStream input, Target selected) throws IOException {
+    static List<String> captureCommand(String nodeName, int channels, boolean captureSink) {
+        List<String> command = new ArrayList<>(List.of("pw-cat", "--record", "--target", nodeName));
+        if (captureSink) command.addAll(List.of("--properties", "{\"stream.capture.sink\":true}"));
+        command.addAll(List.of("--raw", "--format", "f32", "--rate", Integer.toString(RATE),
+                "--channels", Integer.toString(channels), "--channel-map", defaultMap(channels), "-"));
+        return List.copyOf(command);
+    }
+
+    private void readSamples(InputStream input, Target selected, long selectedGeneration) throws IOException {
         byte[] bytes = new byte[16 * 1024];
         byte[] partial = new byte[selected.channels() * Float.BYTES];
         int partialSize = 0;
@@ -73,7 +91,7 @@ public final class PipeWireLevelMonitor implements AutoCloseable {
         double peak = 0;
         double sumSquares = 0;
         long samplesInWindow = 0;
-        while (!closed && selected.equals(target)) {
+        while (!closed && selectedGeneration == generation && selected.equals(target)) {
             int count = input.read(bytes);
             if (count < 0) break;
             if (count == 0) continue;
@@ -93,7 +111,7 @@ public final class PipeWireLevelMonitor implements AutoCloseable {
                 framesInWindow++;
                 partialSize = 0;
                 if (framesInWindow >= WINDOW_FRAMES) {
-                    publish(peak, sumSquares, samplesInWindow, selected);
+                    publish(peak, sumSquares, samplesInWindow, selected, selectedGeneration);
                     framesInWindow = 0; peak = 0; sumSquares = 0; samplesInWindow = 0;
                 }
             }
@@ -110,7 +128,7 @@ public final class PipeWireLevelMonitor implements AutoCloseable {
                 }
                 framesInWindow++;
                 if (framesInWindow >= WINDOW_FRAMES) {
-                    publish(peak, sumSquares, samplesInWindow, selected);
+                    publish(peak, sumSquares, samplesInWindow, selected, selectedGeneration);
                     framesInWindow = 0; peak = 0; sumSquares = 0; samplesInWindow = 0;
                 }
             }
@@ -120,7 +138,8 @@ public final class PipeWireLevelMonitor implements AutoCloseable {
         }
     }
 
-    private void publish(double peak, double sumSquares, long samples, Target selected) {
+    private void publish(double peak, double sumSquares, long samples, Target selected, long selectedGeneration) {
+        if (closed || selectedGeneration != generation || !selected.equals(target)) return;
         double rms = samples == 0 ? 0 : Math.sqrt(sumSquares / samples);
         reading.set(new Reading(true, "", AudioMeterMath.dbfs(peak), AudioMeterMath.dbfs(rms), peak >= 1.0,
                 System.currentTimeMillis(), selected.name(), selected.kind()));
@@ -158,6 +177,8 @@ public final class PipeWireLevelMonitor implements AutoCloseable {
 
     @Override public synchronized void close() {
         closed = true;
+        generation++;
+        starting = false;
         target = null;
         stopCapture();
         reading.set(Reading.unavailable("Output meter stopped"));

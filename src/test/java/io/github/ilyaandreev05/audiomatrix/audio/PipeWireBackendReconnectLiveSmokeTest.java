@@ -127,6 +127,40 @@ class PipeWireBackendReconnectLiveSmokeTest {
             assertEquals(0, firstReport.streams());
             assertPrivateRouteGraph(manager, routeConfig, first, sinkName);
 
+            assertTrue(first.sources().isEmpty(), "The private policy profile must not expose physical input sources");
+            try (PipeWireLevelMonitor meter = new PipeWireLevelMonitor()) {
+                meter.setTarget(firstSink);
+                Process silence = new ProcessBuilder("pw-cat", "--playback", "--target", sinkName, "--raw",
+                        "--format", "f32", "--rate", "48000", "--channels", "2", "--channel-map", "FL,FR", "/dev/zero")
+                        .redirectError(ProcessBuilder.Redirect.DISCARD).start();
+                try {
+                    long meterDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                    while (!meter.reading().available() && System.nanoTime() < meterDeadline) Thread.sleep(50);
+                    assertTrue(meter.reading().available(), meter.reading().message());
+                    assertEquals(firstSink.name(), meter.reading().nodeName());
+                    JsonNode meterGraph = new ObjectMapper().readTree(run("pw-dump", "-N"));
+                    int sinkNodeId = -1;
+                    int captureNodeId = -1;
+                    for (JsonNode node : meterGraph) {
+                        JsonNode properties = node.path("info").path("props");
+                        if (firstSink.name().equals(properties.path("node.name").asText())) sinkNodeId = node.path("id").asInt(-1);
+                        if (properties.path("stream.capture.sink").asBoolean(false)) captureNodeId = node.path("id").asInt(-1);
+                    }
+                    assertTrue(sinkNodeId >= 0, "The private sink must remain present during meter capture");
+                    assertTrue(captureNodeId >= 0, "Output meter capture must explicitly target the sink monitor");
+                    int selectedSinkId = sinkNodeId;
+                    int selectedCaptureId = captureNodeId;
+                    long sinkMonitorLinks = java.util.stream.StreamSupport.stream(meterGraph.spliterator(), false)
+                            .filter(node -> node.path("info").path("props").path("link.output.node").asInt(-1) == selectedSinkId
+                                    && node.path("info").path("props").path("link.input.node").asInt(-1) == selectedCaptureId)
+                            .count();
+                    assertTrue(sinkMonitorLinks >= 2,
+                            "The meter capture must link from the selected private sink's monitor ports");
+                } finally {
+                    stop(silence);
+                }
+            }
+
             firstServer.destroy();
             assertTrue(firstServer.waitFor(5, TimeUnit.SECONDS), "The first private PipeWire server did not stop");
             assertTrue(waitForMonitorDisconnect(backend, Duration.ofSeconds(8)), "The route smoke monitor did not detect server loss");

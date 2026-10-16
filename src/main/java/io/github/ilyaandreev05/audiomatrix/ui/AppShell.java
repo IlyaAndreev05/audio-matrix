@@ -154,6 +154,8 @@ public final class AppShell extends BorderPane {
     private long routeHistoryRevision = -1;
     private boolean routeUndoInProgress;
     private boolean dspReferenceMode;
+    private boolean dspReferenceUpdateInProgress;
+    private CheckBox dspReferenceToggle;
     private boolean autoApplySuppressedUntilRestart;
     private String lastRouteInputSignature = "";
     private long lastAppliedConnectionGeneration;
@@ -730,8 +732,9 @@ public final class AppShell extends BorderPane {
         page.getChildren().add(headroom);
         VBox comparison = card(t("Сравнение A/B", "A/B comparison"));
         CheckBox reference = new CheckBox(t("B · EQ bypass с выравниванием по верхней оценке gain", "B · EQ bypass with conservative gain matching"));
+        dspReferenceToggle = reference;
         reference.setSelected(dspReferenceMode);
-        reference.setDisable(!routeManager.active());
+        reference.setDisable(!routeManager.active() || dspReferenceUpdateInProgress);
         reference.setOnAction(event -> setDspReferenceMode(reference.isSelected()));
         double matchBoost;
         try { matchBoost = routeManager.maximumEqBoostDb(config, snapshot, selectedSink); }
@@ -826,7 +829,7 @@ public final class AppShell extends BorderPane {
                 actionButton(t("Создать route chain", "Create route chain"), this::createRouteChain));
         page.getChildren().add(chains);
         VBox future = card(t("Физический выход и каналы", "Physical output and channels"));
-        future.getChildren().addAll(label(t("Для подтверждённого профиля можно хранить независимый EQ и отдельные notch дребезга. Без датчика измеренные кривые не создаются.", "A confirmed profile can store an independent EQ and rattle notches. No measured curves are created without a sensor."), ""), label(t("В этой сборке A/B и bypass меняют конфигурацию только после подключения DSP backend.", "In this build, A/B and bypass affect only configuration until a DSP backend is connected."), "muted"));
+        future.getChildren().addAll(label(t("Профиль может хранить независимый EQ и отдельные notch дребезга. Кривые строятся только по импортированной или записанной WAV-измерительной записи; субъективные заметки остаются непроверенными.", "A profile can store an independent EQ and separate rattle notches. Curves are derived only from imported or recorded WAV measurements; subjective notes remain unverified."), ""), label(t("A/B временно переключает активный граф PipeWire: A — сохранённый EQ, B — bypass EQ с консервативным выравниванием gain. Limiter и полярность остаются включены; YAML не меняется. Сначала примените граф маршрутов.", "A/B temporarily switches the active PipeWire graph: A uses the saved EQ, while B bypasses EQ with conservative gain matching. The limiter and route polarity stay enabled; YAML is unchanged. Apply the route graph first."), "muted"));
         page.getChildren().add(future);
         return page;
     }
@@ -2327,12 +2330,15 @@ public final class AppShell extends BorderPane {
     }
 
     private void setDspReferenceMode(boolean referenceMode) {
+        if (dspReferenceUpdateInProgress) return;
         if (!routeManager.active()) {
             setNotice(t("Сначала примените граф маршрутов.", "Apply the route graph first."), true);
             showPage(currentPage);
             return;
         }
         boolean previous = dspReferenceMode;
+        dspReferenceUpdateInProgress = true;
+        if (dspReferenceToggle != null) dspReferenceToggle.setDisable(true);
         dspReferenceMode = referenceMode;
         Map<String, Object> config = store.snapshot();
         setNotice(t("Обновляю PipeWire для A/B…", "Updating PipeWire for A/B…"), false);
@@ -2341,6 +2347,7 @@ public final class AppShell extends BorderPane {
             updateMeterTarget();
             return routeManager.apply(runtimeDspConfig(config, current), current);
         }).whenComplete((report, error) -> Platform.runLater(() -> {
+            dspReferenceUpdateInProgress = false;
             if (error != null) {
                 dspReferenceMode = previous;
                 setNotice(t("A/B не применён: ", "A/B was not applied: ") + rootMessage(error), true);
