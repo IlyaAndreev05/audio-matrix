@@ -1,0 +1,48 @@
+package io.github.ilyaandreev05.audiomatrix.gnome;
+
+import io.github.ilyaandreev05.audiomatrix.audio.AudioNode;
+import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+class GnomeControlBridgeTest {
+    private final AudioNode selected = new AudioNode(12, "alsa_output.usb-test", "USB test output", "Audio/Sink",
+            "running", "", "", "", 2, List.of(48000), .5, false, null);
+
+    @Test void publishesOnlyEnabledActiveRoutesThatEndAtSelectedPhysicalOutput() {
+        PipeWireBackend.Snapshot snapshot = new PipeWireBackend.Snapshot(true, "", List.of(selected), List.of(),
+                List.of(), List.of(), Map.of(), 12, 0);
+        Map<String, Object> config = Map.of(
+                "devices", List.of(Map.of("id", "usb", "selector", Map.of("kind", "name_equals", "value", selected.name()))),
+                "buses", List.of(Map.of("id", "effects")),
+                "routes", List.of(
+                        Map.of("id", "active-usb", "name", "Transducer", "to", "usb", "channel_map", "mono_sum", "enabled", true),
+                        Map.of("id", "disabled-usb", "to", "usb", "channel_map", "stereo", "enabled", false),
+                        Map.of("id", "inactive-usb", "to", "usb", "channel_map", "stereo", "enabled", true),
+                        Map.of("id", "bus-route", "to", "effects", "channel_map", "stereo", "enabled", true),
+                        Map.of("id", "other-output", "to", "missing", "channel_map", "stereo", "enabled", true)));
+        Map<String, Object> profile = Map.of("active_routes", List.of("active-usb", "disabled-usb", "bus-route", "other-output"));
+
+        List<Map<String, Object>> routes = GnomeControlBridge.channelRoutes(snapshot, config, profile, selected, 12,
+                List.of(Map.of("id", "usb", "selector", Map.of("kind", "name_equals", "value", selected.name()))));
+
+        assertEquals(List.of(Map.of("id", "active-usb", "name", "Transducer", "channel_map", "mono_sum")), routes);
+    }
+
+    @Test void noPhysicalSelectionPublishesNoChannelControls() {
+        PipeWireBackend.Snapshot snapshot = PipeWireBackend.Snapshot.offline("Disconnected");
+        assertEquals(List.of(), GnomeControlBridge.channelRoutes(snapshot, Map.of("routes", List.of()),
+                Map.of("active_routes", List.of()), null, -1, List.of()));
+    }
+
+    @Test void decodesEscapedTabFromGdbusCommandSignal() {
+        GnomeControlBridge.Command command = GnomeControlBridge.parseCommandLine(
+                "/org/ilya/AudioMatrix: org.ilya.AudioMatrix.Command ('set_channel_map', 'test-route\\tmono_sum')");
+
+        assertEquals(new GnomeControlBridge.Command("set_channel_map", "test-route\tmono_sum"), command);
+    }
+}

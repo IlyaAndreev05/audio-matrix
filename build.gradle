@@ -1,0 +1,87 @@
+plugins {
+    id 'application'
+    id 'org.openjfx.javafxplugin' version '0.1.0'
+}
+
+group = 'io.github.ilyaandreev05'
+version = '0.1.0'
+
+repositories { mavenCentral() }
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(25) }
+}
+
+javafx {
+    version = '27'
+    modules = [ 'javafx.controls' ]
+}
+
+dependencies {
+    implementation 'io.github.mkpaz:atlantafx-base:3.0.0'
+    implementation 'com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.20.1'
+    testImplementation platform('org.junit:junit-bom:5.13.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+application {
+    mainClass = 'io.github.ilyaandreev05.audiomatrix.AudioMatrixApp'
+    applicationDefaultJvmArgs = ['--enable-native-access=javafx.graphics,ALL-UNNAMED']
+}
+
+test { useJUnitPlatform() }
+
+def limiterSource = file('src/main/native/audiomatrix_limiter.c')
+def limiterHeader = file('src/main/native/ladspa_abi.h')
+def limiterOutputDir = layout.buildDirectory.dir('generated-resources/limiter').get().asFile
+def limiterOutput = new File(limiterOutputDir, 'libaudiomatrix_limiter.so')
+tasks.register('compileLimiterPlugin', Exec) {
+    inputs.files(limiterSource, limiterHeader)
+    outputs.file(limiterOutput)
+    doFirst { limiterOutputDir.mkdirs() }
+    commandLine 'cc', '-std=c11', '-O2', '-fPIC', '-shared', '-Wall', '-Wextra', '-Werror',
+            '-o', limiterOutput.absolutePath, limiterSource.absolutePath, '-lm'
+}
+tasks.named('processResources') {
+    dependsOn tasks.named('compileLimiterPlugin')
+    from(limiterOutputDir) { into 'native' }
+}
+
+def limiterHarnessSource = file('src/test/native/limiter_harness.c')
+def limiterHarnessOutput = layout.buildDirectory.file('native-tests/limiter_harness').get().asFile
+tasks.register('compileLimiterHarness', Exec) {
+    inputs.files(limiterHarnessSource, limiterSource, limiterHeader)
+    outputs.file(limiterHarnessOutput)
+    doFirst { limiterHarnessOutput.parentFile.mkdirs() }
+    commandLine 'cc', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror',
+            '-o', limiterHarnessOutput.absolutePath, limiterHarnessSource.absolutePath, '-lm'
+}
+tasks.named('test') {
+    dependsOn tasks.named('compileLimiterHarness')
+    doFirst { systemProperty 'audioMatrix.limiterHarness', limiterHarnessOutput.absolutePath }
+}
+
+// Build a self-contained Debian package from the Gradle application distribution.
+tasks.register('packageDeb', Exec) {
+    dependsOn tasks.installDist
+    doFirst {
+        def jdkHome = project.findProperty('packageJdkHome') ?: System.getProperty('java.home')
+        def appLib = layout.buildDirectory.dir("install/${project.name}/lib").get().asFile
+        def mainJar = fileTree(appLib).matching { include "${project.name}-${project.version}.jar" }.singleFile
+        def dest = layout.buildDirectory.dir('deb').get().asFile
+        dest.mkdirs()
+        environment 'JAVA_HOME', jdkHome
+        environment 'PATH', "${jdkHome}/bin:${System.getenv('PATH')}"
+        def args = ["${jdkHome}/bin/jpackage", '--type', 'deb', '--dest', dest.absolutePath,
+                '--name', 'AudioMatrix', '--app-version', project.version.toString(),
+                '--vendor', 'IlyaAndreev05', '--description', 'Audio Matrix mixer and PipeWire routing manager',
+                '--input', appLib.absolutePath,
+                '--main-jar', mainJar.name, '--main-class', application.mainClass.get(),
+                '--java-options', '--module-path $APPDIR --add-modules javafx.controls --enable-native-access=javafx.graphics,ALL-UNNAMED',
+                '--linux-shortcut', '--linux-menu-group', 'AudioVideo']
+        if (!file("${jdkHome}/bin/jlink").exists() || !file("${jdkHome}/jmods").isDirectory())
+            args.addAll(['--runtime-image', jdkHome])
+        commandLine args
+    }
+}

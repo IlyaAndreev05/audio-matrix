@@ -1,0 +1,55 @@
+.root {
+    -fx-font-family: "Ubuntu", "Noto Sans", sans-serif;
+    -fx-font-size: 13px;
+    -fx-background-insets: 0;
+}
+.dark-theme {
+    -fx-am-background: #101722;
+    -fx-am-panel: #182332;
+    -fx-am-panel-raised: #202d3c;
+    -fx-am-border: #344354;
+    -fx-am-text: #f2f5f8;
+    -fx-am-muted: #c1cbd6;
+    -fx-am-accent: #48c5d6;
+    -fx-am-warning: #f2ba62;
+    -fx-am-danger: #ef7777;
+    -fx-background-color: -fx-am-background;
+    -fx-text-fill: -fx-am-text;
+}
+.light-theme {
+    -fx-am-background: #f2f5f8;
+    -fx-am-panel: #ffffff;
+    -fx-am-panel-raised: #e9eef4;
+    -fx-am-border: #c5cfda;
+    -fx-am-text: #16212d;
+    -fx-am-muted: #465565;
+    -fx-am-accent: #006e80;
+    -fx-am-warning: #845800;
+    -fx-am-danger: #a62626;
+    -fx-background-color: -fx-am-background;
+    -fx-text-fill: -fx-am-text;
+}
+.app-shell { -fx-background-color: -fx-am-background; }
+.sidebar { -fx-background-color: -fx-am-panel; -fx-border-color: transparent -fx-am-border transparent transparent; -fx-border-width: 0 1 0 0; -fx-padding: 22 14 16 14; -fx-spacing: 8; }
+.brand { -fx-font-size: 17px; -fx-font-weight: 700; -fx-padding: 0 10 20 10; }
+.brand-mark { -fx-text-fill: -fx-am-accent; -fx-font-size: 18px; -fx-font-weight: 900; }
+.nav-button { -fx-alignment: CENTER_LEFT; -fx-padding: 10 12; -fx-background-radius: 8; -fx-border-radius: 8; -fx-background-color: transparent; -fx-text-fill: -fx-am-muted; -fx-font-weight: 600; -fx-cursor: hand; }
+.nav-button:hover { -fx-background-color: -fx-am-panel-raised; -fx-text-fill: -fx-am-text; }
+.nav-button:selected, .nav-button:focused { -fx-background-color: -fx-am-panel-raised; -fx-text-fill: -fx-am-accent; -fx-border-color: transparent transparent transparent -fx-am-accent; -fx-border-width: 0 0 0 3; }
+.topbar { -fx-padding: 14 22; -fx-spacing: 14; -fx-alignment: CENTER_LEFT; -fx-background-color: -fx-am-panel; -fx-border-color: transparent transparent -fx-am-border transparent; -fx-border-width: 0 0 1 0; }
+.page-title { -fx-font-size: 21px; -fx-font-weight: 700; }
+.page-subtitle { -fx-text-fill: -fx-am-muted; }
+.page-content { -fx-padding: 24 26 30 26; -fx-spacing: 18; }
+.card { -fx-background-color: -fx-am-panel; -fx-background-radius: 12; -fx-border-color: -fx-am-border; -fx-border-radius: 12; -fx-padding: 18; -fx-spacing: 10; }
+.card-title { -fx-font-size: 15px; -fx-font-weight: 700; }
+.stat-value { -fx-font-size: 22px; -fx-font-weight: 700; }
+.muted { -fx-text-fill: -fx-am-muted; }
+.warning { -fx-text-fill: -fx-am-warning; -fx-font-weight: 600; }
+.danger { -fx-text-fill: -fx-am-danger; -fx-font-weight: 600; }
+.accent { -fx-text-fill: -fx-am-accent; -fx-font-weight: 700; }
+.status-pill { -fx-background-color: -fx-am-panel-raised; -fx-background-radius: 99; -fx-padding: 5 10; -fx-font-weight: 600; }
+.action-row { -fx-spacing: 10; -fx-alignment: CENTER_LEFT; }
+.node-card { -fx-background-color: -fx-am-panel-raised; -fx-background-radius: 10; -fx-border-color: -fx-am-border; -fx-border-radius: 10; -fx-padding: 14; -fx-spacing: 8; }
+.route-node { -fx-min-width: 190; -fx-min-height: 96; }
+.canvas { -fx-background-color: -fx-am-background; -fx-border-color: -fx-am-border; -fx-border-radius: 10; -fx-background-radius: 10; }
+.error-banner { -fx-background-color: derive(-fx-am-danger, 78%); -fx-background-radius: 8; -fx-padding: 10 14; -fx-text-fill: -fx-am-text; }

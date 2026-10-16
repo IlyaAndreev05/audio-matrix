@@ -1,0 +1,9 @@
+.gradle/
+build/
+*.log
+.idea/
+.vscode/
+work/
+/outputs/
+/todo.md
+graphify-out/

@@ -1,0 +1,167 @@
+# Иллюстративный профиль. Замените selector и выходы на свои устройства.
+# Значения EQ и калибровки здесь не являются измеренными или аппаратно проверенными.
+schema_version: 1
+app: audio-matrix
+active_profile: desk
+ui:
+  language: ru
+  theme: system
+  start_minimized: false
+  confirm_route_changes: true
+mixer:
+  global_volume: 0.80
+  global_mute: false
+  global_eq:
+    enabled: false
+    filters:
+      - { type: peaking, frequency_hz: 250, gain_db: -1.0, q: 1.0, enabled: true }
+quick_settings:
+  enabled: true
+  show_output: true
+  show_mode: true
+  show_mute: true
+  open_full_settings: true
+engine:
+  backend: pipewire
+  apply_on_start: false
+  restore_owned_nodes_on_exit: true
+  device_loss_policy: mute
+  transition_ms: 120
+devices:
+  - id: desk-dac
+    selector: { kind: name_contains, value: REPLACE_WITH_DAC_NAME }
+    role: output
+    volume: 0.70
+    mute: false
+    filters_ref: dsp.route_chains.desk_output
+    preferred_sample_rate: 48000
+    fallback: system_default
+  - id: speakers
+    selector: { kind: name_contains, value: REPLACE_WITH_SPEAKER_OUTPUT }
+    role: speaker
+    volume: 0.65
+    mute: false
+    fallback: desk-dac
+applications:
+  - id: browser
+    match: { process: chrome }
+    volume: 0.75
+    mute: false
+    bus: music
+    preferred_output: speakers
+    filters_ref: dsp.route_chains.browser_music
+  - id: telegram
+    match: { process: telegram-desktop }
+    volume: 0.65
+    mute: false
+    bus: music
+    preferred_output: speakers
+  - id: event-sound-studio
+    match: { process: event-sound-studio }
+    volume: 0.55
+    mute: false
+    bus: effects
+    preferred_output: desk-dac
+buses:
+  - { id: music, name: Music, role: music, channels: stereo, volume: 1.0, mute: false }
+  - { id: effects, name: Effects, role: effects, channels: stereo, volume: 0.8, mute: false }
+  - { id: subwoofer, name: Subwoofer, role: subwoofer, channels: mono, volume: 0.65, mute: false }
+routes:
+  - id: music-to-speakers
+    from: music
+    to: speakers
+    gain_db: 0
+    volume: 0.90
+    delay_ms: 0
+    channel_map: stereo
+    polarity: normal
+    enabled: true
+  - id: effects-to-desk
+    from: effects
+    to: desk-dac
+    gain_db: -3
+    volume: 1.0
+    delay_ms: 0
+    channel_map: stereo
+    polarity: normal
+    filters_ref: dsp.route_chains.effects_to_desk
+    enabled: true
+  - id: music-to-sub
+    from: music
+    to: subwoofer
+    gain_db: -6
+    volume: 0.65
+    delay_ms: 0
+    channel_map: mono_sum
+    polarity: normal
+    enabled: false
+  # Optional output rows and input columns. Row absolute sums above 1 need the output limiter.
+  - id: matrix-example
+    from: music
+    to: speakers
+    gain_db: 0
+    volume: 0.70
+    delay_ms: 0
+    channel_map: stereo
+    channel_matrix:
+      inputs: [FL, FR]
+      outputs: [FL, FR]
+      coefficients:
+        - [0.5, 0.5]
+        - [0.5, 0.5]
+    enabled: false
+dsp:
+  order: [stream, bus, route, physical_output, limiter]
+  limiter: { enabled: true, ceiling_db: -1.0, lookahead_ms: 5.0, release_ms: 50.0 }
+  global_eq: { enabled: false, filters: [] }
+  devices:
+    desk-dac:
+      enabled: false
+      filters:
+        - { type: high_pass, frequency_hz: 35, slope_db_oct: 24, enabled: true }
+        - { type: peaking, frequency_hz: 82, gain_db: -2.5, q: 2.0, enabled: true }
+    subwoofer:
+      enabled: false
+      filters:
+        - { type: low_pass, frequency_hz: 120, slope_db_oct: 24, enabled: true }
+  route_chains:
+    desk_output:
+      enabled: false
+      filters:
+        - { type: high_pass, frequency_hz: 30, gain_db: 0, enabled: true }
+    browser_music:
+      enabled: false
+      filters:
+        - { type: peaking, frequency_hz: 250, gain_db: -1.0, q: 1.0, enabled: true }
+    effects_to_desk:
+      enabled: false
+      filters:
+        - { type: peaking, frequency_hz: 95, gain_db: -1.5, q: 1.2, enabled: true }
+profiles:
+  - id: desk
+    name: Рабочий стол
+    mode: hybrid
+    default_output: desk-dac
+    active_buses: [music, effects]
+    active_routes: [music-to-speakers, effects-to-desk]
+    device_overrides: {}
+  - id: headphones
+    name: Наушники
+    mode: speaker
+    default_output: system_default
+    active_buses: [music]
+    active_routes: []
+    device_overrides: {}
+calibrations:
+  - id: desk-manual-template
+    device: desk-dac
+    channel: effects-to-desk
+    method: manual
+    sensor_mount: null
+    measurement_file: null
+    filters_ref: dsp.devices.desk-dac
+    verified: false
+    notes: Шаблон ручной настройки; измерения отсутствуют.
+export:
+  include_measurements: true
+  include_audio_assets: false

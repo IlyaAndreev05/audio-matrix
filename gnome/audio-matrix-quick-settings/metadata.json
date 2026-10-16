@@ -1,0 +1,7 @@
+{
+  "uuid": "audio-matrix-quick-settings@ilyaandreev05",
+  "name": "Audio Matrix Quick Settings",
+  "description": "Select an output, profile mode and active route channel map, control mute, or open Audio Matrix.",
+  "version": 2,
+  "shell-version": ["50"]
+}
