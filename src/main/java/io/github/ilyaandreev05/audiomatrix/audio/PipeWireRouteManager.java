@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 
 /** Applies explicitly requested Audio Matrix routing by owning PipeWire loopback nodes and links. */
 public final class PipeWireRouteManager implements AutoCloseable {
+    static final String EVENT_SOUND_STUDIO_APPLICATION_ID = "io.github.ilyaandreev05.eventsoundstudio";
     private static final Duration COMMAND_TIMEOUT = Duration.ofSeconds(3);
     private static final int START_ATTEMPTS = 30;
     private static final long START_WAIT_MS = 100;
@@ -594,8 +595,11 @@ public final class PipeWireRouteManager implements AutoCloseable {
         List<StreamPlan> streams = new ArrayList<>();
         if (!profileOff && !routes.isEmpty()) {
             for (AudioNode stream : snapshot.streams()) {
-                Map<String, Object> rule = ApplicationRuleMatcher.find(maps(config.get("applications")), stream);
-                if (rule == null) {
+                boolean eventStream = EVENT_SOUND_STUDIO_APPLICATION_ID.equals(stream.applicationId());
+                Map<String, Object> rule = eventStream
+                        ? explicitEventApplicationRule(maps(config.get("applications")))
+                        : ApplicationRuleMatcher.find(maps(config.get("applications")), stream);
+                if (rule == null && !eventStream) {
                     String defaultBus = text(config.get("graph_default_bus"));
                     if (!defaultBus.isBlank() && busConfig.containsKey(defaultBus)) rule = Map.of("bus", defaultBus);
                 }
@@ -613,6 +617,14 @@ public final class PipeWireRouteManager implements AutoCloseable {
             }
         }
         return new Plan(buses, routes, streams, outputPlans, warnings, profileOff);
+    }
+
+    private static Map<String,Object> explicitEventApplicationRule(List<Map<String,Object>> rules) {
+        for (Map<String,Object> rule : rules) {
+            Map<String,Object> match = object(rule.get("match"));
+            if (EVENT_SOUND_STUDIO_APPLICATION_ID.equals(text(match.get("app_id")))) return rule;
+        }
+        return null;
     }
 
     List<Map<String, Object>> routeFilters(Map<String, Object> route, Map<String, Object> config) throws IOException {
@@ -1246,5 +1258,7 @@ public final class PipeWireRouteManager implements AutoCloseable {
         private StreamPlan { filters = List.copyOf(filters); positions = List.copyOf(positions); }
     }
     record Plan(Map<String, BusPlan> buses, List<RoutePlan> routes, List<StreamPlan> streams,
-                        Map<String, OutputPlan> outputs, List<String> warnings, boolean profileOff) {}
+                        Map<String, OutputPlan> outputs, List<String> warnings, boolean profileOff) {
+        List<String> routedStreamNames() { return streams.stream().map(plan -> plan.node().name()).toList(); }
+    }
 }

@@ -84,4 +84,29 @@ tasks.register('packageDeb', Exec) {
             args.addAll(['--runtime-image', jdkHome])
         commandLine args
     }
+    doLast {
+        def dest = layout.buildDirectory.dir('deb').get().asFile
+        def packageFile = dest.listFiles()?.find { it.name.endsWith("_${project.version}_amd64.deb") }
+        if (packageFile == null) throw new GradleException('Could not locate the jpackage Debian archive to add the isolated event sink unit')
+        def extracted = layout.buildDirectory.dir('deb-package-root').get().asFile
+        project.delete(extracted)
+        def runCommand = { List<String> command ->
+            def process = new ProcessBuilder(command).inheritIO().start()
+            if (process.waitFor() != 0) throw new GradleException("Command failed: ${command.first()}")
+        }
+        runCommand(['dpkg-deb', '--raw-extract', packageFile.absolutePath, extracted.absolutePath])
+        def unitDirectory = new File(extracted, 'opt/audiomatrix/lib/systemd/user')
+        unitDirectory.mkdirs()
+        copy { from file('src/main/systemd/user'); into unitDirectory }
+        new File(unitDirectory, 'audiomatrix-events-loopback.sh').setExecutable(true, false)
+        def helperDirectory = new File(extracted, 'opt/audiomatrix/bin')
+        helperDirectory.mkdirs()
+        copy { from files('scripts/enable-audiomatrix-events-service.sh', 'scripts/disable-audiomatrix-events-service.sh'); into helperDirectory }
+        new File(helperDirectory, 'enable-audiomatrix-events-service.sh').setExecutable(true, false)
+        new File(helperDirectory, 'disable-audiomatrix-events-service.sh').setExecutable(true, false)
+        def rebuilt = new File(dest, packageFile.name + '.rebuilt')
+        runCommand(['dpkg-deb', '--build', '--root-owner-group', extracted.absolutePath, rebuilt.absolutePath])
+        java.nio.file.Files.move(rebuilt.toPath(), packageFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        project.delete(extracted)
+    }
 }

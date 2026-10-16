@@ -214,6 +214,34 @@ class PipeWireRouteManagerTest {
         assertTrue(plan.warnings().stream().anyMatch(warning -> warning.contains("at least two distinct outputs")));
     }
 
+    @Test
+    void unmatchedEventSoundStudioStreamNeverUsesTheGeneralCatchAllButExactRuleCanRouteIt() throws IOException {
+        Map<String,Object> config = DefaultConfig.create();
+        config.put("graph_default_bus", "main");
+        @SuppressWarnings("unchecked") List<Map<String,Object>> routes = (List<Map<String,Object>>) config.get("routes");
+        routes.add(DefaultConfig.map("id", "main-out", "from", "main", "to", "system_default", "enabled", true));
+        @SuppressWarnings("unchecked") List<Map<String,Object>> profiles = (List<Map<String,Object>>) config.get("profiles");
+        profiles.getFirst().put("active_buses", List.of("main"));
+        profiles.getFirst().put("active_routes", List.of("main-out"));
+        AudioNode sink = sink(70, "default-sink", "Default output");
+        AudioNode eventStream = new AudioNode(71, "event-stream", "Event effects", "Stream/Output/Audio", "running",
+                "Event Sound Studio", "pw-cat", PipeWireRouteManager.EVENT_SOUND_STUDIO_APPLICATION_ID,
+                2, List.of(48000), 1.0, false, null);
+        PipeWireBackend.Snapshot snapshot = snapshotWithStreams(List.of(sink), List.of(eventStream), sink.id());
+        PipeWireRouteManager manager = new PipeWireRouteManager();
+
+        PipeWireRouteManager.Plan isolated = manager.plan(config, snapshot);
+        assertTrue(isolated.streams().isEmpty(), "an unmatched event stream must remain on its isolated virtual sink");
+        assertEquals(List.of("main-out"), isolated.routes().stream().map(PipeWireRouteManager.RoutePlan::id).toList());
+
+        @SuppressWarnings("unchecked") List<Map<String,Object>> applications = (List<Map<String,Object>>) config.get("applications");
+        applications.add(DefaultConfig.map("id", "event-effects", "name", "Event effects", "match",
+                DefaultConfig.map("app_id", PipeWireRouteManager.EVENT_SOUND_STUDIO_APPLICATION_ID), "bus", "main",
+                "volume", 1.0, "mute", false));
+        PipeWireRouteManager.Plan explicitlyRouted = manager.plan(config, snapshot);
+        assertEquals(List.of("event-stream"), explicitlyRouted.routedStreamNames());
+    }
+
     private static AudioNode sink(int id, String name, String description) {
         return new AudioNode(id, name, description, "Audio/Sink", "running", "", "", "", 2,
                 List.of(48000), 1.0, false, null);
@@ -221,6 +249,11 @@ class PipeWireRouteManagerTest {
 
     private static PipeWireBackend.Snapshot snapshot(List<AudioNode> sinks, int defaultSinkId) {
         return new PipeWireBackend.Snapshot(true, "", sinks, List.of(), List.of(), List.of(), Map.of(), defaultSinkId,
+                System.currentTimeMillis());
+    }
+
+    private static PipeWireBackend.Snapshot snapshotWithStreams(List<AudioNode> sinks, List<AudioNode> streams, int defaultSinkId) {
+        return new PipeWireBackend.Snapshot(true, "", sinks, List.of(), streams, List.of(), Map.of(), defaultSinkId,
                 System.currentTimeMillis());
     }
 
