@@ -52,9 +52,21 @@ public final class PipeWireRouteManager implements AutoCloseable {
     private CompletableFuture<Void> closeFuture;
 
     public CompletableFuture<ApplyReport> apply(Map<String, Object> config, PipeWireBackend.Snapshot snapshot) {
+        return apply(config, snapshot, false);
+    }
+
+    public CompletableFuture<ApplyReport> reapplyAfterReconnect(Map<String, Object> config, PipeWireBackend.Snapshot snapshot) {
+        return apply(config, snapshot, true);
+    }
+
+    private CompletableFuture<ApplyReport> apply(Map<String, Object> config, PipeWireBackend.Snapshot snapshot,
+                                                  boolean reconnect) {
         if (closed) return CompletableFuture.failedFuture(new IllegalStateException("Route manager is closed"));
         return CompletableFuture.supplyAsync(() -> {
-            try { return applyNow(config, snapshot); }
+            try {
+                if (reconnect) active = false;
+                return applyNow(config, snapshot);
+            }
             catch (Exception e) { status = "Route apply failed: " + message(e); throw new CompletionException(e); }
         }, worker);
     }

@@ -24,6 +24,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.zip.CRC32;
@@ -38,6 +39,7 @@ public final class PipeWireBackend implements AutoCloseable {
     private final AtomicBoolean refreshQueued = new AtomicBoolean();
     private final AtomicBoolean calibrationCaptureActive = new AtomicBoolean();
     private final AtomicBoolean calibrationCaptureAborted = new AtomicBoolean();
+    private final AtomicLong connectionGeneration = new AtomicLong();
     private final AtomicReference<Process> calibrationRecorder = new AtomicReference<>();
     private final AtomicReference<Process> calibrationPlayback = new AtomicReference<>();
     private final PipeWireLevelMonitor outputLevelMonitor = new PipeWireLevelMonitor();
@@ -56,6 +58,7 @@ public final class PipeWireBackend implements AutoCloseable {
     }
 
     public Snapshot current() { return last; }
+    public long connectionGeneration() { return connectionGeneration.get(); }
     public String backendMessage() { return backendMessage; }
     public boolean canMoveStreams() { return executable("pactl") || executable("pw-link"); }
     public void monitorOutput(AudioNode sink) { outputLevelMonitor.setTarget(sink); }
@@ -379,6 +382,7 @@ public final class PipeWireBackend implements AutoCloseable {
     }
 
     private void monitorLoop() {
+        PipeWireMonitorReconnect reconnect = new PipeWireMonitorReconnect();
         while (!closed.get()) {
             try {
                 if (!executable("pw-dump")) throw new IOException("pw-dump is unavailable");
@@ -396,19 +400,40 @@ public final class PipeWireBackend implements AutoCloseable {
                             if (inString) { if (escaped) escaped = false; else if (c == '\\') escaped = true; else if (c == '"') inString = false; continue; }
                             if (c == '"') inString = true;
                             else if (c == '[') depth++;
-                            else if (c == ']') { depth--; if (depth == 0) initial = true; }
+                            else if (c == ']') {
+                                depth--;
+                                if (depth == 0) {
+                                    initial = true;
+                                    if (reconnect.initialSnapshotReceived()) {
+                                        connectionGeneration.incrementAndGet();
+                                        queueReconnectRefresh();
+                                    }
+                                }
+                            }
                         }
                     }
                 }
-                if (!closed.get()) { backendMessage = "PipeWire monitor restarted; reconnecting"; Thread.sleep(1200); }
+                if (!closed.get()) {
+                    reconnect.monitorUnavailable();
+                    backendMessage = "PipeWire monitor restarted; reconnecting";
+                    Thread.sleep(1200);
+                }
             } catch (Exception e) {
-                if (!closed.get()) { backendMessage = "PipeWire monitor unavailable: " + safeMessage(e); try { Thread.sleep(3000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; } }
+                if (!closed.get()) {
+                    reconnect.monitorUnavailable();
+                    backendMessage = "PipeWire monitor unavailable: " + safeMessage(e);
+                    try { Thread.sleep(3000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; }
+                }
             }
         }
     }
     private void queueRefresh() {
         if (!refreshQueued.compareAndSet(false, true)) return;
         changes.schedule(() -> refresh().thenAccept(snapshot -> listener.accept(snapshot)).whenComplete((ignored, error) -> refreshQueued.set(false)), 250, TimeUnit.MILLISECONDS);
+    }
+    private void queueReconnectRefresh() {
+        if (closed.get()) return;
+        changes.schedule(() -> refresh().thenAccept(snapshot -> listener.accept(snapshot)), 250, TimeUnit.MILLISECONDS);
     }
     private CompletableFuture<Void> execute(String... command) {
         return CompletableFuture.runAsync(() -> {

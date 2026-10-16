@@ -156,6 +156,7 @@ public final class AppShell extends BorderPane {
     private boolean dspReferenceMode;
     private boolean autoApplySuppressedUntilRestart;
     private String lastRouteInputSignature = "";
+    private long lastAppliedConnectionGeneration;
 
     public AppShell(ConfigStore store, PipeWireBackend backend, ThemeManager themes) {
         this.store = store; this.backend = backend; this.themes = themes;
@@ -2268,6 +2269,7 @@ public final class AppShell extends BorderPane {
             }
             routesRequested = routeManager.active();
             lastRouteInputSignature = routeInputSignature(config, snapshot);
+            lastAppliedConnectionGeneration = backend.connectionGeneration();
             autoApplySuppressedUntilRestart = false;
             String summary = t("Создано шин: ", "Buses: ") + report.buses()
                     + t(", маршрутов: ", ", routes: ") + report.routes()
@@ -2295,17 +2297,31 @@ public final class AppShell extends BorderPane {
         if (!current.connected()) {
             if (routeManager.active()) {
                 lastRouteInputSignature = signature;
-                routeManager.apply(runtimeDspConfig(config, current), current).whenComplete((ignored, error) -> Platform.runLater(() -> showPage(currentPage)));
+                routeManager.apply(runtimeDspConfig(config, current), current).whenComplete((ignored, error) -> Platform.runLater(() -> {
+                    routesRequested = true;
+                    showPage(currentPage);
+                }));
             }
             return;
         }
         if (!routesRequested && !autoApply) return;
-        if (signature.equals(lastRouteInputSignature)) return;
+        long connectionGeneration = backend.connectionGeneration();
+        boolean reconnected = connectionGeneration != lastAppliedConnectionGeneration;
+        if (!reconnected && signature.equals(lastRouteInputSignature)) return;
         lastRouteInputSignature = signature;
-        routeManager.apply(runtimeDspConfig(config, current), current).whenComplete((report, error) -> Platform.runLater(() -> {
-            routesRequested = routeManager.active();
-            if (error != null) setNotice(t("Не удалось обновить применённый граф: ", "Could not update the applied graph: ") + rootMessage(error), true);
-            else if (currentPage == Page.ROUTES) setNotice(routeManager.status(), false);
+        CompletableFuture<PipeWireRouteManager.ApplyReport> apply = reconnected
+                ? routeManager.reapplyAfterReconnect(runtimeDspConfig(config, current), current)
+                : routeManager.apply(runtimeDspConfig(config, current), current);
+        apply.whenComplete((report, error) -> Platform.runLater(() -> {
+            if (error != null) {
+                lastRouteInputSignature = "";
+                routesRequested = routeManager.active() || !current.connected();
+                setNotice(t("Не удалось обновить применённый граф: ", "Could not update the applied graph: ") + rootMessage(error), true);
+            } else {
+                routesRequested = routeManager.active();
+                lastAppliedConnectionGeneration = connectionGeneration;
+                if (currentPage == Page.ROUTES) setNotice(routeManager.status(), false);
+            }
             showPage(currentPage);
         }));
     }
@@ -2331,6 +2347,7 @@ public final class AppShell extends BorderPane {
             } else {
                 routesRequested = routeManager.active();
                 lastRouteInputSignature = routeInputSignature(config, snapshot);
+                lastAppliedConnectionGeneration = backend.connectionGeneration();
                 setNotice(referenceMode
                         ? t("B включён: EQ обойдён, уровень снижен по расчётной верхней оценке.", "B is on: EQ bypassed and level reduced by the conservative gain estimate.")
                         : t("A включён: обработанная EQ-цепочка восстановлена.", "A is on: the processed EQ chain is restored."), false);
@@ -2352,7 +2369,7 @@ public final class AppShell extends BorderPane {
         List<String> streams = current.streams().stream().map(node -> node.id() + ":" + node.name() + ":" + node.applicationId() + ":" + node.processName()).sorted().toList();
         int hash = Objects.hash(config.get("active_profile"), config.get("profiles"), config.get("buses"),
                 config.get("routes"), config.get("applications"), config.get("devices"), config.get("dsp"),
-                config.get("mixer"), config.get("engine"), current.connected(),
+                config.get("mixer"), config.get("engine"), backend.connectionGeneration(), current.connected(),
                 current.defaultSinkId(), sinks, streams);
         return Integer.toHexString(hash);
     }
