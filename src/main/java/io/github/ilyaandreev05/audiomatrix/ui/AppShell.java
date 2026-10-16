@@ -2,6 +2,7 @@ package io.github.ilyaandreev05.audiomatrix.ui;
 
 import io.github.ilyaandreev05.audiomatrix.ThemeManager;
 import io.github.ilyaandreev05.audiomatrix.audio.ApplicationRuleMatcher;
+import io.github.ilyaandreev05.audiomatrix.audio.ApplicationStreamRuleApplier;
 import io.github.ilyaandreev05.audiomatrix.audio.AudioNode;
 import io.github.ilyaandreev05.audiomatrix.audio.CalibrationFilterAdvisor;
 import io.github.ilyaandreev05.audiomatrix.audio.CalibrationImpulseAnalyzer;
@@ -131,7 +132,7 @@ public final class AppShell extends BorderPane {
     private final Timeline meterRefresh = new Timeline(new KeyFrame(Duration.millis(250), event -> refreshMeterLabel()));
     private final TextField search = new TextField();
     private final Map<Page, ToggleButton> navButtons = new LinkedHashMap<>();
-    private final ConcurrentMap<Integer, String> appliedApplicationRules = new ConcurrentHashMap<>();
+    private final ApplicationStreamRuleApplier streamRuleApplier;
     private final ConcurrentMap<Integer, String> appliedDeviceRules = new ConcurrentHashMap<>();
     private volatile PipeWireBackend.Snapshot snapshot = PipeWireBackend.Snapshot.offline("Waiting for PipeWire");
     private Page currentPage = Page.HOME;
@@ -158,6 +159,7 @@ public final class AppShell extends BorderPane {
 
     public AppShell(ConfigStore store, PipeWireBackend backend, ThemeManager themes) {
         this.store = store; this.backend = backend; this.themes = themes;
+        this.streamRuleApplier = new ApplicationStreamRuleApplier(backend);
         this.gnomeBridge = new GnomeControlBridge(backend, this::handleGnomeCommand);
         getStyleClass().add("app-shell");
         buildChrome();
@@ -2545,27 +2547,9 @@ public final class AppShell extends BorderPane {
         }
     }
     private void applyConfiguredStreamRules(PipeWireBackend.Snapshot current, Map<String, Object> config) {
-        if (!current.connected()) return;
-        Set<Integer> liveIds = current.streams().stream().map(AudioNode::id).collect(java.util.stream.Collectors.toSet());
-        appliedApplicationRules.keySet().removeIf(id -> !liveIds.contains(id));
-        List<Map<String, Object>> rules = maps(config.get("applications"));
-        for (AudioNode stream : current.streams()) {
-            Map<String, Object> rule = ApplicationRuleMatcher.find(rules, stream);
-            if (rule == null) { appliedApplicationRules.remove(stream.id()); continue; }
-            String ruleId = string(rule.get("id"), "");
-            double volume = Math.max(0, Math.min(1, number(rule.get("volume"), 1.0)));
-            boolean muted = Boolean.TRUE.equals(rule.get("mute"));
-            String signature = ruleId + "|" + volume + "|" + muted;
-            if (signature.equals(appliedApplicationRules.get(stream.id()))) continue;
-            appliedApplicationRules.put(stream.id(), signature);
-            List<CompletableFuture<Void>> changes = new ArrayList<>();
-            if (!Double.isFinite(stream.volume()) || Math.abs(stream.volume() - volume) > 0.01) changes.add(backend.setVolume(stream.id(), volume));
-            if (stream.muted() != muted) changes.add(backend.setMute(stream.id(), muted));
-            CompletableFuture.allOf(changes.toArray(CompletableFuture<?>[]::new)).whenComplete((ignored, error) -> {
-                if (error != null && appliedApplicationRules.remove(stream.id(), signature))
-                    Platform.runLater(() -> setNotice(t("Не удалось применить правило потока ", "Could not apply stream rule for ") + stream.applicationName() + ": " + rootMessage(error), true));
-            });
-        }
+        streamRuleApplier.apply(current, maps(config.get("applications")), (stream, error) ->
+                Platform.runLater(() -> setNotice(t("Не удалось применить правило потока ", "Could not apply stream rule for ")
+                        + stream.applicationName() + ": " + rootMessage(error), true)));
     }
     private Map<String, Object> ensureDevice(Map<String, Object> config, AudioNode node) {
         Map<String,Object> existing=matchingDevice(config,node);if(existing!=null)return existing;
