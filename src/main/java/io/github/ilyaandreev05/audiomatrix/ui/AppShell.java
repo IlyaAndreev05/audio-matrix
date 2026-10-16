@@ -234,7 +234,7 @@ public final class AppShell extends BorderPane {
         HBox topbar = new HBox(14);
         title.getStyleClass().add("page-title");
         search.setPromptText(t("Поиск в разделе…", "Search this section…"));
-        search.setAccessibleText(t("Поиск Audio Matrix", "Search Audio Matrix"));
+        search.setAccessibleText(t("Поиск в текущем разделе", "Search the current section"));
         search.setPrefWidth(250);
         Region push = new Region(); HBox.setHgrow(push, Priority.ALWAYS);
         notice.setVisible(false); notice.setManaged(false);
@@ -267,7 +267,7 @@ public final class AppShell extends BorderPane {
             case SETTINGS -> settingsPage();
         };
         ScrollPane scroll = new ScrollPane(content);
-        scroll.setFitToWidth(true); scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        scroll.setFitToWidth(true); scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
         scroll.getStyleClass().add("page-scroll");
         body.setCenter(scroll);
         if (notice.isVisible()) body.setBottom(notice);
@@ -320,7 +320,7 @@ public final class AppShell extends BorderPane {
             });
             level.setOnMouseReleased(event -> { if (selectedSink != null) saveDeviceVolume(selectedSink, level.getValue()); });
             level.setOnKeyReleased(event -> { if (selectedSink != null) saveDeviceVolume(selectedSink, level.getValue()); });
-            Button mute = actionButton(selectedSink != null && selectedSink.muted() ? t("Включить звук", "Unmute") : t("Без звука", "Mute"), () -> {
+            Button mute = actionButton(selectedSink != null && selectedSink.muted() ? t("Включить звук", "Unmute") : t("Выключить звук", "Mute"), () -> {
                 AudioNode target = selectedSink; if (target == null) return;
                 backend.setMute(target.id(), !target.muted()).whenComplete((v, error) -> Platform.runLater(() -> {
                     if (error != null) setNotice(rootMessage(error), true); else { saveDeviceMute(target, !target.muted()); refreshBackend(); }
@@ -355,7 +355,7 @@ public final class AppShell extends BorderPane {
         if (active.isEmpty()) activeCard.getChildren().add(label(t("Активных аудиопотоков сейчас нет.", "There are no active audio streams right now."), "muted"));
         for (AudioNode stream : active) activeCard.getChildren().add(streamRow(stream, false));
         page.getChildren().add(activeCard);
-        VBox endedCard = card(t("Недавно завершились", "Recently ended"));
+        VBox endedCard = card(t("Недавно завершённые", "Recently ended"));
         List<AudioNode> ended = filtered(snapshot.recentlyEnded(), search.getText());
         if (ended.isEmpty()) endedCard.getChildren().add(label(t("За последние 30 секунд завершившихся потоков нет.", "No streams ended in the last 30 seconds."), "muted"));
         for (AudioNode stream : ended) endedCard.getChildren().add(streamRow(stream, true));
@@ -388,11 +388,11 @@ public final class AppShell extends BorderPane {
             });
             slider.setOnMouseReleased(e -> saveAppVolume(stream, slider.getValue()));
             slider.setOnKeyReleased(e -> saveAppVolume(stream, slider.getValue()));
-            Button mute = actionButton(stream.muted() ? t("Включить звук", "Unmute") : t("Без звука", "Mute"), () -> backend.setMute(stream.id(), !stream.muted()).whenComplete((v, err) -> Platform.runLater(() -> {
+            Button mute = actionButton(stream.muted() ? t("Включить звук", "Unmute") : t("Выключить звук", "Mute"), () -> backend.setMute(stream.id(), !stream.muted()).whenComplete((v, err) -> Platform.runLater(() -> {
                 if (err != null) setNotice(rootMessage(err), true); else { saveAppMute(stream, !stream.muted()); refreshBackend(); }
             })));
             ComboBox<AudioNode> destination = new ComboBox<>(); destination.getItems().setAll(snapshot.sinks());
-            destination.setCellFactory(list -> nodeCell()); destination.setButtonCell(nodeCell()); destination.setPromptText(t("Перенос…", "Move to…")); destination.setPrefWidth(190);
+            destination.setCellFactory(list -> nodeCell()); destination.setButtonCell(nodeCell()); destination.setPromptText(t("Перенос…", "Move to…")); destination.setPrefWidth(190); destination.setAccessibleText(t("Выход для переноса потока", "Destination for stream transfer"));
             Button move = actionButton(t("Перенести", "Move"), () -> {
                 AudioNode sink = destination.getValue(); if (sink == null) return;
                 backend.moveStream(stream, sink).whenComplete((v, err) -> Platform.runLater(() -> {
@@ -488,13 +488,13 @@ public final class AppShell extends BorderPane {
         Region spacer = new Region(); HBox.setHgrow(spacer, Priority.ALWAYS);
         row.getChildren().addAll(details, spacer, facts);
         if (output) {
-            Button choose = actionButton(t("По умолчанию", "Set default"), () -> backend.setDefaultOutput(node.id()).whenComplete((v, err) -> Platform.runLater(() -> {
+            Button choose = actionButton(t("Сделать по умолчанию", "Set default"), () -> backend.setDefaultOutput(node.id()).whenComplete((v, err) -> Platform.runLater(() -> {
                 if (err != null) setNotice(rootMessage(err), true); else { saveDefaultOutput(node); refreshBackend(); }
             })));
             row.getChildren().add(choose);
             row.getChildren().add(actionButton(t("EQ выхода", "Output EQ"), () -> editOutputEq(device, node)));
         } else row.getChildren().add(label(t("Уровень входа не измеряется", "Input level not measured"), "muted"));
-        row.getChildren().add(actionButton(t("Имя / selector","Name / selector"),()->editDeviceSelector(device,node)));
+        row.getChildren().add(actionButton(t("Имя и selector","Name and selector"),()->editDeviceSelector(device,node)));
         return row;
     }
 
@@ -539,6 +539,10 @@ public final class AppShell extends BorderPane {
             appCards.add(node); appBusIds.add(bus == null ? "" : busId);
         }
         double busY = 28;
+        if (buses.isEmpty()) {
+            Label noBuses = label(t("Шин пока нет — добавьте шину ниже.", "No buses yet — add one below."), "muted");
+            noBuses.setLayoutX(350); noBuses.setLayoutY(28); canvas.getChildren().add(noBuses);
+        }
         for (Map<String, Object> bus : buses) {
             String id = string(bus.get("id"), "");
             String detail = string(bus.get("channels"), "stereo") + " · " + volumeLabel(number(bus.get("volume"), 1))
@@ -585,15 +589,18 @@ public final class AppShell extends BorderPane {
         Button apply = actionButton(t("Применить к PipeWire", "Apply to PipeWire"), this::applyRoutes);
         Button clear = actionButton(t("Сбросить маршруты", "Clear routes"), this::clearRoutes);
         clear.setDisable(!routeManager.active());
-        actions.getChildren().addAll(apply, clear,
-                actionButton(t("Добавить шину", "Add bus"), () -> editBus(null)),
-                actionButton(t("Добавить маршрут", "Add route"), () -> editRoute(null)));
-        card.getChildren().addAll(actions, label(t("Шины", "Buses"), "section-title"));
-        for (Map<String, Object> bus : buses) card.getChildren().add(busRow(bus, activeBusIds.contains(string(bus.get("id"), ""))));
-        card.getChildren().add(label(t("Маршруты", "Routes"), "section-title"));
-        if (routes.isEmpty()) card.getChildren().add(label(t("Маршрутов пока нет.", "No routes yet."), "muted"));
-        for (Map<String, Object> route : routes) card.getChildren().add(routeRow(route, activeRouteIds.contains(string(route.get("id"), ""))));
+        actions.getChildren().addAll(apply, clear);
+        card.getChildren().add(actions);
         page.getChildren().add(card);
+        VBox busesCard = card(t("Шины", "Buses"));
+        for (Map<String, Object> bus : buses) busesCard.getChildren().add(busRow(bus, activeBusIds.contains(string(bus.get("id"), ""))));
+        busesCard.getChildren().add(new HBox(10, actionButton(t("Добавить шину", "Add bus"), () -> editBus(null))));
+        page.getChildren().add(busesCard);
+        VBox routesCard = card(t("Маршруты", "Routes"));
+        if (routes.isEmpty()) routesCard.getChildren().add(label(t("Маршрутов пока нет.", "No routes yet."), "muted"));
+        for (Map<String, Object> route : routes) routesCard.getChildren().add(routeRow(route, activeRouteIds.contains(string(route.get("id"), ""))));
+        routesCard.getChildren().add(new HBox(10, actionButton(t("Добавить маршрут", "Add route"), () -> editRoute(null))));
+        page.getChildren().add(routesCard);
         page.getChildren().add(routeHistoryCard());
         return page;
     }
@@ -774,7 +781,7 @@ public final class AppShell extends BorderPane {
                 label(t("Обработка применяется один раз после сведения ветвей в каждый физический выход. Это цифровой предел сигнала; допустимую мощность усилителя и вибродинамика нужно настраивать отдельно.", "Processing runs once after route branches are mixed into each physical output. This is a digital signal ceiling; configure amplifier and transducer power limits separately."), "muted"));
         page.getChildren().add(limiterCard);
         Map<String, Object> eq = map(dsp.getOrDefault("global_eq", DefaultConfigMap.map("enabled", false, "filters", List.of())));
-        VBox filters = card(t("Общий эквалайзер · «Сохранённая конфигурация»", "Global EQ · Stored configuration"));
+        VBox filters = card(t("Общий эквалайзер · конфигурация", "Global EQ · stored configuration"));
         List<Map<String, Object>> filterList = maps(eq.get("filters"));
         if (filterList.isEmpty()) filters.getChildren().add(label(t("Фильтров пока нет.", "No filters yet."), "muted"));
         for (int i = 0; i < filterList.size(); i++) {
@@ -835,11 +842,11 @@ public final class AppShell extends BorderPane {
     }
 
     private Node limiterControl(String title, String key, double minimum, double maximum, double initial, String unit) {
-        Slider slider = new Slider(minimum, maximum, Math.max(minimum, Math.min(maximum, initial)));
+        Slider slider = new Slider(minimum, maximum, Math.max(minimum, Math.min(maximum, initial))); slider.setAccessibleText(title);
         slider.setShowTickMarks(true);
         slider.setMajorTickUnit("release_ms".equals(key) ? 50 : ("lookahead_ms".equals(key) ? 1 : 3));
         slider.setBlockIncrement("release_ms".equals(key) ? 5 : 0.1);
-        Label value = label("", "muted");
+        Label value = label("", "muted"); value.setMinWidth(64);
         Runnable refreshValue = () -> value.setText(("release_ms".equals(key)
                 ? Long.toString(Math.round(slider.getValue())) : String.format(Locale.ROOT, "%.1f", slider.getValue())) + " " + unit);
         Runnable save = () -> updateLimiter(key, "release_ms".equals(key)
@@ -861,7 +868,7 @@ public final class AppShell extends BorderPane {
         CheckBox hardwareChecked = new CheckBox(t("Я проверил выбранный выход, усилитель, питание и нагрузку.",
                 "I checked the selected output, amplifier, power supply, and load."));
         hardwareChecked.setAccessibleText(t("Подтверждение проверки аппаратной цепи", "Hardware path check confirmation"));
-        ComboBox<AudioNode> outputs = new ComboBox<>(); outputs.getItems().setAll(snapshot.sinks()); outputs.setCellFactory(list -> nodeCell()); outputs.setButtonCell(nodeCell()); outputs.setPromptText(t("Выбрать выход", "Select output"));
+        ComboBox<AudioNode> outputs = new ComboBox<>(); outputs.getItems().setAll(snapshot.sinks()); outputs.setCellFactory(list -> nodeCell()); outputs.setButtonCell(nodeCell()); outputs.setPromptText(t("Выбрать выход", "Select output")); outputs.setAccessibleText(t("Выход для проверки", "Output under test"));
         if (selectedSink != null) outputs.getSelectionModel().select(selectedSink);
         outputs.setOnAction(e -> { selectedSink = outputs.getValue(); hardwareChecked.setSelected(false); });
         TextField frequency = field("80", t("Частота (Hz)", "Frequency (Hz)"));
@@ -1277,8 +1284,8 @@ public final class AppShell extends BorderPane {
             VBox comparison = card(t("Сравнение до/после", "Before/after comparison"));
             comparison.getChildren().add(label(t("Сравнивайте один выход, источник, метод, канал и положение датчика. Каждая кривая нормирована отдельно к своей медиане: график показывает форму, а не абсолютную вибрацию или изменение общей громкости.",
                     "Compare the same output, input source, method, channel, and sensor position. Each curve is normalized to its own median: this shows response shape, not absolute vibration or overall loudness."), "warning"));
-            ComboBox<Map<String, Object>> before = calibrationMeasurementSelector(savedMeasurements);
-            ComboBox<Map<String, Object>> after = calibrationMeasurementSelector(savedMeasurements);
+            ComboBox<Map<String, Object>> before = calibrationMeasurementSelector(savedMeasurements); before.setAccessibleText(t("Измерение до", "Before measurement"));
+            ComboBox<Map<String, Object>> after = calibrationMeasurementSelector(savedMeasurements); after.setAccessibleText(t("Измерение после", "After measurement"));
             if (calibrationComparisonPreview != null) {
                 selectCalibrationMeasurement(before, calibrationComparisonPreview.beforeId(), 0);
                 selectCalibrationMeasurement(after, calibrationComparisonPreview.afterId(), 1);
@@ -2740,11 +2747,11 @@ public final class AppShell extends BorderPane {
             }; }
             @Override public String fromString(String value) { return value; }
         });
-        ComboBox<String> channels = new ComboBox<>(); channels.getItems().setAll("mono", "stereo", "5.1", "7.1"); channels.setValue(string(source.get("channels"), "stereo"));
+        ComboBox<String> channels = new ComboBox<>(); channels.getItems().setAll("mono", "stereo", "5.1", "7.1"); channels.setValue(string(source.get("channels"), "stereo")); channels.setAccessibleText(t("Каналы шины", "Bus channels"));
         TextField volume = field(String.valueOf(number(source.get("volume"), 1)), t("Громкость 0–1", "Volume 0–1"));
         ComboBox<String> filtersRef = new ComboBox<>(); filtersRef.getItems().add("none");
         map(map(store.snapshot().get("dsp")).get("route_chains")).keySet().stream().sorted().map(id -> "dsp.route_chains." + id).forEach(filtersRef.getItems()::add);
-        filtersRef.setValue(string(source.get("filters_ref"), "none"));
+        filtersRef.setValue(string(source.get("filters_ref"), "none")); filtersRef.setAccessibleText(t("EQ шины", "Bus EQ"));
         CheckBox muted = new CheckBox(t("Mute шины", "Mute bus")); muted.setSelected(Boolean.TRUE.equals(source.get("mute")));
         VBox content = new VBox(10, label(t("Название", "Name"), "muted"), name,
                 label(t("Назначение для Haptic/Subwoofer", "Purpose for Haptic/Subwoofer modes"), "muted"), role,
@@ -2835,8 +2842,8 @@ public final class AppShell extends BorderPane {
         dialog.setTitle(existing == null ? t("Добавить маршрут", "Add route") : t("Изменить маршрут", "Edit route"));
         dialog.getDialogPane().getButtonTypes().addAll(javafx.scene.control.ButtonType.OK, javafx.scene.control.ButtonType.CANCEL);
         TextField name = field(string(existing == null ? null : existing.get("name"), existing == null ? t("Новый маршрут", "New route") : string(existing.get("id"), "")), t("Название маршрута", "Route name"));
-        ComboBox<Endpoint> from = endpointCombo(fromEndpoints); from.setPromptText(t("Из шины", "From bus"));
-        ComboBox<Endpoint> to = endpointCombo(endpoints); to.setPromptText(t("В шину или выход", "To bus or output"));
+        ComboBox<Endpoint> from = endpointCombo(fromEndpoints); from.setPromptText(t("Из шины", "From bus")); from.setAccessibleText(t("Шина-источник", "Source bus"));
+        ComboBox<Endpoint> to = endpointCombo(endpoints); to.setPromptText(t("В шину или выход", "To bus or output")); to.setAccessibleText(t("Назначение маршрута", "Route destination"));
         if (existing != null) {
             fromEndpoints.stream().filter(item -> item.id().equals(existing.get("from"))).findFirst().ifPresent(from::setValue);
             endpoints.stream().filter(item -> item.id().equals(existing.get("to"))).findFirst().ifPresent(to::setValue);
@@ -2850,7 +2857,7 @@ public final class AppShell extends BorderPane {
         TextField delay = field(String.valueOf(number(existing == null ? null : existing.get("delay_ms"), 0)), t("Задержка ms 0–2000", "Delay ms 0–2000"));
         ComboBox<String> channelMap = new ComboBox<>(); channelMap.getItems().setAll("stereo", "mono", "mono_sum", "left", "right", "swap_lr",
                 "center", "lfe", "rear_left", "rear_right", "rear_sum", "side_left", "side_right", "side_sum", "surround_sum", "all_sum");
-        channelMap.setValue(string(existing == null ? null : existing.get("channel_map"), "stereo"));
+        channelMap.setValue(string(existing == null ? null : existing.get("channel_map"), "stereo")); channelMap.setAccessibleText(t("Channel map", "Channel map"));
         ComboBox<String> polarity = new ComboBox<>(); polarity.getItems().setAll("normal", "invert", "invert_left", "invert_right");
         polarity.setValue(string(existing == null ? null : existing.get("polarity"), "normal"));
         polarity.setAccessibleText(t("Полярность маршрута", "Route polarity"));
@@ -2921,7 +2928,7 @@ public final class AppShell extends BorderPane {
         VBox delayField = new VBox(3, label(t("Задержка, ms · 0–2000", "Delay, ms · 0–2000"), "muted"), delay);
         VBox priorityField = new VBox(3, label(t("Приоритет · 0–1000", "Priority · 0–1000"), "muted"), priority);
         List<Endpoint> fallbackOptions = endpoints.stream().filter(endpoint -> !endpoint.bus()).toList();
-        ComboBox<Endpoint> fallback = endpointCombo(fallbackOptions); fallback.setPromptText(t("Без резервного выхода", "No fallback output"));
+        ComboBox<Endpoint> fallback = endpointCombo(fallbackOptions); fallback.setPromptText(t("Без резервного выхода", "No fallback output")); fallback.setAccessibleText(t("Резервный выход", "Fallback output"));
         if (existing != null && existing.get("fallback") != null) fallbackOptions.stream().filter(item -> item.id().equals(existing.get("fallback"))).findFirst().ifPresent(fallback::setValue);
         VBox content = new VBox(8, label(t("Имя", "Name"), "muted"), name, label(t("Источник", "Source"), "muted"), from,
                 label(t("Назначение", "Destination"), "muted"), to, new HBox(8, gainField, volumeField), new HBox(8, delayField, priorityField),
@@ -3413,7 +3420,7 @@ public final class AppShell extends BorderPane {
         node.getStyleClass().addAll("node-card", "route-node"); return node;
     }
     private Label label(String text, String style) { Label label = new Label(text); label.setWrapText(true); if (style != null && !style.isBlank()) label.getStyleClass().add(style); return label; }
-    private Button actionButton(String text, Runnable action) { Button button = new Button(text); button.setMinHeight(36); button.setOnAction(event -> action.run()); button.setAccessibleText(text); return button; }
+    private Button actionButton(String text, Runnable action) { Button button = new Button(text); button.setMinHeight(36); button.setWrapText(true); button.setOnAction(event -> action.run()); button.setAccessibleText(text); return button; }
     private TextField field(String value, String accessible) { TextField f = new TextField(value); f.setAccessibleText(accessible); f.setPrefColumnCount(8); return f; }
     private javafx.scene.control.ListCell<AudioNode> nodeCell() { return new javafx.scene.control.ListCell<>() { @Override protected void updateItem(AudioNode item, boolean empty) { super.updateItem(item, empty); setText(empty || item == null ? null : nodeDisplayName(item)); } }; }
     private void addWire(Pane pane, List<Line> wires, Node from, Node to) {

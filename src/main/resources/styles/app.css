@@ -40,16 +40,16 @@
 .page-title { -fx-font-size: 21px; -fx-font-weight: 700; }
 .page-subtitle { -fx-text-fill: -fx-am-muted; }
 .page-content { -fx-padding: 24 26 30 26; -fx-spacing: 18; }
-.card { -fx-background-color: -fx-am-panel; -fx-background-radius: 12; -fx-border-color: -fx-am-border; -fx-border-radius: 12; -fx-padding: 18; -fx-spacing: 10; }
+.card { -fx-background-color: -fx-am-panel; -fx-background-radius: 12; -fx-border-color: -fx-am-border; -fx-border-radius: 12; -fx-padding: 18; -fx-spacing: 12; }
 .card-title { -fx-font-size: 15px; -fx-font-weight: 700; }
-.stat-value { -fx-font-size: 22px; -fx-font-weight: 700; }
+.stat-value { -fx-font-size: 20px; -fx-font-weight: 700; }
 .muted { -fx-text-fill: -fx-am-muted; }
 .warning { -fx-text-fill: -fx-am-warning; -fx-font-weight: 600; }
 .danger { -fx-text-fill: -fx-am-danger; -fx-font-weight: 600; }
 .accent { -fx-text-fill: -fx-am-accent; -fx-font-weight: 700; }
 .status-pill { -fx-background-color: -fx-am-panel-raised; -fx-background-radius: 99; -fx-padding: 5 10; -fx-font-weight: 600; }
 .action-row { -fx-spacing: 10; -fx-alignment: CENTER_LEFT; }
-.node-card { -fx-background-color: -fx-am-panel-raised; -fx-background-radius: 10; -fx-border-color: -fx-am-border; -fx-border-radius: 10; -fx-padding: 14; -fx-spacing: 8; }
-.route-node { -fx-min-width: 190; -fx-min-height: 96; }
+.node-card { -fx-background-color: transparent; -fx-border-color: transparent transparent -fx-am-border transparent; -fx-border-width: 0 0 1 0; -fx-padding: 10 4; }
+.route-node { -fx-min-width: 190; -fx-min-height: 96; -fx-background-color: -fx-am-panel-raised; -fx-background-radius: 10; -fx-border-color: -fx-am-border; -fx-border-radius: 10; -fx-padding: 14; }
 .canvas { -fx-background-color: -fx-am-background; -fx-border-color: -fx-am-border; -fx-border-radius: 10; -fx-background-radius: 10; }
-.error-banner { -fx-background-color: derive(-fx-am-danger, 78%); -fx-background-radius: 8; -fx-padding: 10 14; -fx-text-fill: -fx-am-text; }
+.error-banner { -fx-background-color: derive(-fx-am-danger, 78%); -fx-background-radius: 8; -fx-padding: 10 14; -fx-text-fill: #16212d; }
