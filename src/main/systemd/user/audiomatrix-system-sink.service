@@ -1,0 +1,15 @@
+[Unit]
+Description=Audio Matrix virtual system audio input
+After=graphical-session.target pipewire.service wireplumber.service
+Before=audiomatrix.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/bin/sh /opt/audiomatrix/bin/audiomatrix-system-sink.sh
+Restart=on-failure
+RestartSec=2
+KillMode=control-group
+
+[Install]
+WantedBy=graphical-session.target

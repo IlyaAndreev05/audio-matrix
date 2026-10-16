@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Audio Matrix Tab Capture",
+  "version": "1.0.0",
+  "description": "Route a user-selected Chrome tab into Audio Matrix.",
+  "minimum_chrome_version": "116",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAw1pwm9x8WgqHdgl1k5UbmGh0Frc2VJJWelJTXPntO74ciwd422aRlRdfciQcqkSA9IV7BYqnXMK4Nvr99miR0A1xvkyLYIg9Gej44oLq+v6u4+OYo3SVZK+MspyU05bZwxFdIKHqAiE7rdl4cD4nld9wY641cmWSnp3a2ZZPlV0nv9tWecnpLBLs/JFilm95wv3jpTYZLGL0c7JncWklXJYkmfcpQM0MhFK6jDH1Ugqdk5vUCghhvlzyi9e57CMOvlCXU9r1i1X2kPN7ji80X75GSlshcktAM+/tZSfSjuQV8fitldSrzRla3Bh3vdylCmXOzvADAFKZcFqVNVecGQIDAQAB",
+  "permissions": ["activeTab", "tabs", "tabCapture", "offscreen", "storage", "nativeMessaging"],
+  "background": { "service_worker": "service-worker.js" },
+  "action": { "default_popup": "popup.html", "default_title": "Audio Matrix Tab Capture" }
+}

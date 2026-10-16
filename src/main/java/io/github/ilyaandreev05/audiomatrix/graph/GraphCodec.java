@@ -1,5 +1,7 @@
 package io.github.ilyaandreev05.audiomatrix.graph;
 
+import io.github.ilyaandreev05.audiomatrix.config.ChannelMatrix;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -33,7 +35,8 @@ public final class GraphCodec {
             Map<String, Object> parameters = object(item.get("parameters"));
             nodes.add(switch (type) {
                 case "source" -> new SourceNode(nodeId, nodeName, text(parameters.get("selector")), channels);
-                case "output" -> new OutputNode(nodeId, nodeName, text(parameters.get("device_id")), channels);
+                case "output" -> new OutputNode(nodeId, nodeName, text(parameters.get("device_id")), channels,
+                        parameters.containsKey("channel_matrix") ? ChannelMatrix.parse(parameters.get("channel_matrix")) : null);
                 case "gain" -> new GainNode(nodeId, nodeName, channels, number(parameters.get("gain"), 1), Boolean.TRUE.equals(parameters.get("muted")));
                 case "gate" -> new GateNode(nodeId, nodeName, channels, Boolean.TRUE.equals(parameters.getOrDefault("open", Boolean.TRUE)));
                 case "switch" -> new SwitchNode(nodeId, nodeName, channels, ports(parameters.get("output_ports"),List.of("out")), strings(parameters.get("active_links")));
