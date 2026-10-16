@@ -595,6 +595,10 @@ public final class PipeWireRouteManager implements AutoCloseable {
         if (!profileOff && !routes.isEmpty()) {
             for (AudioNode stream : snapshot.streams()) {
                 Map<String, Object> rule = ApplicationRuleMatcher.find(maps(config.get("applications")), stream);
+                if (rule == null) {
+                    String defaultBus = text(config.get("graph_default_bus"));
+                    if (!defaultBus.isBlank() && busConfig.containsKey(defaultBus)) rule = Map.of("bus", defaultBus);
+                }
                 if (rule == null) continue;
                 String busId = text(rule.get("bus"));
                 if (!buses.containsKey(busId)) continue;

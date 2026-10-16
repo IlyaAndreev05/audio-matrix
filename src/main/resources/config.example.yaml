@@ -1,6 +1,11 @@
 # Иллюстративный профиль. Замените selector и выходы на свои устройства.
 # Значения EQ и калибровки здесь не являются измеренными или аппаратно проверенными.
-schema_version: 1
+schema_version: 2
+route_groups: []
+route_library: []
+saved_copies: []
+quick_controls: []
+active_route: ""
 app: audio-matrix
 active_profile: desk
 ui:

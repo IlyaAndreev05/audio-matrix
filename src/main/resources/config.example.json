@@ -1,0 +1,105 @@
+{
+  "schema_version" : 2,
+  "route_groups" : [ ],
+  "route_library" : [ ],
+  "saved_copies" : [ ],
+  "quick_controls" : [ ],
+  "active_route" : "",
+  "app" : "audio-matrix",
+  "active_profile" : "desk",
+  "ui" : {
+    "language" : "ru",
+    "theme" : "system",
+    "start_minimized" : false
+  },
+  "mixer" : {
+    "global_volume" : 0.8,
+    "global_mute" : false,
+    "global_eq" : {
+      "enabled" : false,
+      "filters" : [ ]
+    }
+  },
+  "quick_settings" : {
+    "enabled" : true,
+    "show_output" : true,
+    "show_mode" : true,
+    "show_mute" : true,
+    "open_full_settings" : true
+  },
+  "engine" : {
+    "backend" : "pipewire",
+    "apply_on_start" : false,
+    "restore_owned_nodes_on_exit" : true,
+    "device_loss_policy" : "mute",
+    "transition_ms" : 120
+  },
+  "devices" : [ ],
+  "applications" : [ ],
+  "buses" : [ {
+    "id" : "main",
+    "name" : "Main",
+    "role" : "general",
+    "channels" : "stereo",
+    "volume" : 1.0,
+    "mute" : false
+  }, {
+    "id" : "music",
+    "name" : "Music",
+    "role" : "music",
+    "channels" : "stereo",
+    "volume" : 1.0,
+    "mute" : false
+  }, {
+    "id" : "effects",
+    "name" : "Effects",
+    "role" : "effects",
+    "channels" : "stereo",
+    "volume" : 0.8,
+    "mute" : false
+  }, {
+    "id" : "subwoofer",
+    "name" : "Subwoofer",
+    "role" : "subwoofer",
+    "channels" : "mono",
+    "volume" : 0.65,
+    "mute" : false
+  }, {
+    "id" : "aux",
+    "name" : "Aux",
+    "role" : "general",
+    "channels" : "stereo",
+    "volume" : 1.0,
+    "mute" : false
+  } ],
+  "routes" : [ ],
+  "dsp" : {
+    "order" : [ "stream", "bus", "route", "physical_output", "limiter" ],
+    "global_eq" : {
+      "enabled" : false,
+      "filters" : [ ]
+    },
+    "devices" : { },
+    "route_chains" : { },
+    "limiter" : {
+      "enabled" : true,
+      "ceiling_db" : -1.0,
+      "lookahead_ms" : 5.0,
+      "release_ms" : 50.0
+    }
+  },
+  "profiles" : [ {
+    "id" : "desk",
+    "name" : "Рабочий стол",
+    "mode" : "hybrid",
+    "default_output" : "system_default",
+    "active_buses" : [ "main", "music", "effects" ],
+    "active_routes" : [ ],
+    "device_overrides" : { }
+  } ],
+  "calibrations" : [ ],
+  "export" : {
+    "include_measurements" : true,
+    "include_audio_assets" : false
+  }
+}

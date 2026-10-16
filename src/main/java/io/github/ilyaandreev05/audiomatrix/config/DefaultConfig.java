@@ -10,7 +10,12 @@ public final class DefaultConfig {
 
     public static Map<String, Object> create() {
         Map<String, Object> root = map();
-        root.put("schema_version", 1);
+        root.put("schema_version", 2);
+        root.put("route_groups", new ArrayList<>());
+        root.put("route_library", new ArrayList<>());
+        root.put("saved_copies", new ArrayList<>());
+        root.put("quick_controls", new ArrayList<>());
+        root.put("active_route", "");
         root.put("app", "audio-matrix");
         root.put("active_profile", "desk");
         root.put("ui", map("language", "ru", "theme", "system", "start_minimized", false));

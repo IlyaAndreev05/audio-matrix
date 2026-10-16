@@ -32,7 +32,8 @@ import java.util.function.Consumer;
 public final class ConfigStore implements AutoCloseable {
     private static final TypeReference<LinkedHashMap<String, Object>> MAP_TYPE = new TypeReference<>() {};
     private final Path file;
-    private final ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
+    private final Path legacyFile;
+    private final ObjectMapper mapper;
     private final ExecutorService watcherExecutor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "audio-matrix-config-watch"); t.setDaemon(true); return t;
     });
@@ -47,8 +48,16 @@ public final class ConfigStore implements AutoCloseable {
     private volatile boolean closed;
 
     public ConfigStore(Path file) throws IOException, ConfigValidationException {
+        this(file, file.toAbsolutePath().normalize().equals(defaultPath()) ? legacyPath() : null);
+    }
+
+    ConfigStore(Path file, Path legacyFile) throws IOException, ConfigValidationException {
         this.file = file.toAbsolutePath().normalize();
+        this.legacyFile = legacyFile == null ? null : legacyFile.toAbsolutePath().normalize();
         Files.createDirectories(this.file.getParent());
+        this.mapper = this.file.getFileName().toString().endsWith(".json")
+                ? new ObjectMapper() : new ObjectMapper(new YAMLFactory());
+        migrateLegacyYaml();
         if (!Files.exists(this.file)) atomicWrite(mapper.writeValueAsBytes(DefaultConfig.create()));
         loadAndPublish(false);
         startWatcher();
@@ -57,7 +66,10 @@ public final class ConfigStore implements AutoCloseable {
     public static Path defaultPath() {
         String xdg = System.getenv("XDG_CONFIG_HOME");
         Path base = xdg == null || xdg.isBlank() ? Path.of(System.getProperty("user.home"), ".config") : Path.of(xdg);
-        return base.resolve("audio-matrix").resolve("config.yaml");
+        return base.resolve("audio-matrix").resolve("config.json");
+    }
+    public static Path legacyPath() {
+        return defaultPath().resolveSibling("config.yaml");
     }
     public Path path() { return file; }
     public synchronized Map<String, Object> snapshot() {
@@ -173,19 +185,59 @@ public final class ConfigStore implements AutoCloseable {
         Map<String, Object> parsed;
         try { parsed = mapper.readValue(bytes, MAP_TYPE); }
         catch (Exception e) {
-            diagnostic = "YAML could not be parsed: " + e.getMessage();
+            diagnostic = "Configuration could not be parsed: " + e.getMessage();
             throw new ConfigValidationException(List.of(diagnostic));
         }
+        boolean upgraded = parsed.get("schema_version") instanceof Number version && version.intValue() == 1;
+        if (upgraded) upgradeConfig(parsed);
         List<String> errors = ConfigValidator.validate(parsed);
         if (!errors.isEmpty()) {
             diagnostic = String.join("; ", errors);
             throw new ConfigValidationException(errors);
+        }
+        if (upgraded) {
+            bytes = mapper.writeValueAsBytes(parsed);
+            atomicWrite(bytes);
         }
         current = deepCopy(parsed);
         fingerprint = hash(bytes);
         revision++;
         diagnostic = "";
         if (notify) publish(new ConfigEvent(current, "External configuration reloaded"));
+    }
+
+    private void migrateLegacyYaml() throws IOException, ConfigValidationException {
+        Path legacy = legacyFile;
+        if (legacy == null || Files.exists(file) || !Files.exists(legacy)) return;
+        ObjectMapper yaml = new ObjectMapper(new YAMLFactory());
+        Map<String, Object> parsed;
+        try {
+            parsed = yaml.readValue(Files.readAllBytes(legacy), MAP_TYPE);
+        } catch (Exception error) {
+            throw new ConfigValidationException(List.of("Legacy YAML could not be read; it was left untouched: " + error.getMessage()));
+        }
+        int version = parsed.get("schema_version") instanceof Number number ? number.intValue() : -1;
+        if (version == 1) upgradeConfig(parsed);
+        List<String> errors = ConfigValidator.validate(parsed);
+        if (!errors.isEmpty()) throw new ConfigValidationException(errors);
+        Path backup = legacy.resolveSibling("config.yaml.before-json");
+        if (Files.exists(backup)) throw new IOException("Legacy backup already exists; refusing to overwrite " + backup);
+        Files.copy(legacy, backup);
+        try {
+            atomicWrite(mapper.writeValueAsBytes(parsed));
+        } catch (IOException | RuntimeException failure) {
+            Files.deleteIfExists(file);
+            throw failure;
+        }
+    }
+
+    static void upgradeConfig(Map<String,Object> config) {
+        config.put("schema_version", 2);
+        config.putIfAbsent("route_groups", new java.util.ArrayList<>());
+        config.putIfAbsent("route_library", new java.util.ArrayList<>());
+        config.putIfAbsent("saved_copies", new java.util.ArrayList<>());
+        config.putIfAbsent("quick_controls", new java.util.ArrayList<>());
+        config.putIfAbsent("active_route", "");
     }
 
     private void startWatcher() {
@@ -215,7 +267,7 @@ public final class ConfigStore implements AutoCloseable {
     }
 
     private void atomicWrite(byte[] data) throws IOException {
-        Path temp = Files.createTempFile(file.getParent(), ".config-", ".yaml.tmp");
+        Path temp = Files.createTempFile(file.getParent(), ".config-", ".json.tmp");
         try {
             try (FileChannel channel = FileChannel.open(temp, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
                 channel.write(java.nio.ByteBuffer.wrap(data)); channel.force(true);

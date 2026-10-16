@@ -7,7 +7,7 @@ import java.util.Map;
 final class ArchiveManifestMigrator {
     static final String FORMAT = "audio-matrix-archive";
     static final String APP = "audio-matrix";
-    static final int CURRENT_VERSION = 2;
+    static final int CURRENT_VERSION = 3;
 
     private ArchiveManifestMigrator() {}
 
@@ -28,6 +28,9 @@ final class ArchiveManifestMigrator {
             if (version == 1) {
                 migrateV1ToV2(migrated, configSchemaVersion);
                 version = 2;
+            } else if (version == 2) {
+                migrateV2ToV3(migrated, configSchemaVersion);
+                version = 3;
             } else {
                 throw new ConfigArchive.ArchiveException("No migration is available for archive version " + version);
             }
@@ -37,11 +40,17 @@ final class ArchiveManifestMigrator {
             throw new ConfigArchive.ArchiveException("Archive manifest belongs to another application");
         Integer declaredSchema = integer(migrated.get("config_schema_version"));
         if (declaredSchema == null || declaredSchema != configSchemaVersion)
-            throw new ConfigArchive.ArchiveException("Archive manifest config schema does not match config.yaml");
+            throw new ConfigArchive.ArchiveException("Archive manifest config schema does not match its config document");
         if (!"full".equals(migrated.get("kind")))
             throw new ConfigArchive.ArchiveException("Archive manifest has an unsupported kind");
         migrated.put("version", CURRENT_VERSION);
         return migrated;
+    }
+
+    private static void migrateV2ToV3(Map<String,Object> manifest,int configSchemaVersion)throws ConfigArchive.ArchiveException{
+        if(!APP.equals(manifest.get("app")))throw new ConfigArchive.ArchiveException("Archive manifest belongs to another application");
+        Integer declared=integer(manifest.get("config_schema_version"));if(declared==null||declared!=configSchemaVersion)throw new ConfigArchive.ArchiveException("Archive manifest config schema does not match its config document");
+        manifest.put("config_entry","config.yaml");manifest.put("version",3);
     }
 
     private static void migrateV1ToV2(Map<String, Object> manifest, int configSchemaVersion)

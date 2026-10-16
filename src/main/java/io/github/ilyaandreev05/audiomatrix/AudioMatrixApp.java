@@ -27,7 +27,7 @@ public class AudioMatrixApp extends Application {
             validateConfig(path); System.exit(0); return;
         }
         if (args.length > 0 && "--export-default-config".equals(args[0])) {
-            Path path = args.length > 1 ? Path.of(args[1]) : Path.of("config.example.yaml");
+            Path path = args.length > 1 ? Path.of(args[1]) : Path.of("config.example.json");
             exportDefaultConfig(path); System.exit(0); return;
         }
         if (args.length > 0 && "--diagnose-pipewire".equals(args[0])) { diagnosePipeWire(); System.exit(0); return; }
@@ -40,7 +40,7 @@ public class AudioMatrixApp extends Application {
 
     private static void validateConfig(Path path) {
         try {
-            var mapper = new com.fasterxml.jackson.databind.ObjectMapper(new com.fasterxml.jackson.dataformat.yaml.YAMLFactory());
+            var mapper = mapperFor(path);
             Map<String, Object> config = mapper.readValue(path.toFile(), new com.fasterxml.jackson.core.type.TypeReference<>() {});
             List<String> errors = ConfigValidator.validate(config);
             if (errors.isEmpty()) { System.out.println("Configuration is valid: " + path.toAbsolutePath()); return; }
@@ -50,10 +50,16 @@ public class AudioMatrixApp extends Application {
 
     private static void exportDefaultConfig(Path path) {
         try {
-            var mapper = new com.fasterxml.jackson.databind.ObjectMapper(new com.fasterxml.jackson.dataformat.yaml.YAMLFactory());
-            mapper.writeValue(path.toFile(), io.github.ilyaandreev05.audiomatrix.config.DefaultConfig.create());
+            var mapper = mapperFor(path);
+            mapper.writerWithDefaultPrettyPrinter().writeValue(path.toFile(), io.github.ilyaandreev05.audiomatrix.config.DefaultConfig.create());
             System.out.println("Wrote default configuration: " + path.toAbsolutePath());
         } catch (Exception e) { System.err.println("Could not write default configuration: " + e.getMessage()); System.exit(1); }
+    }
+
+    private static com.fasterxml.jackson.databind.ObjectMapper mapperFor(Path path) {
+        return path.getFileName().toString().endsWith(".yaml") || path.getFileName().toString().endsWith(".yml")
+                ? new com.fasterxml.jackson.databind.ObjectMapper(new com.fasterxml.jackson.dataformat.yaml.YAMLFactory())
+                : new com.fasterxml.jackson.databind.ObjectMapper();
     }
 
     private static void diagnosePipeWire() {

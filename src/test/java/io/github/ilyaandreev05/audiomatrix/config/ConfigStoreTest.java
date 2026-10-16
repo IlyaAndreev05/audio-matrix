@@ -2,6 +2,8 @@ package io.github.ilyaandreev05.audiomatrix.config;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
@@ -11,6 +13,27 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ConfigStoreTest {
     @TempDir Path temp;
+
+    @Test void jsonStoreMigratesYamlWithAnExactBackup() throws Exception {
+        Path legacy=temp.resolve("config.yaml"), json=temp.resolve("config.json");
+        Map<String,Object> old=DefaultConfig.create();old.put("schema_version",1);
+        byte[] original=new ObjectMapper(new YAMLFactory()).writeValueAsBytes(old);Files.write(legacy,original);
+        try(ConfigStore store=new ConfigStore(json,legacy)){
+            assertEquals(2,((Number)store.snapshot().get("schema_version")).intValue());
+            assertTrue(Files.readString(json).startsWith("{"));
+            assertTrue(java.util.Arrays.equals(original,Files.readAllBytes(temp.resolve("config.yaml.before-json"))));
+            store.updateAsync(config->((Map<String,Object>)config.get("mixer")).put("global_volume",0.37)).join();
+            assertTrue(Files.readString(json).startsWith("{"));
+        }
+    }
+
+    @Test void migrationRefusesToOverwriteAnExistingBackup() throws Exception {
+        Path legacy=temp.resolve("config.yaml"),json=temp.resolve("config.json"),backup=temp.resolve("config.yaml.before-json");
+        Map<String,Object> old=DefaultConfig.create();old.put("schema_version",1);Files.write(legacy,new ObjectMapper(new YAMLFactory()).writeValueAsBytes(old));
+        Files.writeString(backup,"keep");
+        assertThrows(java.io.IOException.class,()->new ConfigStore(json,legacy));
+        assertFalse(Files.exists(json));assertEquals("keep",Files.readString(backup));assertTrue(Files.exists(legacy));
+    }
     @Test void invalidExternalYamlDoesNotReplaceLastGoodState() throws Exception {
         Path file = temp.resolve("config.yaml");
         try (ConfigStore store = new ConfigStore(file)) {

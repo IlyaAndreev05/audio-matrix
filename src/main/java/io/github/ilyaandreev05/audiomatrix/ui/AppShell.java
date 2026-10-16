@@ -17,6 +17,25 @@ import io.github.ilyaandreev05.audiomatrix.config.ChannelMatrix;
 import io.github.ilyaandreev05.audiomatrix.config.ConfigStore;
 import io.github.ilyaandreev05.audiomatrix.config.ConfigValidator;
 import io.github.ilyaandreev05.audiomatrix.gnome.GnomeControlBridge;
+import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
+import io.github.ilyaandreev05.audiomatrix.graph.AudioPort;
+import io.github.ilyaandreev05.audiomatrix.graph.FilterNode;
+import io.github.ilyaandreev05.audiomatrix.graph.GainNode;
+import io.github.ilyaandreev05.audiomatrix.graph.GateNode;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphConnection;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphPipeWireCompiler;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphRouteLibrary;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphValidator;
+import io.github.ilyaandreev05.audiomatrix.graph.MatrixNode;
+import io.github.ilyaandreev05.audiomatrix.graph.MixerNode;
+import io.github.ilyaandreev05.audiomatrix.graph.MultiSwitchNode;
+import io.github.ilyaandreev05.audiomatrix.graph.OutputNode;
+import io.github.ilyaandreev05.audiomatrix.graph.RouterNode;
+import io.github.ilyaandreev05.audiomatrix.graph.SelectorNode;
+import io.github.ilyaandreev05.audiomatrix.graph.SourceNode;
+import io.github.ilyaandreev05.audiomatrix.graph.SwitchNode;
 import javafx.animation.PauseTransition;
 import javafx.animation.KeyFrame;
 import javafx.animation.Timeline;
@@ -94,7 +113,7 @@ import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
 public final class AppShell extends BorderPane {
-    private enum Page { HOME, APPLICATIONS, DEVICES, ROUTES, DSP, CALIBRATION, PROFILES, SETTINGS }
+    private enum Page { HOME, APPLICATIONS, DEVICES, ROUTES, GRAPH, DSP, CALIBRATION, PROFILES, SETTINGS }
     private record Endpoint(String id, String label, boolean bus, AudioNode node) {}
     private record MeasurementPreview(Path source, AudioNode output, String method, String sensorSource,
                                      String sensorSourceDescription, int channel, double startHz, double endHz,
@@ -155,6 +174,7 @@ public final class AppShell extends BorderPane {
     private boolean routeUndoInProgress;
     private boolean dspReferenceMode;
     private boolean dspReferenceUpdateInProgress;
+    private String selectedGraphRouteId = "";
     private CheckBox dspReferenceToggle;
     private boolean autoApplySuppressedUntilRestart;
     private String lastRouteInputSignature = "";
@@ -228,7 +248,7 @@ public final class AppShell extends BorderPane {
         }
         Region spacer = new Region(); VBox.setVgrow(spacer, Priority.ALWAYS); sidebar.getChildren().add(spacer);
         connection.getStyleClass().add("status-pill");
-        sidebar.getChildren().addAll(new Separator(), connection, label(t("Настройки сохраняются в YAML", "Settings are stored in YAML"), "muted"));
+        sidebar.getChildren().addAll(new Separator(), connection, label(t("Настройки сохраняются в config.json", "Settings are stored in config.json"), "muted"));
         sidebar.setPrefWidth(228);
 
         HBox topbar = new HBox(14);
@@ -261,6 +281,7 @@ public final class AppShell extends BorderPane {
             case APPLICATIONS -> applicationsPage();
             case DEVICES -> devicesPage();
             case ROUTES -> routesPage();
+            case GRAPH -> graphPage();
             case DSP -> dspPage();
             case CALIBRATION -> calibrationPage();
             case PROFILES -> profilesPage();
@@ -605,10 +626,246 @@ public final class AppShell extends BorderPane {
         return page;
     }
 
+    private VBox graphPage() {
+        Map<String,Object> config=store.snapshot();
+        List<Map<String,Object>> routes=maps(config.get("route_library"));
+        VBox page=page(t("Один активный маршрут содержит все одновременно работающие ветки. Изменения хранятся в config.json.",
+                "One active route contains all branches that run together. Changes are stored in config.json."));
+        HBox selector=new HBox(10);selector.setAlignment(Pos.CENTER_LEFT);
+        ComboBox<Map<String,Object>> routePicker=new ComboBox<>();routePicker.getItems().setAll(routes);routePicker.setMaxWidth(420);
+        routePicker.setConverter(new StringConverter<>(){
+            @Override public String toString(Map<String,Object> route){return route==null?"":string(route.get("name"),string(route.get("id"),""));}
+            @Override public Map<String,Object> fromString(String value){return null;}
+        });
+        String chosen=routes.stream().anyMatch(route->selectedGraphRouteId.equals(route.get("id")))?selectedGraphRouteId:string(config.get("active_route"),"");
+        Map<String,Object> selected=routes.stream().filter(route->chosen.equals(route.get("id"))).findFirst().orElse(routes.isEmpty()?null:routes.getFirst());
+        if(selected!=null){selectedGraphRouteId=string(selected.get("id"),"");routePicker.getSelectionModel().select(selected);}
+        routePicker.setOnAction(event->{Map<String,Object> choice=routePicker.getValue();if(choice!=null){selectedGraphRouteId=string(choice.get("id"),"");showPage(Page.GRAPH);}});
+        selector.getChildren().addAll(label(t("Маршрут", "Route"),"muted"),routePicker,
+                actionButton(t("Создать", "New"),this::createGraphRoute),
+                actionButton(t("Дублировать", "Duplicate"),()->duplicateSelectedGraphRoute()),
+                actionButton(t("Переименовать", "Rename"),()->renameSelectedGraphRoute()),
+                actionButton(t("Активировать", "Activate"),()->activateSelectedGraphRoute()),
+                actionButton(t("Сохранить копию", "Save snapshot"),()->saveSelectedGraphCopy()),
+                actionButton(t("Удалить", "Delete"),()->deleteSelectedGraphRoute()));
+        page.getChildren().add(selector);
+        if(selected==null){
+            VBox empty=card(t("Граф маршрута", "Route graph"));empty.getChildren().add(label(t("Создай маршрут, затем добавь источники, обработку и выходы.","Create a route, then add sources, processing and outputs."),"muted"));page.getChildren().add(empty);
+        }else{
+            AudioGraph graph;
+            try{graph=GraphCodec.fromMap(selected);}catch(RuntimeException invalid){
+                VBox error=card(t("Некорректный граф", "Invalid graph"));error.getChildren().add(label(invalid.getMessage(),"danger"));page.getChildren().add(error);return page;
+            }
+            List<String> issues=GraphValidator.validate(graph);
+            VBox status=card(t("Состояние графа", "Graph status"));
+            boolean active=graph.id().equals(config.get("active_route"));
+            status.getChildren().addAll(label((active?t("Активен в конфигурации", "Active in configuration"):t("Сохранённый маршрут", "Saved route"))+" · "+graph.nodes().size()+t(" нод · "," nodes · ")+graph.connections().size()+t(" связей"," links"),active?"accent":"muted"),
+                    label(t("Применение графа перенастроит PipeWire. Неподдерживаемые ноды будут отклонены до внесения изменений.",
+                            "Applying this graph will reconfigure PipeWire. Unsupported nodes are rejected before any changes."),"warning"),
+                    actionButton(t("Применить активный граф к PipeWire","Apply active graph to PipeWire"),this::applyRoutes));
+            if(!issues.isEmpty())issues.forEach(problem->status.getChildren().add(label(problem,"danger")));
+            page.getChildren().add(status);
+            page.getChildren().add(graphMatrixCard(graph));
+            page.getChildren().add(graphNodeCard(graph));
+            page.getChildren().add(graphConnectionCard(graph));
+            page.getChildren().add(graphRouteGroupCard(graph,config));
+        }
+        page.getChildren().add(graphSavedCopiesCard(config));
+        page.getChildren().add(routeHistoryCard());
+        return page;
+    }
+
+    private VBox graphMatrixCard(AudioGraph graph){
+        VBox box=card(t("Матрица соединений", "Connection matrix"));
+        List<SourceNode> sources=graph.nodes().stream().filter(SourceNode.class::isInstance).map(SourceNode.class::cast).toList();
+        List<OutputNode> outputs=graph.nodes().stream().filter(OutputNode.class::isInstance).map(OutputNode.class::cast).toList();
+        box.getChildren().add(label(t("Строки — источники, столбцы — выходы. Совместный маршрут нескольких источников к одному выходу автоматически использует Mixer.",
+                "Rows are sources and columns are outputs. Multiple sources feeding one output use an explicit Mixer."),"muted"));
+        if(sources.isEmpty()||outputs.isEmpty()){box.getChildren().add(label(t("Добавь хотя бы один источник и один выход, чтобы построить матрицу.","Add at least one source and one output to show the matrix."),"muted"));return box;}
+        GridPane grid=new GridPane();grid.setHgap(14);grid.setVgap(9);grid.add(label(t("Вход ↓ / выход →","Input ↓ / output →"),"card-title"),0,0);
+        for(int col=0;col<outputs.size();col++){Label title=label(outputs.get(col).name(),"muted");title.setWrapText(true);title.setMaxWidth(150);grid.add(title,col+1,0);}
+        for(int row=0;row<sources.size();row++){
+            SourceNode source=sources.get(row);grid.add(label(source.name(),""),0,row+1);
+            for(int col=0;col<outputs.size();col++){
+                OutputNode output=outputs.get(col);boolean connected=graph.connections().stream().anyMatch(edge->edge.enabled()&&edge.fromNode().equals(source.id())&&edge.toNode().equals(output.id()));
+                CheckBox cell=new CheckBox();cell.setSelected(connected);cell.setAccessibleText(source.name()+" → "+output.name());
+                cell.setOnAction(event->setDirectMatrixConnection(graph.id(),source,output,cell.isSelected()));grid.add(cell,col+1,row+1);
+            }
+        }
+        box.getChildren().add(grid);return box;
+    }
+
+    private void setDirectMatrixConnection(String routeId,SourceNode source,OutputNode output,boolean enabled){
+        Map<String,Object> config=store.snapshot();Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->routeId.equals(item.get("id"))).findFirst().orElse(null);if(route==null)return;
+        AudioGraph old=GraphCodec.fromMap(route);List<GraphNode> nodes=new ArrayList<>(old.nodes());List<GraphConnection> edges=new ArrayList<>(old.connections());
+        if(enabled){
+            GraphConnection existing=edges.stream().filter(edge->edge.enabled()&&edge.fromNode().equals(source.id())&&edge.toNode().equals(output.id())).findFirst().orElse(null);
+            if(existing!=null)return;
+            String occupied=edges.stream().filter(GraphConnection::enabled).filter(edge->edge.toNode().equals(output.id())).map(GraphConnection::fromNode).findFirst().orElse(null);
+            if(occupied==null)edges.add(new GraphConnection("link-"+UUID.randomUUID(),source.id(),"out",output.id(),"in",true,1));
+            else{
+                GraphNode prior=nodes.stream().filter(node->node.id().equals(occupied)).findFirst().orElse(null);
+                if(prior instanceof MixerNode mixer){
+                    String inputId="in-"+UUID.randomUUID().toString().substring(0,8);Map<String,Double> gains=new LinkedHashMap<>(mixer.inputGains());gains.put(inputId,1.0);
+                    nodes.set(nodes.indexOf(mixer),new MixerNode(mixer.id(),mixer.name(),mixer.outputs().getFirst().channels(),gains));
+                    edges.add(new GraphConnection("link-"+UUID.randomUUID(),source.id(),"out",mixer.id(),inputId,true,1));
+                }else{
+                    String mixerId="mixer-"+UUID.randomUUID();Map<String,Double> gains=Map.of("in-a",1.0,"in-b",1.0);
+                    MixerNode mixer=new MixerNode(mixerId,t("Сумма ","Mix ")+output.name(),source.outputs().getFirst().channels(),gains);nodes.add(mixer);
+                    edges.removeIf(edge->edge.toNode().equals(output.id()));
+                    edges.add(new GraphConnection("link-"+UUID.randomUUID(),prior.id(),"out",mixerId,"in-a",true,1));
+                    edges.add(new GraphConnection("link-"+UUID.randomUUID(),source.id(),"out",mixerId,"in-b",true,1));
+                    edges.add(new GraphConnection("link-"+UUID.randomUUID(),mixerId,"out",output.id(),"in",true,1));
+                }
+            }
+        }else{
+            edges.removeIf(edge->edge.enabled()&&edge.fromNode().equals(source.id())&&edge.toNode().equals(output.id()));
+            GraphNode mixerNode=nodes.stream().filter(MixerNode.class::isInstance).filter(node->edges.stream().anyMatch(edge->edge.toNode().equals(node.id()))&&edges.stream().anyMatch(edge->edge.fromNode().equals(node.id())&&edge.toNode().equals(output.id()))).findFirst().orElse(null);
+            if(mixerNode instanceof MixerNode mixer){
+                edges.removeIf(edge->edge.toNode().equals(mixer.id())&&edge.fromNode().equals(source.id()));
+                List<GraphConnection> mixerInputs=edges.stream().filter(edge->edge.toNode().equals(mixer.id())).toList();
+                if(mixerInputs.size()<=1){if(!mixerInputs.isEmpty()){GraphConnection last=mixerInputs.getFirst();edges.removeIf(edge->edge.fromNode().equals(mixer.id())&&edge.toNode().equals(output.id()));edges.add(new GraphConnection("link-"+UUID.randomUUID(),last.fromNode(),last.fromPort(),output.id(),"in",true,last.gain()));}edges.removeIf(edge->edge.toNode().equals(mixer.id())||edge.fromNode().equals(mixer.id()));nodes.remove(mixer);}
+                else{
+                    Map<String,Double> gains=new LinkedHashMap<>();mixerInputs.forEach(edge->gains.put(edge.toPort(),1.0));nodes.set(nodes.indexOf(mixer),new MixerNode(mixer.id(),mixer.name(),mixer.outputs().getFirst().channels(),gains));
+                }
+            }
+        }
+        AudioGraph candidate=new AudioGraph(old.id(),old.name(),nodes,edges);List<String> errors=GraphValidator.validate(candidate);
+        if(!errors.isEmpty()){setNotice(String.join("; ",errors),true);showPage(Page.GRAPH);return;}
+        saveGraph(routeId,candidate);
+    }
+
+    private VBox graphNodeCard(AudioGraph graph){
+        VBox box=card(t("Ноды", "Nodes"));
+        HBox add=new HBox(9);ComboBox<String> type=new ComboBox<>();type.getItems().setAll("source","output","gain","gate","switch","multi_switch","selector","matrix","mixer","filter");type.getSelectionModel().select("source");
+        add.getChildren().addAll(type,actionButton(t("Добавить ноду", "Add node"),()->addGraphNode(graph,type.getValue())));box.getChildren().add(add);
+        if(graph.nodes().isEmpty()){box.getChildren().add(label(t("Граф пуст.","Graph is empty."),"muted"));return box;}
+        for(GraphNode node:graph.nodes()){
+            HBox row=new HBox(12);row.setAlignment(Pos.CENTER_LEFT);row.getChildren().add(label(node.name()+" · "+node.type(),"card-title"));
+            if(node instanceof GainNode gain){Slider level=new Slider(0,1,gain.gain());level.setPrefWidth(180);Label value=label(volumeLabel(gain.gain()),"muted");level.valueProperty().addListener((o,a,v)->value.setText(volumeLabel(v.doubleValue())));level.setOnMouseReleased(e->updateGraphNodeParameters(graph.id(),node.id(),parameters->parameters.put("gain",Math.round(level.getValue()*1000)/1000.0)));level.setOnKeyReleased(e->updateGraphNodeParameters(graph.id(),node.id(),parameters->parameters.put("gain",Math.round(level.getValue()*1000)/1000.0)));CheckBox mute=new CheckBox(t("Mute","Mute"));mute.setSelected(gain.muted());mute.setOnAction(e->updateGraphNodeParameters(graph.id(),node.id(),parameters->parameters.put("muted",mute.isSelected())));row.getChildren().addAll(level,value,mute);}
+            else if(node instanceof GateNode gate){CheckBox open=new CheckBox(t("Gate открыт","Gate open"));open.setSelected(gate.open());open.setOnAction(e->updateGraphNodeParameters(graph.id(),node.id(),parameters->parameters.put("open",open.isSelected())));row.getChildren().add(open);}
+            else if(node instanceof FilterNode filter){CheckBox bypass=new CheckBox(filter.processor()+t(" · включён"," · enabled"));bypass.setSelected(filter.enabled());bypass.setOnAction(e->updateGraphNodeParameters(graph.id(),node.id(),parameters->parameters.put("enabled",bypass.isSelected())));row.getChildren().add(bypass);}
+            else if(node instanceof RouterNode router){
+                List<String> active=router.activeLinks();
+                GridPane table=new GridPane();table.setHgap(8);table.setVgap(4);
+                table.add(label(t("Вход ↓ / выход →","Input ↓ / output →"),"muted"),0,0);
+                for(int col=0;col<router.outputs().size();col++)table.add(label(router.outputs().get(col).id(),"muted"),col+1,0);
+                for(int r=0;r<router.inputs().size();r++){
+                    AudioPort input=router.inputs().get(r);table.add(label(input.id(),"muted"),0,r+1);
+                    for(int c=0;c<router.outputs().size();c++){
+                        AudioPort output=router.outputs().get(c);String link=input.id()+"->"+output.id();
+                        CheckBox cell=new CheckBox();cell.setSelected(active.contains(link));cell.setAccessibleText(node.name()+" "+input.id()+" → "+output.id());
+                        cell.setOnAction(event->setRouterLink(graph.id(),node.id(),link,cell.isSelected()));table.add(cell,c+1,r+1);
+                    }
+                }
+                VBox routerControls=new VBox(5,table,label(active.size()+t(" активных связей"," active links"),"muted"));
+                if(node instanceof MatrixNode||node instanceof SelectorNode)routerControls.getChildren().add(actionButton(t("Добавить вход","Add input"),()->addRouterPort(graph.id(),node,"input")));
+                if(node instanceof MatrixNode||node instanceof SwitchNode||node instanceof MultiSwitchNode)routerControls.getChildren().add(actionButton(t("Добавить выход","Add output"),()->addRouterPort(graph.id(),node,"output")));
+                row.getChildren().add(routerControls);
+            }
+            Region space=new Region();HBox.setHgrow(space,Priority.ALWAYS);row.getChildren().add(space);row.getChildren().add(actionButton(t("Удалить","Delete"),()->removeGraphNode(graph.id(),node.id())));box.getChildren().add(row);
+        }
+        return box;
+    }
+
+    private VBox graphConnectionCard(AudioGraph graph){
+        VBox box=card(t("Связи", "Connections"));
+        ComboBox<GraphNode> from=new ComboBox<>(),to=new ComboBox<>();ComboBox<AudioPort> fromPort=new ComboBox<>(),toPort=new ComboBox<>();from.getItems().setAll(graph.nodes().stream().filter(node->!node.outputs().isEmpty()).toList());to.getItems().setAll(graph.nodes().stream().filter(node->!node.inputs().isEmpty()).toList());
+        StringConverter<GraphNode> converter=new StringConverter<>(){@Override public String toString(GraphNode node){return node==null?"":node.name();}@Override public GraphNode fromString(String value){return null;}};from.setConverter(converter);to.setConverter(converter);
+        StringConverter<AudioPort> portConverter=new StringConverter<>(){@Override public String toString(AudioPort port){return port==null?"":port.id();}@Override public AudioPort fromString(String value){return null;}};fromPort.setConverter(portConverter);toPort.setConverter(portConverter);
+        from.valueProperty().addListener((o,a,node)->{fromPort.getItems().setAll(node==null?List.of():node.outputs());if(!fromPort.getItems().isEmpty())fromPort.getSelectionModel().selectFirst();});
+        to.valueProperty().addListener((o,a,node)->{toPort.getItems().setAll(node==null?List.of():node.inputs());if(node!=null){String free=node.inputs().stream().filter(port->graph.connections().stream().noneMatch(edge->edge.enabled()&&edge.toNode().equals(node.id())&&edge.toPort().equals(port.id()))).map(AudioPort::id).findFirst().orElse(node.inputs().getFirst().id());toPort.getSelectionModel().select(node.inputs().stream().filter(port->free.equals(port.id())).findFirst().orElse(null));}});
+        if(!from.getItems().isEmpty())from.getSelectionModel().selectFirst();if(!to.getItems().isEmpty())to.getSelectionModel().selectLast();
+        Button connect=actionButton(t("Соединить", "Connect"),()->connectGraphNodes(graph.id(),from.getValue(),fromPort.getValue(),to.getValue(),toPort.getValue()));connect.setDisable(from.getItems().isEmpty()||to.getItems().isEmpty());
+        box.getChildren().addAll(new HBox(9,from,fromPort,label("→","muted"),to,toPort,connect));
+        if(graph.connections().isEmpty())box.getChildren().add(label(t("Связей пока нет.","No connections yet."),"muted"));
+        for(GraphConnection edge:graph.connections()){
+            GraphNode source=graph.nodes().stream().filter(node->node.id().equals(edge.fromNode())).findFirst().orElse(null),target=graph.nodes().stream().filter(node->node.id().equals(edge.toNode())).findFirst().orElse(null);if(source==null||target==null)continue;
+            CheckBox enabled=new CheckBox(source.name()+"."+edge.fromPort()+" → "+target.name()+"."+edge.toPort());enabled.setSelected(edge.enabled());enabled.setOnAction(e->setGraphConnectionEnabled(graph.id(),edge.id(),enabled.isSelected()));
+            Slider gain=new Slider(0,1,edge.gain());gain.setPrefWidth(140);gain.setOnMouseReleased(e->setGraphConnectionGain(graph.id(),edge.id(),gain.getValue()));
+            box.getChildren().add(new HBox(10,enabled,gain,actionButton(t("Удалить","Delete"),()->removeGraphConnection(graph.id(),edge.id()))));
+        }
+        return box;
+    }
+
+    private VBox graphRouteGroupCard(AudioGraph graph,Map<String,Object> config){
+        VBox box=card(t("Группа маршрутов", "Route group"));List<Map<String,Object>> groups=maps(config.get("route_groups"));String groupId=string(maps(config.get("route_library")).stream().filter(route->graph.id().equals(route.get("id"))).findFirst().orElse(Map.of()).get("group_id"),"");
+        ComboBox<Map<String,Object>> picker=new ComboBox<>();picker.getItems().setAll(groups);picker.setConverter(new StringConverter<>(){@Override public String toString(Map<String,Object> group){return group==null?t("Без группы","No group"):string(group.get("name"),"");}@Override public Map<String,Object> fromString(String value){return null;}});if(!groupId.isBlank())groups.stream().filter(group->groupId.equals(group.get("id"))).findFirst().ifPresent(picker.getSelectionModel()::select);
+        picker.setOnAction(event->{Map<String,Object> group=picker.getValue();updateRouteConfig(t("Переместить маршрут в группу","Move route to group"),candidate->maps(candidate.get("route_library")).stream().filter(route->graph.id().equals(route.get("id"))).findFirst().ifPresent(route->route.put("group_id",group==null?"":group.get("id"))));});
+        box.getChildren().addAll(picker,actionButton(t("Создать группу","New group"),()->createGraphGroup()),actionButton(t("Переименовать группу","Rename group"),()->renameGraphGroup(groupId)),actionButton(t("Дублировать группу","Duplicate group"),()->duplicateSelectedGraphGroup(groupId)),actionButton(t("Удалить текущую группу","Delete current group"),()->deleteGraphGroup(groupId)));
+        return box;
+    }
+
+    private VBox graphSavedCopiesCard(Map<String,Object> config){
+        VBox box=card(t("Сохранённые копии (не применяются)","Saved snapshots (inactive)"));List<Map<String,Object>> copies=maps(config.get("saved_copies"));
+        if(copies.isEmpty())box.getChildren().add(label(t("Копий ещё нет.","No snapshots yet."),"muted"));
+        for(Map<String,Object> copy:copies){String id=string(copy.get("id"),"");HBox row=new HBox(10);row.setAlignment(Pos.CENTER_LEFT);row.getChildren().addAll(label(string(copy.get("name"),id)+" · "+t("неактивна","inactive"),""),actionButton(t("Восстановить как маршрут","Restore as route"),()->restoreGraphCopy(id)),actionButton(t("Удалить копию","Delete snapshot"),()->updateRouteConfig(t("Удалить копию","Delete snapshot"),candidate->GraphRouteLibrary.deleteSavedCopy(candidate,id))));box.getChildren().add(row);}
+        return box;
+    }
+
+    private void createGraphRoute(){TextInputDialog dialog=new TextInputDialog(t("Новый маршрут","New route"));dialog.setTitle(t("Создать маршрут","Create route"));dialog.setHeaderText(t("Новый граф маршрута","New route graph"));styleDialog(dialog);dialog.showAndWait().map(String::trim).filter(name->!name.isBlank()).ifPresent(name->{String id="route-"+UUID.randomUUID();AudioGraph graph=new AudioGraph(id,name,List.of(),List.of());updateRouteConfig(t("Создать маршрут ","Create route ")+name,config->{GraphRouteLibrary.saveRoute(config,graph,"");selectedGraphRouteId=id;});});}
+    private void duplicateSelectedGraphRoute(){String id=selectedGraphRouteId;if(id.isBlank())return;updateRouteConfig(t("Дублировать маршрут","Duplicate route"),config->{AudioGraph copy=GraphRouteLibrary.duplicateRoute(config,id,null);selectedGraphRouteId=copy.id();});}
+    private void renameSelectedGraphRoute(){String id=selectedGraphRouteId;if(id.isBlank())return;Map<String,Object> current=maps(store.snapshot().get("route_library")).stream().filter(route->id.equals(route.get("id"))).findFirst().orElse(null);if(current==null)return;TextInputDialog dialog=new TextInputDialog(string(current.get("name"),""));dialog.setTitle(t("Переименовать маршрут","Rename route"));dialog.setHeaderText(t("Имя маршрута","Route name"));styleDialog(dialog);dialog.showAndWait().map(String::trim).filter(name->!name.isBlank()).ifPresent(name->updateRouteConfig(t("Переименовать маршрут","Rename route"),config->GraphRouteLibrary.renameRoute(config,id,name)));}
+    private void deleteSelectedGraphRoute(){String id=selectedGraphRouteId;if(id.isBlank())return;Map<String,Object> config=store.snapshot();if(id.equals(config.get("active_route"))){setNotice(t("Сначала активируй другой маршрут; активный граф нельзя удалить, пока он выбран.","Activate another route first; the selected active graph cannot be deleted."),true);return;}updateRouteConfig(t("Удалить маршрут","Delete route"),candidate->GraphRouteLibrary.deleteRoute(candidate,id,null));selectedGraphRouteId="";}
+    private void activateSelectedGraphRoute(){String id=selectedGraphRouteId;if(id.isBlank())return;updateRouteConfig(t("Активировать маршрут","Activate route"),config->GraphRouteLibrary.activate(config,id));}
+    private void saveSelectedGraphCopy(){String id=selectedGraphRouteId;if(id.isBlank())return;updateRouteConfig(t("Сохранить копию","Save snapshot"),config->GraphRouteLibrary.saveInactiveCopy(config,id,null));}
+    private void addGraphNode(AudioGraph graph,String type){
+        if(type==null)return;
+        TextInputDialog nameDialog=new TextInputDialog(type);nameDialog.setTitle(t("Добавить ноду","Add node"));nameDialog.setHeaderText(t("Имя ноды","Node name"));styleDialog(nameDialog);
+        nameDialog.showAndWait().map(String::trim).filter(name->!name.isBlank()).ifPresent(name->{
+            String id=type+"-"+UUID.randomUUID();List<String> stereo=List.of("FL","FR");
+            if("output".equals(type)){
+                List<AudioNode> available=snapshot.sinks().stream().filter(node->node.channels()>=2).toList();if(available.isEmpty()){setNotice(t("Сейчас нет доступного стереовыхода.","No stereo output is currently available."),true);return;}
+                List<String> outputLabels=available.stream().map(output->nodeDisplayName(output)+" · "+output.name()).toList();javafx.scene.control.ChoiceDialog<String> choice=new javafx.scene.control.ChoiceDialog<>(outputLabels.getFirst(),outputLabels);choice.setTitle(t("Выходная нода","Output node"));choice.setHeaderText(t("Выбери доступный выход","Choose an available output"));styleDialog(choice);
+                choice.showAndWait().ifPresent(selectedLabel->{AudioNode output=available.get(outputLabels.indexOf(selectedLabel));updateRouteConfig(t("Добавить выходную ноду","Add output node"),config->{Map<String,Object> device=ensureDevice(config,output);GraphNode node=new OutputNode(id,name,string(device.get("id"),"system_default"),stereo);Map<String,Object> saved=maps(config.get("route_library")).stream().filter(route->graph.id().equals(route.get("id"))).findFirst().orElseThrow();AudioGraph old=GraphCodec.fromMap(saved);List<GraphNode> nodes=new ArrayList<>(old.nodes());nodes.add(node);GraphRouteLibrary.saveRoute(config,new AudioGraph(old.id(),old.name(),nodes,old.connections()),string(saved.get("group_id"),""));});});return;
+            }
+            if("source".equals(type)){
+                TextInputDialog selector=new TextInputDialog("application:unassigned");selector.setTitle(t("Источник приложения","Application source"));selector.setHeaderText(t("application:<id>, process:<name> или application:unassigned","application:<id>, process:<name>, or application:unassigned"));styleDialog(selector);
+                selector.showAndWait().map(String::trim).filter(value->!value.isBlank()).ifPresent(value->updateGraph(graph.id(),nodes->nodes.add(new SourceNode(id,name,value,stereo))));return;
+            }
+            GraphNode node=switch(type){case "gain"->new GainNode(id,name,stereo,1,false);case "gate"->new GateNode(id,name,stereo,true);case "switch"->new SwitchNode(id,name,stereo,List.of("out-1","out-2"),List.of());case "multi_switch"->new MultiSwitchNode(id,name,stereo,List.of("out-1","out-2"),List.of());case "selector"->new SelectorNode(id,name,stereo,List.of("in-1","in-2"),List.of());case "matrix"->new MatrixNode(id,name,stereo,List.of("in-1","in-2"),List.of("out-1","out-2"),List.of());case "mixer"->new MixerNode(id,name,stereo,Map.of("in-a",1.0,"in-b",1.0));default->new FilterNode(id,name,stereo,"low_pass",true,Map.of("frequency_hz",100.0,"slope_db_oct",24.0));};
+            updateGraph(graph.id(),nodes->nodes.add(node));
+        });
+    }
+
+    private void setRouterLink(String routeId,String nodeId,String link,boolean enabled){
+        updateGraphNodeParameters(routeId,nodeId,parameters->{
+            List<String> links=new ArrayList<>(stringList(parameters.get("active_links")));
+            if(enabled){if(!Boolean.TRUE.equals(parameters.get("multiple")))links.clear();if(!links.contains(link))links.add(link);}
+            else links.remove(link);
+            parameters.put("active_links",links);
+        });
+    }
+
+    private void addRouterPort(String routeId,GraphNode node,String direction){
+        String key="input".equals(direction)?"input_ports":"output_ports";
+        updateGraphNodeParameters(routeId,node.id(),parameters->{
+            List<String> ports=new ArrayList<>(stringList(parameters.get(key)));
+            int number=ports.size()+1;String candidate;
+            do{candidate=("input".equals(direction)?"in-":"out-")+number++;}while(ports.contains(candidate));
+            ports.add(candidate);parameters.put(key,ports);
+        });
+    }
+
+    private void updateGraph(String routeId,Consumer<List<GraphNode>> nodeChange){updateRouteConfig(t("Изменить граф","Edit graph"),config->{Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->routeId.equals(item.get("id"))).findFirst().orElseThrow();AudioGraph old=GraphCodec.fromMap(route);List<GraphNode> nodes=new ArrayList<>(old.nodes());nodeChange.accept(nodes);AudioGraph changed=new AudioGraph(old.id(),old.name(),nodes,old.connections());GraphRouteLibrary.saveRoute(config,changed,string(route.get("group_id"),""));});}
+    private void saveGraph(String routeId,AudioGraph graph){updateRouteConfig(t("Сохранить граф","Save graph"),config->{Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->routeId.equals(item.get("id"))).findFirst().orElseThrow();GraphRouteLibrary.saveRoute(config,graph,string(route.get("group_id"),""));});}
+    private void updateGraphNodeParameters(String routeId,String nodeId,Consumer<Map<String,Object>> change){Map<String,Object> config=store.snapshot();Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->routeId.equals(item.get("id"))).findFirst().orElse(null);if(route==null)return;Map<String,Object> node=maps(route.get("nodes")).stream().filter(item->nodeId.equals(item.get("id"))).findFirst().orElse(null);if(node==null)return;Map<String,Object> parameters=map(node.get("parameters"));node.put("parameters",parameters);try{change.accept(parameters);AudioGraph graph=GraphCodec.fromMap(route);List<String> errors=GraphValidator.validate(graph);if(!errors.isEmpty())throw new IllegalArgumentException(String.join("; ",errors));saveGraph(routeId,graph);}catch(RuntimeException invalid){setNotice(t("Параметр ноды не сохранён: ","Node parameter was not saved: ")+invalid.getMessage(),true);showPage(Page.GRAPH);}}
+    private void removeGraphNode(String routeId,String nodeId){updateRouteConfig(t("Удалить ноду","Delete node"),config->{Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->routeId.equals(item.get("id"))).findFirst().orElseThrow();maps(route.get("nodes")).removeIf(node->nodeId.equals(node.get("id")));maps(route.get("connections")).removeIf(edge->nodeId.equals(edge.get("from_node"))||nodeId.equals(edge.get("to_node")));});}
+    private void connectGraphNodes(String routeId,GraphNode source,AudioPort sourcePort,GraphNode target,AudioPort targetPort){if(source==null||target==null||sourcePort==null||targetPort==null)return;Map<String,Object> config=store.snapshot();Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->routeId.equals(item.get("id"))).findFirst().orElse(null);if(route==null)return;AudioGraph old=GraphCodec.fromMap(route);GraphConnection edge=new GraphConnection("link-"+UUID.randomUUID(),source.id(),sourcePort.id(),target.id(),targetPort.id(),true,1);List<GraphConnection> edges=new ArrayList<>(old.connections());edges.add(edge);AudioGraph next=new AudioGraph(old.id(),old.name(),old.nodes(),edges);List<String> errors=GraphValidator.validate(next);if(!errors.isEmpty()){setNotice(String.join("; ",errors),true);showPage(Page.GRAPH);return;}saveGraph(routeId,next);}
+    private void setGraphConnectionEnabled(String routeId,String connectionId,boolean enabled){mutateGraphConnection(routeId,connectionId,edge->new GraphConnection(edge.id(),edge.fromNode(),edge.fromPort(),edge.toNode(),edge.toPort(),enabled,edge.gain()));}
+    private void setGraphConnectionGain(String routeId,String connectionId,double gain){mutateGraphConnection(routeId,connectionId,edge->new GraphConnection(edge.id(),edge.fromNode(),edge.fromPort(),edge.toNode(),edge.toPort(),edge.enabled(),gain));}
+    private void removeGraphConnection(String routeId,String connectionId){Map<String,Object> route=maps(store.snapshot().get("route_library")).stream().filter(item->routeId.equals(item.get("id"))).findFirst().orElse(null);if(route==null)return;AudioGraph old=GraphCodec.fromMap(route);saveGraph(routeId,new AudioGraph(old.id(),old.name(),old.nodes(),old.connections().stream().filter(edge->!connectionId.equals(edge.id())).toList()));}
+    private void mutateGraphConnection(String routeId,String connectionId,java.util.function.Function<GraphConnection,GraphConnection> mutate){Map<String,Object> route=maps(store.snapshot().get("route_library")).stream().filter(item->routeId.equals(item.get("id"))).findFirst().orElse(null);if(route==null)return;AudioGraph old=GraphCodec.fromMap(route);List<GraphConnection> edges=old.connections().stream().map(edge->connectionId.equals(edge.id())?mutate.apply(edge):edge).toList();AudioGraph next=new AudioGraph(old.id(),old.name(),old.nodes(),edges);List<String> errors=GraphValidator.validate(next);if(!errors.isEmpty()){setNotice(String.join("; ",errors),true);showPage(Page.GRAPH);return;}saveGraph(routeId,next);}
+    private void createGraphGroup(){TextInputDialog dialog=new TextInputDialog();dialog.setTitle(t("Создать группу","Create group"));dialog.setHeaderText(t("Название группы","Group name"));styleDialog(dialog);dialog.showAndWait().map(String::trim).filter(name->!name.isBlank()).ifPresent(name->updateRouteConfig(t("Создать группу","Create group"),config->GraphRouteLibrary.createGroup(config,name)));}
+    private void renameGraphGroup(String groupId){if(groupId.isBlank())return;Map<String,Object> group=maps(store.snapshot().get("route_groups")).stream().filter(item->groupId.equals(item.get("id"))).findFirst().orElse(null);if(group==null)return;TextInputDialog dialog=new TextInputDialog(string(group.get("name"),""));dialog.setTitle(t("Переименовать группу","Rename group"));dialog.setHeaderText(t("Название группы","Group name"));styleDialog(dialog);dialog.showAndWait().map(String::trim).filter(name->!name.isBlank()).ifPresent(name->updateRouteConfig(t("Переименовать группу","Rename group"),config->GraphRouteLibrary.renameGroup(config,groupId,name)));}
+    private void duplicateSelectedGraphGroup(String groupId){if(groupId.isBlank())return;updateRouteConfig(t("Дублировать группу","Duplicate group"),config->GraphRouteLibrary.duplicateGroup(config,groupId,null));}
+    private void deleteGraphGroup(String groupId){if(groupId.isBlank())return;updateRouteConfig(t("Удалить группу","Delete group"),config->GraphRouteLibrary.deleteGroup(config,groupId));}
+    private void restoreGraphCopy(String copyId){updateRouteConfig(t("Восстановить копию маршрута","Restore route snapshot"),config->{AudioGraph restored=GraphRouteLibrary.restoreSavedCopy(config,copyId,null);selectedGraphRouteId=restored.id();});}
+
     private VBox routeHistoryCard() {
         VBox history = card(t("История маршрутов", "Route history"));
-        history.getChildren().add(label(t("История хранится в текущем сеансе. Отмена сохраняет прежний YAML; если граф уже применён, Audio Matrix обновит его согласно восстановленной конфигурации.",
-                "History is kept for this session. Undo saves the previous YAML; if a route graph is active, Audio Matrix updates it to match the restored configuration."), "muted"));
+        history.getChildren().add(label(t("История хранится в текущем сеансе. Отмена сохраняет прежний config.json; если граф уже применён, Audio Matrix обновит его согласно восстановленной конфигурации.",
+                "History is kept for this session. Undo saves the previous JSON; if a route graph is active, Audio Matrix updates it to match the restored configuration."), "muted"));
         if (routeHistory.isEmpty()) {
             history.getChildren().add(label(t("Изменений маршрутов в этом сеансе пока нет.", "No route changes in this session yet."), "muted"));
             return history;
@@ -749,8 +1006,8 @@ public final class AppShell extends BorderPane {
         comparison.getChildren().addAll(reference,
                 label(t("A — обработанный EQ; B — без EQ. В режиме B шины ослабляются примерно на ", "A — processed EQ; B — EQ bypass. In mode B, buses are attenuated by about ")
                         + String.format(Locale.ROOT, "%.1f dB", matchBoost)
-                        + t(" по консервативной сумме положительных EQ gains. Limiter и полярность маршрута остаются включены. Переключение временное и не меняет YAML.",
-                                " from a conservative sum of positive EQ gains. The limiter and route polarity stay enabled. This toggle is temporary and does not edit YAML."), "muted"));
+                        + t(" по консервативной сумме положительных EQ gains. Limiter и полярность маршрута остаются включены. Переключение временное и не меняет JSON.",
+                                " from a conservative sum of positive EQ gains. The limiter and route polarity stay enabled. This toggle is temporary and does not edit JSON."), "muted"));
         page.getChildren().add(comparison);
         Map<String, Object> limiter = map(dsp.get("limiter"));
         Map<String, Object> mixer = map(config.get("mixer"));
@@ -836,7 +1093,7 @@ public final class AppShell extends BorderPane {
                 actionButton(t("Создать route chain", "Create route chain"), this::createRouteChain));
         page.getChildren().add(chains);
         VBox future = card(t("Физический выход и каналы", "Physical output and channels"));
-        future.getChildren().addAll(label(t("Профиль может хранить независимый EQ и отдельные notch дребезга. Кривые строятся только по импортированной или записанной WAV-измерительной записи; субъективные заметки остаются непроверенными.", "A profile can store an independent EQ and separate rattle notches. Curves are derived only from imported or recorded WAV measurements; subjective notes remain unverified."), ""), label(t("A/B временно переключает активный граф PipeWire: A — сохранённый EQ, B — bypass EQ с консервативным выравниванием gain. Limiter и полярность остаются включены; YAML не меняется. Сначала примените граф маршрутов.", "A/B temporarily switches the active PipeWire graph: A uses the saved EQ, while B bypasses EQ with conservative gain matching. The limiter and route polarity stay enabled; YAML is unchanged. Apply the route graph first."), "muted"));
+        future.getChildren().addAll(label(t("Профиль может хранить независимый EQ и отдельные notch дребезга. Кривые строятся только по импортированной или записанной WAV-измерительной записи; субъективные заметки остаются непроверенными.", "A profile can store an independent EQ and separate rattle notches. Curves are derived only from imported or recorded WAV measurements; subjective notes remain unverified."), ""), label(t("A/B временно переключает активный граф PipeWire: A — сохранённый EQ, B — bypass EQ с консервативным выравниванием gain. Limiter и полярность остаются включены; JSON не меняется. Сначала примените граф маршрутов.", "A/B temporarily switches the active PipeWire graph: A uses the saved EQ, while B bypasses EQ with conservative gain matching. The limiter and route polarity stay enabled; JSON is unchanged. Apply the route graph first."), "muted"));
         page.getChildren().add(future);
         return page;
     }
@@ -1171,9 +1428,9 @@ public final class AppShell extends BorderPane {
             measurement.getChildren().addAll(label(impulseSummary(preview.result()), preview.result().clipped() ? "warning" : "muted"),
                     calibrationImpulseChart(preview.result()));
             if (calibrationImpulsePreviewSaved) {
-                measurement.getChildren().add(label(t("WAV и CSV затухания сохранены в YAML-профиле.", "WAV and decay CSV are saved in the YAML profile."), "muted"));
+                measurement.getChildren().add(label(t("WAV и CSV затухания сохранены в JSON-профиле.", "WAV and decay CSV are saved in the JSON profile."), "muted"));
             } else {
-                Button saveImpulse = actionButton(t("Сохранить WAV и затухание в YAML-профиль", "Save WAV and decay to the YAML profile"),
+                Button saveImpulse = actionButton(t("Сохранить WAV и затухание в JSON-профиль", "Save WAV and decay to the JSON profile"),
                         () -> saveImpulseCalibration(preview));
                 saveImpulse.setDisable(preview.output() == null);
                 Button discardImpulse = actionButton(t("Отбросить анализ затухания", "Discard decay analysis"), () -> {
@@ -1251,7 +1508,7 @@ public final class AppShell extends BorderPane {
             if (calibrationPreviewSaved) {
                 measurement.getChildren().add(label(t("Запись WAV и CSV кривой сохранены в папке measurements.", "WAV recording and curve CSV are saved under measurements."), "muted"));
             } else {
-                Button saveMeasurement = actionButton(t("Сохранить запись и кривую в YAML-профиль", "Save recording and curve to the YAML profile"),
+                Button saveMeasurement = actionButton(t("Сохранить запись и кривую в JSON-профиль", "Save recording and curve to the JSON profile"),
                         () -> saveCalibrationMeasurement(calibrationPreview));
                 Button discardMeasurement = actionButton(t("Отбросить результат", "Discard result"), () -> {
                     discardTemporaryCalibrationPreview();
@@ -1448,7 +1705,7 @@ public final class AppShell extends BorderPane {
             String chainId = "calibration-" + UUID.randomUUID().toString().replace("-", "");
             String appliedRef = "dsp.route_chains." + chainId;
             CalibrationFilterRollback[] rollback = new CalibrationFilterRollback[1];
-            setNotice(t("Сохраняю срезы в YAML-профиль…", "Saving cuts to the YAML profile…"), false);
+            setNotice(t("Сохраняю срезы в JSON-профиль…", "Saving cuts to the JSON profile…"), false);
             store.updateAsync(config -> {
                 Map<String, Object> calibration = maps(config.get("calibrations")).stream()
                         .filter(item -> preview.calibrationId().equals(item.get("id"))).findFirst()
@@ -1500,8 +1757,8 @@ public final class AppShell extends BorderPane {
                     return;
                 }
                 calibrationFilterRollback = rollback[0];
-                setNotice(t("Срезы сохранены в YAML. Активный граф обновится по настройке применения маршрутов; тестовый сигнал не воспроизводился.",
-                        "Cuts were saved in YAML. An active graph will refresh according to route-application settings; no test signal played."), false);
+                setNotice(t("Срезы сохранены в JSON. Активный граф обновится по настройке применения маршрутов; тестовый сигнал не воспроизводился.",
+                        "Cuts were saved in JSON. An active graph will refresh according to route-application settings; no test signal played."), false);
                 showPage(Page.CALIBRATION);
             }));
         } catch (Exception invalid) { setNotice(rootMessage(invalid), true); }
@@ -1513,8 +1770,8 @@ public final class AppShell extends BorderPane {
         Alert confirmation = new Alert(Alert.AlertType.CONFIRMATION);
         confirmation.setTitle(t("Подтвердите откат фильтров", "Confirm filter rollback"));
         confirmation.setHeaderText(t("Вернуть прежнюю цепочку выхода?", "Restore the previous output filter chain?"));
-        confirmation.setContentText(t("Выход: %s\nБудет восстановлена прежняя ссылка на фильтры. Если граф маршрутов активен, Audio Matrix обновит его после записи YAML.",
-                        "Output: %s\nThe previous filter reference will be restored. If the route graph is active, Audio Matrix will refresh it after saving YAML.")
+        confirmation.setContentText(t("Выход: %s\nБудет восстановлена прежняя ссылка на фильтры. Если граф маршрутов активен, Audio Matrix обновит его после записи JSON.",
+                        "Output: %s\nThe previous filter reference will be restored. If the route graph is active, Audio Matrix will refresh it after saving JSON.")
                 .formatted(rollback.outputDescription()));
         if (getScene() != null && getScene().getWindow() != null) confirmation.initOwner(getScene().getWindow());
         confirmation.getButtonTypes().setAll(ButtonType.OK, ButtonType.CANCEL);
@@ -1551,8 +1808,8 @@ public final class AppShell extends BorderPane {
                 return;
             }
             calibrationFilterRollback = null;
-            setNotice(t("Прежняя цепочка восстановлена в YAML. Активный граф обновится согласно настройкам маршрутов.",
-                    "The previous filter chain was restored in YAML. An active graph will refresh according to route settings."), false);
+            setNotice(t("Прежняя цепочка восстановлена в JSON. Активный граф обновится согласно настройкам маршрутов.",
+                    "The previous filter chain was restored in JSON. An active graph will refresh according to route settings."), false);
             showPage(Page.CALIBRATION);
         }));
     }
@@ -2144,16 +2401,16 @@ public final class AppShell extends BorderPane {
                 config -> activeProfile(config).put("mode", mode.getValue()))); presets.getChildren().add(mode);
         page.getChildren().add(presets);
         VBox importExport = card(t("Резервная копия и перенос", "Backup and transfer"));
-        importExport.getChildren().addAll(label(t("ZIP включает YAML-профили, связи, маршруты и все указанные файлы измерений; перед импортом проверяются manifest и контрольные суммы.", "ZIP includes YAML profiles, links, routes, and referenced measurement files; the manifest and checksums are validated before import."), "muted"),
+        importExport.getChildren().addAll(label(t("ZIP включает JSON-профили, связи, маршруты и все указанные файлы измерений; перед импортом проверяются manifest и контрольные суммы.", "ZIP includes JSON profiles, links, routes, and referenced measurement files; the manifest and checksums are validated before import."), "muted"),
                 actionButton(t("Экспортировать ZIP…", "Export ZIP…"), this::exportArchive),
                 actionButton(t("Проверить и импортировать ZIP…", "Preview and import ZIP…"), this::importArchive),
-                label(t("После подтверждения импорт заменяет YAML. Совпавшие правила могут сразу изменить громкость/mute устройств и потоков. Активный граф маршрутов обновится; если импорт включает apply_on_start, маршруты могут примениться сразу. Пропавшие или неоднозначные selectors можно сопоставить с текущим устройством либо оставить offline.", "After confirmation, import replaces YAML. Matching rules may immediately change device/stream volume or mute. An active route graph will refresh; imported apply_on_start may apply routes immediately. Missing or ambiguous selectors can be mapped to a current device or kept offline."), "warning"));
+                label(t("После подтверждения импорт заменяет config.json. Совпавшие правила могут сразу изменить громкость/mute устройств и потоков. Активный граф маршрутов обновится; если импорт включает apply_on_start, маршруты могут примениться сразу. Пропавшие или неоднозначные selectors можно сопоставить с текущим устройством либо оставить offline.", "After confirmation, import replaces config.json. Matching rules may immediately change device/stream volume or mute. An active route graph will refresh; imported apply_on_start may apply routes immediately. Missing or ambiguous selectors can be mapped to a current device or kept offline."), "warning"));
         page.getChildren().add(importExport);
         return page;
     }
 
     private VBox settingsPage() {
-        VBox page = page(t("Язык, тема, проверка YAML и состояние источников.", "Language, theme, YAML validation, and source status."));
+        VBox page = page(t("Язык, тема, проверка JSON и состояние источников.", "Language, theme, JSON validation, and source status."));
         VBox preferences = card(t("Внешний вид", "Appearance"));
         ComboBox<String> language = new ComboBox<>(); language.getItems().addAll("ru", "en"); language.setValue(setting(store.snapshot(), "ui", "language", "ru")); language.setAccessibleText(t("Язык интерфейса", "Interface language"));
         ComboBox<String> theme = new ComboBox<>(); theme.getItems().addAll("system", "light", "dark"); theme.setValue(setting(store.snapshot(), "ui", "theme", "system")); theme.setAccessibleText(t("Тема интерфейса", "Interface theme"));
@@ -2179,7 +2436,7 @@ public final class AppShell extends BorderPane {
         page.getChildren().add(routeLifecycle);
         VBox gnome = card(t("GNOME Quick Settings", "GNOME Quick Settings"));
         gnome.getChildren().addAll(label(t("Установите скрипт scripts/install-gnome-quick-settings.sh, перезапустите сеанс GNOME и включите audio-matrix-quick-settings@ilyaandreev05 в GNOME Extensions.", "Run scripts/install-gnome-quick-settings.sh, sign out and back in, then enable audio-matrix-quick-settings@ilyaandreev05 in GNOME Extensions."), ""),
-                label(t("Мост использует D-Bus сеанса GNOME; команды выполняет Audio Matrix. Выбор выхода и mute меняют PipeWire, режим профиля и карта каналов маршрута сохраняются в YAML, а уже применённый граф обновляется.", "The GNOME session D-Bus bridge sends commands to Audio Matrix. Output selection and mute change PipeWire; profile mode and route channel maps are saved to YAML, and an applied graph refreshes."), "muted")); page.getChildren().add(gnome);
+                label(t("Мост использует D-Bus сеанса GNOME; команды выполняет Audio Matrix. Регуляторы выходов и приложений сохраняются в config.json; действия меняют PipeWire через текущую сессию.", "The GNOME session D-Bus bridge sends commands to Audio Matrix. Output and application controls are saved in config.json and change PipeWire through the current session."), "muted")); page.getChildren().add(gnome);
         return page;
     }
 
@@ -2202,6 +2459,12 @@ public final class AppShell extends BorderPane {
                     else Platform.runLater(() -> setNotice(t("Не удалось изменить mute: ", "Could not change mute: ") + rootMessage(error), true));
                 });
             }
+            case "set_output_volume" -> setGnomeOutputLevel(command.value(), false);
+            case "toggle_output_mute" -> setGnomeOutputLevel(command.value(), true);
+            case "set_app_volume" -> setGnomeApplicationLevel(command.value(), false);
+            case "toggle_app_mute" -> setGnomeApplicationLevel(command.value(), true);
+            case "set_stream_volume" -> setGnomeStreamLevel(command.value(), false);
+            case "toggle_stream_mute" -> setGnomeStreamLevel(command.value(), true);
             case "set_mode" -> {
                 if (Set.of("haptic", "subwoofer", "speaker", "hybrid", "multi-output", "off").contains(command.value()))
                     updateRouteConfig(t("Изменён режим выхода из GNOME", "GNOME output mode changed"),
@@ -2211,6 +2474,11 @@ public final class AppShell extends BorderPane {
             default -> { }
         }
     }
+
+    private void setGnomeOutputLevel(String value,boolean toggleMute){String[] fields=value.split("\\t",2);if(fields.length<1)return;AudioNode node=snapshot.sinks().stream().filter(sink->sink.name().equals(fields[0])).findFirst().orElse(null);if(node==null)return;if(toggleMute){boolean muted=!node.muted();backend.setMute(node.id(),muted).whenComplete((ignored,error)->{if(error==null){saveDeviceMute(node,muted);refreshBackend();}});return;}if(fields.length<2)return;try{double level=Math.max(0,Math.min(1,Double.parseDouble(fields[1])));saveDeviceVolume(node,level);refreshBackend();}catch(NumberFormatException ignored){}}
+    private void setGnomeApplicationLevel(String value,boolean toggleMute){String[] fields=value.split("\\t",2);if(fields.length<1)return;String key=fields[0];List<AudioNode> streams=snapshot.streams().stream().filter(stream->{String app=stream.applicationId()==null?"":stream.applicationId();String process=stream.processName()==null?"":stream.processName();return key.equals("app:"+app)||key.equals("process:"+process)||key.equals("stream:"+stream.name());}).toList();if(streams.isEmpty())return;double level=0;boolean muteTarget=toggleMute&&streams.stream().anyMatch(stream->!stream.muted());try{if(!toggleMute&&fields.length>1)level=Math.max(0,Math.min(1,Double.parseDouble(fields[1])));}catch(NumberFormatException ignored){return;}final double targetLevel=level;List<CompletableFuture<Void>> work=new ArrayList<>();for(AudioNode stream:streams)work.add(toggleMute?backend.setMute(stream.id(),muteTarget):backend.setVolume(stream.id(),targetLevel));CompletableFuture.allOf(work.toArray(CompletableFuture[]::new)).whenComplete((ignored,error)->{if(error==null){if(!key.startsWith("stream:"))updateConfig(config->{Map<String,Object> rule=ensureGnomeApplicationRule(config,key);if(toggleMute)rule.put("mute",muteTarget);else rule.put("volume",targetLevel);});refreshBackend();}});}
+    private void setGnomeStreamLevel(String value,boolean toggleMute){String[] fields=value.split("\\t",2);if(fields.length<1)return;int id;try{id=Integer.parseInt(fields[0]);}catch(NumberFormatException error){return;}AudioNode stream=snapshot.streams().stream().filter(node->node.id()==id).findFirst().orElse(null);if(stream==null)return;if(toggleMute){backend.setMute(id,!stream.muted()).whenComplete((ignored,error)->{if(error==null)refreshBackend();});return;}if(fields.length<2)return;try{double level=Math.max(0,Math.min(1,Double.parseDouble(fields[1])));backend.setVolume(id,level).whenComplete((ignored,error)->{if(error==null)refreshBackend();});}catch(NumberFormatException ignored){}}
+    private Map<String,Object> ensureGnomeApplicationRule(Map<String,Object> config,String groupId){String field,value;if(groupId.startsWith("app:")){field="app_id";value=groupId.substring(4);}else if(groupId.startsWith("process:")){field="process";value=groupId.substring(8);}else throw new IllegalArgumentException("A transient stream cannot be saved as an application group");List<Map<String,Object>> applications=maps(config.get("applications"));Map<String,Object> existing=applications.stream().filter(rule->value.equals(map(rule.get("match")).get(field))).findFirst().orElse(null);if(existing!=null)return existing;Map<String,Object> rule=DefaultConfigMap.map("id","gnome-"+slug(value),"match",DefaultConfigMap.map(field,value),"volume",1.0,"mute",false,"bus","main","preferred_output","system_default");applications.add(rule);return rule;}
 
     private void setGnomeChannelMap(String value) {
         String[] fields = value.split("\\t", 2);
@@ -2371,17 +2639,20 @@ public final class AppShell extends BorderPane {
     }
 
     private Map<String, Object> runtimeDspConfig(Map<String, Object> config, PipeWireBackend.Snapshot current) {
-        if (!dspReferenceMode) return config;
+        Map<String,Object> graphConfig=runtimeGraphConfig(config);
+        if (!dspReferenceMode) return graphConfig;
         double matchDb;
-        try { matchDb = Math.max(0, routeManager.maximumEqBoostDb(config, current, selectedSink)); }
+        try { matchDb = Math.max(0, routeManager.maximumEqBoostDb(graphConfig, current, selectedSink)); }
         catch (Exception error) { throw new java.util.concurrent.CompletionException(error); }
-        return DspComparisonConfig.reference(config, matchDb);
+        return DspComparisonConfig.reference(graphConfig, matchDb);
     }
+
+    private Map<String,Object> runtimeGraphConfig(Map<String,Object> config){String active=string(config.get("active_route"),"");if(active.isBlank())return config;Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->active.equals(item.get("id"))).findFirst().orElseThrow(()->new IllegalArgumentException("Active graph route is missing: "+active));return GraphPipeWireCompiler.compile(GraphCodec.fromMap(route),config);}
 
     private String routeInputSignature(Map<String, Object> config, PipeWireBackend.Snapshot current) {
         List<String> sinks = current.sinks().stream().map(node -> node.id() + ":" + node.name()).sorted().toList();
         List<String> streams = current.streams().stream().map(node -> node.id() + ":" + node.name() + ":" + node.applicationId() + ":" + node.processName()).sorted().toList();
-        int hash = Objects.hash(config.get("active_profile"), config.get("profiles"), config.get("buses"),
+        int hash = Objects.hash(config.get("active_profile"), config.get("active_route"), config.get("route_library"), config.get("profiles"), config.get("buses"),
                 config.get("routes"), config.get("applications"), config.get("devices"), config.get("dsp"),
                 config.get("mixer"), config.get("engine"), backend.connectionGeneration(), current.connected(),
                 current.defaultSinkId(), sinks, streams);
@@ -2442,8 +2713,8 @@ public final class AppShell extends BorderPane {
                 + unresolved.stream().map(device -> device.name() + " (" + device.id() + ")").reduce((a, b) -> a + ", " + b).orElse("")
                 + ". " + t("После подтверждения можно сопоставить их с текущими устройствами или оставить offline.", "After confirming, you can map them to current devices or leave them offline.");
         confirm.setContentText(t("Профилей: ", "Profiles: ") + prepared.profileCount() + "\n" + t("Маршрутов: ", "Routes: ") + prepared.routeCount() + "\n" + t("Файлов измерений: ", "Measurement files: ") + prepared.measurementCount() + "\n\n" +
-                t("Продолжить? YAML будет заменён после проверки конфликта записи. При совпадении правил могут измениться громкость/mute устройств и потоков; если граф маршрутов сейчас применён или в архиве включено применение при запуске, маршруты могут обновиться.",
-                        "Continue? YAML will be replaced after checking for concurrent edits. Matching rules may change device/stream volume or mute; an already-applied route graph or an archive with apply-on-start may refresh routes.") + deviceNote);
+                t("Продолжить? config.json будет заменён после проверки конфликта записи. При совпадении правил могут измениться громкость/mute устройств и потоков; если граф маршрутов сейчас применён или в архиве включено применение при запуске, маршруты могут обновиться.",
+                        "Continue? config.json will be replaced after checking for concurrent edits. Matching rules may change device/stream volume or mute; an already-applied route graph or an archive with apply-on-start may refresh routes.") + deviceNote);
         confirm.showAndWait().filter(button -> button == javafx.scene.control.ButtonType.OK).ifPresentOrElse(button -> {
             if (unresolved.isEmpty()) installPreparedImport(prepared, Map.of(), List.of(), expectedRevision);
             else reviewDeviceRemapping(prepared, unresolved, expectedRevision);
@@ -2499,8 +2770,8 @@ public final class AppShell extends BorderPane {
         dialog.getDialogPane().getButtonTypes().addAll(importButton, javafx.scene.control.ButtonType.CANCEL);
         dialog.getDialogPane().setPrefWidth(720);
         VBox content = new VBox(10); content.setPadding(new Insets(8, 4, 4, 4));
-        content.getChildren().add(label(t("Выберите текущий sink/source для каждого selector. Пустой выбор сохранит устройство offline. Сопоставление меняет только YAML; применение правил описано в предыдущем подтверждении.",
-                "Choose a current sink/source for each selector. Leaving a row blank keeps it offline. Mapping changes YAML; possible live rule application was described in the previous confirmation."), "muted"));
+        content.getChildren().add(label(t("Выберите текущий sink/source для каждого selector. Пустой выбор сохранит устройство offline. Сопоставление меняет только config.json; применение правил описано в предыдущем подтверждении.",
+                "Choose a current sink/source for each selector. Leaving a row blank keeps it offline. Mapping changes config.json; possible live rule application was described in the previous confirmation."), "muted"));
         Map<String, ComboBox<ConfigArchive.DeviceTarget>> choices = new LinkedHashMap<>();
         for (ConfigArchive.ImportedDevice imported : unresolved) {
             int matches = matchingNodes(imported).size();
@@ -3387,7 +3658,7 @@ public final class AppShell extends BorderPane {
     private void saveConfig(java.util.concurrent.CompletableFuture<Void> save) {
         save.whenComplete((ignored, error) -> Platform.runLater(() -> {
             if (error != null) setNotice(t("Конфигурация не сохранена: ", "Configuration was not saved: ") + rootMessage(error), true);
-            else { setNotice(t("Изменение сохранено в YAML.", "Change saved to YAML."), false); showPage(currentPage); }
+            else { setNotice(t("Изменение сохранено в config.json.", "Change saved to config.json."), false); showPage(currentPage); }
         }));
     }
 
@@ -3459,7 +3730,7 @@ public final class AppShell extends BorderPane {
     private String pageLabel(Page page) {
         return switch (page) {
             case HOME -> t("Обзор", "Overview"); case APPLICATIONS -> t("Приложения", "Applications");
-            case DEVICES -> t("Устройства", "Devices"); case ROUTES -> t("Маршруты", "Routes");
+            case DEVICES -> t("Устройства", "Devices"); case ROUTES -> t("Маршруты", "Routes"); case GRAPH -> t("Редактор графа", "Graph editor");
             case DSP -> t("DSP", "DSP"); case CALIBRATION -> t("Калибровка", "Calibration");
             case PROFILES -> t("Профили", "Profiles"); case SETTINGS -> t("Настройки и диагностика", "Settings & diagnostics");
         };

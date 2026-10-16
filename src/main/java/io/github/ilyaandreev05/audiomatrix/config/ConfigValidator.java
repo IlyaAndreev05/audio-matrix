@@ -6,13 +6,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.nio.file.Path;
+import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphValidator;
 
 public final class ConfigValidator {
     private ConfigValidator() {}
 
     public static List<String> validate(Map<String, Object> config) {
         List<String> errors = new ArrayList<>();
-        if (number(config.get("schema_version"), -1) != 1) errors.add("schema_version must be 1");
+        if (number(config.get("schema_version"), -1) != 2) errors.add("schema_version must be 2");
         if (!"audio-matrix".equals(config.get("app"))) errors.add("app must be audio-matrix");
         required(config, "active_profile", String.class, errors);
         Map<String, Object> ui = object(config.get("ui"), "ui", errors);
@@ -249,7 +253,45 @@ public final class ConfigValidator {
                 if (!routeIds.contains(routeId)) errors.add("profiles[" + i + "] references missing route " + routeId);
         }
         validateCalibrations(calibrations, errors);
+        validateGraphLibrary(config, errors);
         return errors;
+    }
+
+    private static void validateGraphLibrary(Map<String,Object> config,List<String> errors) {
+        List<Map<String,Object>> groups=optionalList(config.get("route_groups"),"route_groups",errors);
+        List<Map<String,Object>> routes=optionalList(config.get("route_library"),"route_library",errors);
+        List<Map<String,Object>> copies=optionalList(config.get("saved_copies"),"saved_copies",errors);
+        List<Map<String,Object>> controls=optionalList(config.get("quick_controls"),"quick_controls",errors);
+        checkUniqueIds(groups,"route_groups",errors);checkUniqueIds(routes,"route_library",errors);checkUniqueIds(copies,"saved_copies",errors);checkUniqueIds(controls,"quick_controls",errors);
+        Set<String> groupIds=ids(groups),routeIds=ids(routes);String active=String.valueOf(config.getOrDefault("active_route",""));
+        if(!active.isBlank()&&!routeIds.contains(active))errors.add("active_route does not reference a saved route");
+        Map<String,AudioGraph> graphs=new java.util.LinkedHashMap<>();
+        for(int i=0;i<routes.size();i++){
+            Map<String,Object> route=routes.get(i);if(!(route.get("name") instanceof String name)||name.isBlank())errors.add("route_library["+i+"].name must not be blank");
+            Object group=route.get("group_id");if(group!=null&&!String.valueOf(group).isBlank()&&!groupIds.contains(String.valueOf(group)))errors.add("route_library["+i+"].group_id must reference a route group");
+            try{AudioGraph graph=GraphCodec.fromMap(route);for(String problem:GraphValidator.validate(graph))errors.add("route_library["+i+"]: "+problem);graphs.put(graph.id(),graph);}
+            catch(RuntimeException invalid){errors.add("route_library["+i+"] is invalid: "+invalid.getMessage());}
+        }
+        for(int i=0;i<groups.size();i++)if(!(groups.get(i).get("name") instanceof String name)||name.isBlank())errors.add("route_groups["+i+"].name must not be blank");
+        for(int i=0;i<copies.size();i++){
+            Map<String,Object> copy=copies.get(i);if(!Boolean.FALSE.equals(copy.get("active")))errors.add("saved_copies["+i+"] must remain inactive");
+            if(!(copy.get("route") instanceof Map<?,?> raw)){errors.add("saved_copies["+i+"].route must contain a route snapshot");continue;}
+            Map<String,Object> route=new java.util.LinkedHashMap<>();raw.forEach((key,value)->route.put(String.valueOf(key),value));
+            try{AudioGraph graph=GraphCodec.fromMap(route);for(String problem:GraphValidator.validate(graph))errors.add("saved_copies["+i+"]: "+problem);}
+            catch(RuntimeException invalid){errors.add("saved_copies["+i+"] is invalid: "+invalid.getMessage());}
+        }
+        for(int i=0;i<controls.size();i++){
+            Map<String,Object> control=controls.get(i);String routeId=String.valueOf(control.getOrDefault("route_id",active));AudioGraph graph=graphs.get(routeId);
+            if(graph==null){errors.add("quick_controls["+i+"] references a missing route");continue;}
+            String nodeId=String.valueOf(control.getOrDefault("node_id","")),parameter=String.valueOf(control.getOrDefault("parameter_id",""));
+            GraphNode node=graph.nodes().stream().filter(item->item.id().equals(nodeId)).findFirst().orElse(null);
+            if(node==null||!node.parameters().containsKey(parameter))errors.add("quick_controls["+i+"] references an unavailable node parameter");
+        }
+    }
+
+    private static List<Map<String,Object>> optionalList(Object value,String path,List<String> errors){
+        if(value==null)return new ArrayList<>();if(!(value instanceof List<?> list)){errors.add(path+" must be an array");return new ArrayList<>();}
+        List<Map<String,Object>> result=new ArrayList<>();for(int i=0;i<list.size();i++)if(list.get(i) instanceof Map<?,?> map){Map<String,Object>item=new java.util.LinkedHashMap<>();map.forEach((key,entry)->item.put(String.valueOf(key),entry));result.add(item);}else errors.add(path+"["+i+"] must be an object");return result;
     }
 
     private static void validateRouteChainReference(Object ref, Map<String, Object> routeChains, String path, List<String> errors) {

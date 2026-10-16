@@ -5,7 +5,7 @@
   "type": "object",
   "required": ["schema_version", "app", "active_profile", "ui", "mixer", "engine", "devices", "applications", "buses", "routes", "dsp", "profiles", "calibrations"],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "app": {"const": "audio-matrix"},
     "active_profile": {"type": "string", "minLength": 1},
     "ui": {"$ref": "#/$defs/ui"},
@@ -19,6 +19,11 @@
     "dsp": {"type": "object", "properties": {"order": {"type": "array", "items": {"type": "string"}}, "global_eq": {"$ref": "#/$defs/eq"}, "devices": {"type": "object", "additionalProperties": {"$ref": "#/$defs/eq"}}, "route_chains": {"type": "object", "additionalProperties": {"$ref": "#/$defs/eq"}}, "limiter": {"type": "object", "required": ["enabled", "ceiling_db", "lookahead_ms", "release_ms"], "properties": {"enabled": {"type": "boolean"}, "ceiling_db": {"type": "number", "minimum": -12, "maximum": 0}, "lookahead_ms": {"type": "number", "minimum": 1, "maximum": 10}, "release_ms": {"type": "number", "minimum": 5, "maximum": 500}}, "additionalProperties": false}}, "additionalProperties": true},
     "profiles": {"type": "array", "items": {"$ref": "#/$defs/profile"}},
     "calibrations": {"type": "array", "items": {"$ref": "#/$defs/calibration"}},
+    "active_route": {"type": "string"},
+    "route_groups": {"type": "array", "items": {"type": "object", "required": ["id", "name"], "properties": {"id": {"type": "string"}, "name": {"type": "string", "minLength": 1}}, "additionalProperties": false}},
+    "route_library": {"type": "array", "items": {"type": "object", "required": ["id", "name", "nodes", "connections"], "properties": {"id": {"type": "string"}, "name": {"type": "string", "minLength": 1}, "group_id": {"type": "string"}, "nodes": {"type": "array", "items": {"type": "object"}}, "connections": {"type": "array", "items": {"type": "object"}}}, "additionalProperties": true}},
+    "saved_copies": {"type": "array", "items": {"type": "object", "required": ["id", "name", "route", "active"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "route": {"type": "object"}, "active": {"const": false}}, "additionalProperties": false}},
+    "quick_controls": {"type": "array", "items": {"type": "object", "required": ["id", "node_id", "parameter_id"], "properties": {"id": {"type": "string"}, "route_id": {"type": "string"}, "node_id": {"type": "string"}, "parameter_id": {"type": "string"}, "label": {"type": "string"}, "section": {"type": "string"}, "order": {"type": "integer"}}, "additionalProperties": false}},
     "export": {"type": "object", "additionalProperties": true}
   },
   "$defs": {

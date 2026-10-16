@@ -38,12 +38,21 @@ public final class GnomeControlBridge implements AutoCloseable {
     public void publishState(PipeWireBackend.Snapshot snapshot,Map<String,Object> config){
         Map<String,Object> profile=activeProfile(config);String configured=String.valueOf(profile.getOrDefault("default_output","system_default"));
         int defaultId=snapshot.defaultSinkId();List<Map<String,Object>> outputs=new ArrayList<>();
-        for(AudioNode sink:snapshot.sinks())outputs.add(Map.of("name",sink.name(),"description",sink.description(),"channels",sink.channels(),"default",sink.id()==defaultId,"muted",sink.muted()));
+        for(AudioNode sink:snapshot.sinks()){Map<String,Object> output=new LinkedHashMap<>();output.put("name",sink.name());output.put("description",sink.description());output.put("channels",sink.channels());output.put("default",sink.id()==defaultId);output.put("muted",sink.muted());output.put("volume",Double.isFinite(sink.volume())?Math.max(0,Math.min(1,sink.volume())):0);outputs.add(output);}
         List<Map<String,Object>> devices=maps(config.get("devices"));
         AudioNode active=DeviceSelectorMatcher.resolve(snapshot.sinks(),configured,devices);if(active==null)active=snapshot.sinks().stream().filter(n->n.id()==defaultId).findFirst().orElse(null);
-        Map<String,Object> state=new LinkedHashMap<>();state.put("connected",snapshot.connected());state.put("language",language(config));state.put("outputs",outputs);state.put("selectedOutput",active==null?"system_default":active.name());state.put("muted",active!=null&&active.muted());state.put("mode",profile.getOrDefault("mode","off"));state.put("profile",profile.getOrDefault("name",""));state.put("channelRoutes",channelRoutes(snapshot,config,profile,active,defaultId,devices));
+        Map<String,Object> state=new LinkedHashMap<>();state.put("connected",snapshot.connected());state.put("language",language(config));state.put("outputs",outputs);state.put("selectedOutput",active==null?"system_default":active.name());state.put("muted",active!=null&&active.muted());state.put("mode",profile.getOrDefault("mode","off"));state.put("profile",profile.getOrDefault("name",""));state.put("activeRoute",activeRouteName(config));state.put("channelRoutes",channelRoutes(snapshot,config,profile,active,defaultId,devices));
+        Map<String,Map<String,Object>> groups=new LinkedHashMap<>();
+        for(AudioNode stream:snapshot.streams()){
+            String appId=stream.applicationId()==null?"":stream.applicationId();String process=stream.processName()==null?"":stream.processName();
+            String key=!appId.isBlank()?"app:"+appId:!process.isBlank()?"process:"+process:"stream:"+stream.name();
+            Map<String,Object> group=groups.computeIfAbsent(key,ignored->{Map<String,Object> created=new LinkedHashMap<>();created.put("id",key);created.put("name",stream.applicationName().isBlank()?stream.description():stream.applicationName());created.put("application_id",appId);created.put("process",process);created.put("streams",new ArrayList<Map<String,Object>>());created.put("volume",Double.isFinite(stream.volume())?Math.max(0,Math.min(1,stream.volume())):0);created.put("muted",stream.muted());return created;});
+            @SuppressWarnings("unchecked") List<Map<String,Object>> children=(List<Map<String,Object>>)group.get("streams");Map<String,Object> child=new LinkedHashMap<>();child.put("id",stream.id());child.put("name",stream.name());child.put("description",stream.description());child.put("volume",Double.isFinite(stream.volume())?Math.max(0,Math.min(1,stream.volume())):0);child.put("muted",stream.muted());children.add(child);
+        }
+        state.put("applications",List.copyOf(groups.values()));
         try{String payload=json.writeValueAsString(state);if(payload.equals(lastState))return;lastState=payload;emitter.execute(()->emit("State",payload));}catch(Exception ignored){}
     }
+    private static String activeRouteName(Map<String,Object> config){String id=String.valueOf(config.getOrDefault("active_route",""));if(id.isBlank())return "";for(Map<String,Object> route:maps(config.get("route_library")))if(id.equals(route.get("id")))return String.valueOf(route.getOrDefault("name",id));return id;}
     private void reemitLatestState(){String payload=lastState;if(!closed.get()&&!payload.isBlank())emit("State",payload);}
     static List<Map<String,Object>> channelRoutes(PipeWireBackend.Snapshot snapshot,Map<String,Object> config,Map<String,Object> profile,AudioNode selected,int defaultId,List<Map<String,Object>> devices){
         if(selected==null)return List.of();

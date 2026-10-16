@@ -27,7 +27,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
-/** Portable backup for Audio Matrix YAML, profiles, routes, and referenced calibration files. */
+/** Portable backup for Audio Matrix JSON configs, routes, and referenced calibration files. */
 public final class ConfigArchive {
     private static final int MAX_ENTRIES = 512;
     private static final long MAX_BYTES = 512L * 1024 * 1024;
@@ -42,15 +42,16 @@ public final class ConfigArchive {
         List<String> errors = ConfigValidator.validate(config);
         if (!errors.isEmpty()) throw new ArchiveException("Configuration is invalid: " + String.join("; ", errors));
         Path root = dataDirectory.toAbsolutePath().normalize();
-        byte[] yaml = YAML.writeValueAsBytes(config);
+        byte[] document = JSON.writerWithDefaultPrettyPrinter().writeValueAsBytes(config);
         TreeMap<String, Path> assets = measurementFiles(config, root);
-        TreeMap<String, String> hashes = new TreeMap<>(); hashes.put("config.yaml", sha256(yaml));
+        TreeMap<String, String> hashes = new TreeMap<>(); hashes.put("config.json", sha256(document));
         for (var asset : assets.entrySet()) hashes.put("data/" + asset.getKey(), sha256(asset.getValue()));
         Map<String, Object> manifest = new LinkedHashMap<>();
         manifest.put("format", ArchiveManifestMigrator.FORMAT);
         manifest.put("version", ArchiveManifestMigrator.CURRENT_VERSION);
         manifest.put("app", ArchiveManifestMigrator.APP);
         manifest.put("config_schema_version", integer(config.get("schema_version"), -1));
+        manifest.put("config_entry", "config.json");
         manifest.put("kind", "full");
         manifest.put("files", hashes);
         byte[] manifestBytes = JSON.writerWithDefaultPrettyPrinter().writeValueAsBytes(manifest);
@@ -58,7 +59,7 @@ public final class ConfigArchive {
         Path temp = Files.createTempFile(target.getParent(), ".audio-matrix-archive-", ".tmp");
         try {
             try (OutputStream out = Files.newOutputStream(temp); ZipOutputStream zip = new ZipOutputStream(out)) {
-                put(zip, "manifest.json", manifestBytes); put(zip, "config.yaml", yaml);
+                put(zip, "manifest.json", manifestBytes); put(zip, "config.json", document);
                 for (var asset : assets.entrySet()) put(zip, "data/" + asset.getKey(), asset.getValue());
             }
             try { Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
@@ -86,8 +87,11 @@ public final class ConfigArchive {
                     extracted.put(name, output); zip.closeEntry();
                 }
             }
-            if (!extracted.containsKey("manifest.json") || !extracted.containsKey("config.yaml")) throw new ArchiveException("Archive must contain manifest.json and config.yaml");
+            if (!extracted.containsKey("manifest.json")) throw new ArchiveException("Archive must contain manifest.json");
             Map<String, Object> manifest = JSON.readValue(Files.readAllBytes(extracted.get("manifest.json")), MAP_TYPE);
+            int archiveVersion=integer(manifest.get("version"),-1);
+            String configEntry=archiveVersion>=3?String.valueOf(manifest.getOrDefault("config_entry","config.json")):"config.yaml";
+            if(!List.of("config.json","config.yaml").contains(configEntry)||!extracted.containsKey(configEntry))throw new ArchiveException("Archive is missing its declared config document");
             if (!(manifest.get("files") instanceof Map<?, ?> fileTable)) throw new ArchiveException("Manifest has no file checksums");
             TreeMap<String, String> hashes = new TreeMap<>();
             for (var item : fileTable.entrySet()) {
@@ -97,9 +101,13 @@ public final class ConfigArchive {
             java.util.Set<String> actual = new java.util.TreeSet<>(extracted.keySet()); actual.remove("manifest.json");
             if (!actual.equals(hashes.keySet())) throw new ArchiveException("Archive contents do not match manifest");
             for (var item : hashes.entrySet()) if (!item.getValue().equals(sha256(extracted.get(item.getKey())))) throw new ArchiveException("Checksum mismatch: " + item.getKey());
-            Map<String, Object> config = YAML.readValue(Files.readAllBytes(extracted.get("config.yaml")), MAP_TYPE);
-            if (config == null) throw new ArchiveException("Configuration must be a YAML mapping");
-            manifest = ArchiveManifestMigrator.migrate(manifest, integer(config.get("schema_version"), -1));
+            Map<String, Object> config = "config.json".equals(configEntry)
+                    ? JSON.readValue(Files.readAllBytes(extracted.get(configEntry)), MAP_TYPE)
+                    : YAML.readValue(Files.readAllBytes(extracted.get(configEntry)), MAP_TYPE);
+            if (config == null) throw new ArchiveException("Configuration must be a JSON or YAML mapping");
+            int sourceSchema=integer(config.get("schema_version"),-1);
+            manifest = ArchiveManifestMigrator.migrate(manifest, sourceSchema);
+            if(sourceSchema<2){ConfigStore.upgradeConfig(config);manifest.put("config_schema_version",integer(config.get("schema_version"),-1));}
             List<String> errors = ConfigValidator.validate(config); if (!errors.isEmpty()) throw new ArchiveException("Imported config is invalid: " + String.join("; ", errors));
             verifyReferences(config, hashes);
             return new PreparedImport(staging, copyMap(config), hashes, count(config, "profiles"), count(config, "routes"), (int) hashes.keySet().stream().filter(s -> s.startsWith("data/")).count());
@@ -219,7 +227,7 @@ public final class ConfigArchive {
         for(Object item:calibrations)if(item instanceof Map<?,?> c)for(String field:CALIBRATION_FILE_FIELDS)if(c.get(field) instanceof String raw){String path="data/"+safeRelative(raw).toString().replace('\\','/');if(!hashes.containsKey(path))throw new ArchiveException("Archive is missing calibration file: "+raw);}
     }
     private static Path safeRelative(String raw) throws IOException { if(raw==null||raw.isBlank()||raw.contains("\\")||raw.contains(":")||raw.startsWith("/"))throw new ArchiveException("Measurement file paths must be relative");Path p=Path.of(raw).normalize();if(p.isAbsolute()||p.startsWith("..")||!p.toString().equals(raw))throw new ArchiveException("Unsafe measurement path: "+raw);return p; }
-    private static void validatePath(String raw) throws IOException {if(raw==null||raw.isBlank()||raw.contains("\\")||raw.contains(":")||raw.startsWith("/"))throw new ArchiveException("Unsafe archive path");Path p=Path.of(raw).normalize();if(p.isAbsolute()||p.startsWith("..")||!p.toString().replace('\\','/').equals(raw))throw new ArchiveException("Unsafe archive path: "+raw);if(!(raw.equals("manifest.json")||raw.equals("config.yaml")||raw.startsWith("data/")))throw new ArchiveException("Unexpected archive file: "+raw);}
+    private static void validatePath(String raw) throws IOException {if(raw==null||raw.isBlank()||raw.contains("\\")||raw.contains(":")||raw.startsWith("/"))throw new ArchiveException("Unsafe archive path");Path p=Path.of(raw).normalize();if(p.isAbsolute()||p.startsWith("..")||!p.toString().replace('\\','/').equals(raw))throw new ArchiveException("Unsafe archive path: "+raw);if(!(raw.equals("manifest.json")||raw.equals("config.yaml")||raw.equals("config.json")||raw.startsWith("data/")))throw new ArchiveException("Unexpected archive file: "+raw);}
     private static boolean regularWithoutSymlinks(Path root,Path file)throws IOException{Path current=root;for(Path part:root.relativize(file)){current=current.resolve(part);if(Files.isSymbolicLink(current))return false;}return Files.isRegularFile(file,LinkOption.NOFOLLOW_LINKS);}
     private static void ensureNoSymlinkParents(Path root,Path target)throws IOException{Path current=root;for(Path part:root.relativize(target.getParent())){current=current.resolve(part);if(Files.isSymbolicLink(current))throw new ArchiveException("Measurement path traverses a symbolic link: "+current);}}
     private static void put(ZipOutputStream zip,String path,byte[] bytes)throws IOException{zip.putNextEntry(new ZipEntry(path));zip.write(bytes);zip.closeEntry();}
