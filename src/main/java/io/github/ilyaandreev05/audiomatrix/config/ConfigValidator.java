@@ -288,6 +288,7 @@ public final class ConfigValidator {
             if(node==null||!node.parameters().containsKey(parameter))errors.add("quick_controls["+i+"] references an unavailable node parameter");
         }
         validateGraphLayouts(config,graphs,routeIds,errors);
+        validateGraphUiScales(config,routeIds,errors);
     }
 
     private static void validateGraphLayouts(Map<String,Object> config,Map<String,AudioGraph> graphs,Set<String> routeIds,List<String> errors){
@@ -304,6 +305,17 @@ public final class ConfigValidator {
                 for(String axis:List.of("x","y")){Object coordinate=point.get(axis);if(!(coordinate instanceof Number number)||!Double.isFinite(number.doubleValue())||number.doubleValue()<0||number.doubleValue()>10000)errors.add("graph_ui_layout["+routeId+"]."+nodeId+"."+axis+" must be between 0 and 10000");}
                 if(point.size()!=2)errors.add("graph_ui_layout["+routeId+"]."+nodeId+" must only contain x and y");
             }
+        }
+    }
+
+    private static void validateGraphUiScales(Map<String,Object> config,Set<String> routeIds,List<String> errors){
+        Object value=config.get("graph_ui_scale");if(value==null)return;
+        if(!(value instanceof Map<?,?> scales)){errors.add("graph_ui_scale must be an object");return;}
+        for(Map.Entry<?,?> entry:scales.entrySet()){
+            String routeId=String.valueOf(entry.getKey());Object scale=entry.getValue();
+            if(!routeIds.contains(routeId)){errors.add("graph_ui_scale references a missing route: "+routeId);continue;}
+            if(!(scale instanceof Number number)||!Double.isFinite(number.doubleValue())||number.doubleValue()<0.5||number.doubleValue()>2.0)
+                errors.add("graph_ui_scale["+routeId+"] must be between 0.5 and 2.0");
         }
     }
 

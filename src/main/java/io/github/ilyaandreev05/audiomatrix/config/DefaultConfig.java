@@ -15,6 +15,7 @@ public final class DefaultConfig {
         root.put("route_library", new ArrayList<>());
         root.put("saved_copies", new ArrayList<>());
         root.put("graph_ui_layout", map());
+        root.put("graph_ui_scale", map());
         root.put("quick_controls", new ArrayList<>());
         root.put("active_route", "");
         root.put("app", "audio-matrix");

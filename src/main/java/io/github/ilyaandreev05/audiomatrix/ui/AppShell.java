@@ -82,6 +82,7 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.shape.Line;
 import javafx.scene.shape.Circle;
+import javafx.scene.transform.Scale;
 import javafx.stage.Window;
 import javafx.util.Duration;
 import javafx.util.StringConverter;
@@ -131,6 +132,7 @@ public final class AppShell extends BorderPane {
                                              Map<String, Object> previousChain, String appliedRef,
                                              Map<String, Object> appliedChain, String outputDescription) {}
     private record RouteHistoryEntry(String description, Map<String, Object> previousSnapshot) {}
+    private record GraphPortRef(String routeId,String nodeId,String portId) {}
     private final ConfigStore store;
     private final PipeWireBackend backend;
     private final PipeWireRouteManager routeManager = new PipeWireRouteManager();
@@ -175,6 +177,7 @@ public final class AppShell extends BorderPane {
     private boolean dspReferenceMode;
     private boolean dspReferenceUpdateInProgress;
     private String selectedGraphRouteId = "";
+    private GraphPortRef pendingGraphOutput;
     private CheckBox dspReferenceToggle;
     private boolean autoApplySuppressedUntilRestart;
     private String lastRouteInputSignature = "";
@@ -678,11 +681,23 @@ public final class AppShell extends BorderPane {
 
     private VBox graphCanvasCard(AudioGraph graph){
         VBox box=card(t("Схема маршрута","Route canvas"));
-        box.getChildren().add(label(t("Перетаскивай ноды. Положение сохраняется отдельно от аудиосхемы.","Drag nodes. Positions are saved separately from the audio graph."),"muted"));
+        box.getChildren().add(label(t("Перетаскивай ноды и соединяй порты: сначала выходной, затем входной. Масштаб и положение сохраняются отдельно от аудиосхемы.","Drag nodes and connect ports: choose an output port, then an input port. Zoom and positions are saved separately from the audio graph."),"muted"));
         int tallestColumn=Math.max((int)graph.nodes().stream().filter(SourceNode.class::isInstance).count(),(int)graph.nodes().stream().filter(OutputNode.class::isInstance).count());
         tallestColumn=Math.max(tallestColumn,(int)graph.nodes().stream().filter(node->!(node instanceof SourceNode)&&!(node instanceof OutputNode)).count());
         double canvasHeight=Math.max(390,tallestColumn*112+55);
-        Pane canvas=new Pane();canvas.setMinHeight(canvasHeight);canvas.setPrefSize(940,canvasHeight);canvas.setStyle("-fx-background-color: #181a1f; -fx-background-radius: 10;");
+        double canvasWidth=1080;
+        Map<String,Object> savedScales=map(store.snapshot().get("graph_ui_scale"));double initialScale=Math.max(.5,Math.min(2,number(savedScales.get(graph.id()),1.0)));
+        HBox zoomRow=new HBox(8);zoomRow.setAlignment(Pos.CENTER_LEFT);
+        Slider zoom=new Slider(.5,2,initialScale);zoom.setPrefWidth(180);zoom.setBlockIncrement(.1);zoom.setMajorTickUnit(.25);zoom.setSnapToTicks(true);
+        Label zoomLabel=label(Math.round(initialScale*100)+"%","muted");zoom.setAccessibleText(t("Масштаб схемы маршрута","Route canvas zoom"));
+        zoomRow.getChildren().addAll(label(t("Масштаб","Zoom"),"muted"),zoom,zoomLabel);box.getChildren().add(zoomRow);
+        Pane canvas=new Pane();canvas.setMinSize(canvasWidth,canvasHeight);canvas.setPrefSize(canvasWidth,canvasHeight);canvas.setStyle("-fx-background-color: #181a1f; -fx-background-radius: 10;");
+        Scale canvasScale=new Scale(initialScale,initialScale,0,0);canvas.getTransforms().add(canvasScale);
+        Pane scaledContent=new Pane(canvas);scaledContent.setMinSize(canvasWidth*initialScale,canvasHeight*initialScale);scaledContent.setPrefSize(canvasWidth*initialScale,canvasHeight*initialScale);
+        ScrollPane viewport=new ScrollPane(scaledContent);viewport.setPannable(true);viewport.setFitToWidth(false);viewport.setFitToHeight(false);viewport.setPrefViewportWidth(980);viewport.setPrefViewportHeight(Math.min(510,canvasHeight));
+        zoom.valueProperty().addListener((obs,old,value)->{double scale=value.doubleValue();canvasScale.setX(scale);canvasScale.setY(scale);scaledContent.setMinSize(canvasWidth*scale,canvasHeight*scale);scaledContent.setPrefSize(canvasWidth*scale,canvasHeight*scale);zoomLabel.setText(Math.round(scale*100)+"%");});
+        Runnable persistScale=()->{double scale=Math.rint(zoom.getValue()*100.0)/100.0;store.updateAsync(config->{Map<String,Object>scales=map(config.get("graph_ui_scale"));config.put("graph_ui_scale",scales);scales.put(graph.id(),scale);}).whenComplete((ignored,error)->Platform.runLater(()->{if(error!=null)setNotice(t("Масштаб не сохранён: ","Zoom could not be saved: ")+rootMessage(error),true);}));};
+        zoom.setOnMouseReleased(event->persistScale.run());zoom.setOnKeyReleased(event->persistScale.run());
         Map<String,Object> allLayouts=map(store.snapshot().get("graph_ui_layout"));
         Map<String,Object> routeLayout=map(allLayouts.get(graph.id()));
         Map<String,Node> views=new LinkedHashMap<>();Map<String,Line> lines=new LinkedHashMap<>();
@@ -695,30 +710,48 @@ public final class AppShell extends BorderPane {
         for(GraphNode node:graph.nodes()){
             double defaultX,defaultY;
             if(node instanceof SourceNode){defaultX=25;defaultY=25+sourceIndex++*112;}
-            else if(node instanceof OutputNode){defaultX=700;defaultY=25+outputIndex++*112;}
+            else if(node instanceof OutputNode){defaultX=810;defaultY=25+outputIndex++*112;}
             else{defaultX=360;defaultY=25+processIndex++*95;}
             Map<String,Object> saved=map(routeLayout.get(node.id()));double x=number(saved.get("x"),defaultX),y=number(saved.get("y"),defaultY);
-            VBox card=new VBox(5);card.setPrefWidth(205);card.setMinHeight(72);card.setLayoutX(x);card.setLayoutY(y);card.setStyle("-fx-background-color: #292d35; -fx-border-color: #656b77; -fx-border-radius: 8; -fx-background-radius: 8; -fx-padding: 9;");
-            Label title=label(node.name(),"card-title");title.setWrapText(true);title.setMaxWidth(180);
+            VBox card=new VBox(5);card.setPrefWidth(250);card.setMinHeight(82);card.setLayoutX(x);card.setLayoutY(y);card.setStyle("-fx-background-color: #292d35; -fx-border-color: #656b77; -fx-border-radius: 8; -fx-background-radius: 8; -fx-padding: 8;");
+            Label title=label(node.name(),"card-title");title.setWrapText(true);title.setMaxWidth(160);
             Label type=label(node.type(),"muted");
-            Label ports=label(t("Входы: ","In: ")+node.inputs().stream().map(AudioPort::id).reduce((a,b)->a+", "+b).orElse("—")+"    "+t("Выходы: ","Out: ")+node.outputs().stream().map(AudioPort::id).reduce((a,b)->a+", "+b).orElse("—"),"muted");ports.setWrapText(true);ports.setMaxWidth(185);
-            card.getChildren().addAll(title,type,ports);views.put(node.id(),card);initial.put(node.id(),new double[]{x,y});canvas.getChildren().add(card);
+            VBox inputButtons=new VBox(2),outputButtons=new VBox(2);inputButtons.setAlignment(Pos.CENTER_LEFT);outputButtons.setAlignment(Pos.CENTER_RIGHT);
+            for(AudioPort port:node.inputs()){Button button=graphPortButton("◉ "+port.id());button.setAccessibleText(t("Входной порт ","Input port ")+node.name()+" · "+port.id());button.setOnAction(event->selectGraphPort(graph.id(),node.id(),port));inputButtons.getChildren().add(button);}
+            for(AudioPort port:node.outputs()){Button button=graphPortButton(port.id()+" ◉");button.setAccessibleText(t("Выходной порт ","Output port ")+node.name()+" · "+port.id());button.setOnAction(event->selectGraphPort(graph.id(),node.id(),port));outputButtons.getChildren().add(button);}
+            VBox description=new VBox(3,title,type);HBox portRow=new HBox(4,inputButtons,description,outputButtons);HBox.setHgrow(description,Priority.ALWAYS);
+            card.getChildren().add(portRow);views.put(node.id(),card);initial.put(node.id(),new double[]{x,y});canvas.getChildren().add(card);
         }
         Runnable refreshLines=()->{
             for(GraphConnection edge:graph.connections()){
                 Node from=views.get(edge.fromNode()),to=views.get(edge.toNode());Line line=lines.get(edge.id());if(from==null||to==null||line==null)continue;
                 GraphNode source=nodes.get(edge.fromNode()),target=nodes.get(edge.toNode());int fromPort=Math.max(0,source.outputs().stream().map(AudioPort::id).toList().indexOf(edge.fromPort()));int toPort=Math.max(0,target.inputs().stream().map(AudioPort::id).toList().indexOf(edge.toPort()));
-                line.setStartX(from.getLayoutX()+from.getBoundsInLocal().getWidth());line.setStartY(from.getLayoutY()+24+fromPort*15);line.setEndX(to.getLayoutX());line.setEndY(to.getLayoutY()+24+toPort*15);
+                line.setStartX(from.getLayoutX()+from.getBoundsInLocal().getWidth());line.setStartY(from.getLayoutY()+28+fromPort*22);line.setEndX(to.getLayoutX());line.setEndY(to.getLayoutY()+28+toPort*22);
             }
         };
         refreshLines.run();
         for(GraphNode node:graph.nodes()){
             Node view=views.get(node.id());double[] start=initial.get(node.id());double[] pointer=new double[2];boolean[] moved={false};
-            view.setOnMousePressed(event->{pointer[0]=event.getSceneX();pointer[1]=event.getSceneY();start[0]=view.getLayoutX();start[1]=view.getLayoutY();moved[0]=false;event.consume();});
-            view.setOnMouseDragged(event->{double x=Math.max(0,Math.min(730,start[0]+event.getSceneX()-pointer[0]));double y=Math.max(0,Math.min(canvasHeight-85,start[1]+event.getSceneY()-pointer[1]));view.setLayoutX(x);view.setLayoutY(y);moved[0]=true;refreshLines.run();event.consume();});
-            view.setOnMouseReleased(event->{if(moved[0])saveGraphNodePosition(graph.id(),node.id(),view.getLayoutX(),view.getLayoutY());});
+            view.setOnMousePressed(event->{if(isButtonTarget(event.getTarget(),view))return;pointer[0]=event.getSceneX();pointer[1]=event.getSceneY();start[0]=view.getLayoutX();start[1]=view.getLayoutY();moved[0]=false;event.consume();});
+            view.setOnMouseDragged(event->{if(isButtonTarget(event.getTarget(),view))return;double scale=Math.max(.5,zoom.getValue());double x=Math.max(0,Math.min(canvasWidth-260,start[0]+(event.getSceneX()-pointer[0])/scale));double y=Math.max(0,Math.min(canvasHeight-90,start[1]+(event.getSceneY()-pointer[1])/scale));view.setLayoutX(x);view.setLayoutY(y);moved[0]=true;refreshLines.run();event.consume();});
+            view.setOnMouseReleased(event->{if(!isButtonTarget(event.getTarget(),view)&&moved[0])saveGraphNodePosition(graph.id(),node.id(),view.getLayoutX(),view.getLayoutY());});
         }
-        box.getChildren().add(canvas);return box;
+        box.getChildren().add(viewport);return box;
+    }
+
+    private Button graphPortButton(String text){Button button=new Button(text);button.setFocusTraversable(true);button.setStyle("-fx-font-size: 10px; -fx-padding: 2 5 2 5; -fx-background-color: #20242b; -fx-border-color: #37b5a5; -fx-border-radius: 8; -fx-background-radius: 8;");return button;}
+
+    private static boolean isButtonTarget(Object target,Node root){Node current=target instanceof Node node?node:null;while(current!=null&&current!=root){if(current instanceof Button)return true;current=current.getParent();}return false;}
+
+    private void selectGraphPort(String routeId,String nodeId,AudioPort port){
+        if(port.direction()==AudioPort.Direction.OUTPUT){pendingGraphOutput=new GraphPortRef(routeId,nodeId,port.id());setNotice(t("Выбран выход ","Selected output ")+port.id()+t(". Теперь выбери входной порт.",". Choose an input port next."),false);return;}
+        GraphPortRef source=pendingGraphOutput;if(source==null||!source.routeId().equals(routeId)){setNotice(t("Сначала выбери выходной порт.","Choose an output port first."),true);return;}
+        pendingGraphOutput=null;if(source.nodeId().equals(nodeId)){setNotice(t("Нода не может соединяться сама с собой.","A node cannot connect to itself."),true);return;}
+        addGraphPortConnection(routeId,source,nodeId,port.id());
+    }
+
+    private void addGraphPortConnection(String routeId,GraphPortRef source,String targetNode,String targetPort){
+        updateRouteConfig(t("Соединить порты графа","Connect graph ports"),config->{Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->routeId.equals(item.get("id"))).findFirst().orElseThrow(()->new IllegalArgumentException("Route no longer exists"));AudioGraph old=GraphCodec.fromMap(route);boolean duplicate=old.connections().stream().anyMatch(edge->edge.fromNode().equals(source.nodeId())&&edge.fromPort().equals(source.portId())&&edge.toNode().equals(targetNode)&&edge.toPort().equals(targetPort));if(duplicate)return;List<GraphConnection> edges=new ArrayList<>(old.connections());edges.add(new GraphConnection("link-"+UUID.randomUUID(),source.nodeId(),source.portId(),targetNode,targetPort,true,1));AudioGraph candidate=new AudioGraph(old.id(),old.name(),old.nodes(),edges);List<String>problems=GraphValidator.validate(candidate);if(!problems.isEmpty())throw new IllegalArgumentException(String.join("; ",problems));GraphRouteLibrary.saveRoute(config,candidate,string(route.get("group_id"),""));});
     }
 
     private void saveGraphNodePosition(String routeId,String nodeId,double x,double y){
@@ -793,6 +826,21 @@ public final class AppShell extends BorderPane {
         for(GraphNode node:graph.nodes()){
             HBox row=new HBox(12);row.setAlignment(Pos.CENTER_LEFT);row.getChildren().add(label(node.name()+" · "+node.type(),"card-title"));
             if(node instanceof GainNode gain){Slider level=new Slider(0,1,gain.gain());level.setPrefWidth(180);Label value=label(volumeLabel(gain.gain()),"muted");level.valueProperty().addListener((o,a,v)->value.setText(volumeLabel(v.doubleValue())));level.setOnMouseReleased(e->updateGraphNodeParameters(graph.id(),node.id(),parameters->parameters.put("gain",Math.round(level.getValue()*1000)/1000.0)));level.setOnKeyReleased(e->updateGraphNodeParameters(graph.id(),node.id(),parameters->parameters.put("gain",Math.round(level.getValue()*1000)/1000.0)));CheckBox mute=new CheckBox(t("Mute","Mute"));mute.setSelected(gain.muted());mute.setOnAction(e->updateGraphNodeParameters(graph.id(),node.id(),parameters->parameters.put("muted",mute.isSelected())));row.getChildren().addAll(level,value,mute);}
+            else if(node instanceof OutputNode output){
+                ComboBox<String> channelTarget=new ComboBox<>();channelTarget.getItems().setAll(
+                        t("Передние каналы FL/FR","Front channels FL/FR"),
+                        t("Тыловые каналы RL/RR · нужен профиль 4.0","Rear channels RL/RR · requires 4.0 profile"));
+                channelTarget.setAccessibleText(t("Каналы физического выхода","Physical output channels"));
+                channelTarget.setValue(output.channelMatrix()!=null&&output.channelMatrix().outputs().equals(List.of("RL","RR"))
+                        ?channelTarget.getItems().get(1):channelTarget.getItems().getFirst());
+                channelTarget.setOnAction(event->{boolean rear=channelTarget.getSelectionModel().getSelectedIndex()==1;
+                    updateGraphNodeParameters(graph.id(),node.id(),parameters->{
+                        if(rear){ChannelMatrix matrix=new ChannelMatrix(List.of("FL","FR"),List.of("RL","RR"),List.of(List.of(1.0,0.0),List.of(0.0,1.0)));parameters.put("channel_matrix",matrix.toMap());}
+                        else parameters.remove("channel_matrix");
+                    });
+                });
+                row.getChildren().add(channelTarget);
+            }
             else if(node instanceof GateNode gate){CheckBox open=new CheckBox(t("Gate открыт","Gate open"));open.setSelected(gate.open());open.setOnAction(e->updateGraphNodeParameters(graph.id(),node.id(),parameters->parameters.put("open",open.isSelected())));row.getChildren().add(open);}
             else if(node instanceof FilterNode filter){CheckBox bypass=new CheckBox(filter.processor()+t(" · включён"," · enabled"));bypass.setSelected(filter.enabled());bypass.setOnAction(e->updateGraphNodeParameters(graph.id(),node.id(),parameters->parameters.put("enabled",bypass.isSelected())));row.getChildren().add(bypass);}
             else if(node instanceof RouterNode router){
