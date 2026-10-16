@@ -27,7 +27,13 @@ XDG_DATA_HOME="$scratch/data" gjs -m "$scratch/check-desktop-app-info.mjs"
 extension_source="$repo_root/gnome/audio-matrix-quick-settings/extension.js"
 rg -q "import GioUnix from 'gi://GioUnix';" "$extension_source"
 rg -q 'GioUnix\.DesktopAppInfo\.new' "$extension_source"
+if rg -q 'addExternalIndicator|QuickMenuToggle|SystemIndicator' "$extension_source"; then
+    echo 'Audio Matrix must extend the standard volume menu without creating a separate tile' >&2
+    exit 1
+fi
+rg -q '_volumeOutput' "$extension_source"
+rg -q 'PopupSliderMenuItem' "$extension_source"
 node --check "$extension_source"
 gnome-extensions pack "$repo_root/gnome/audio-matrix-quick-settings" --force --out-dir "$scratch"
 unzip -t "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip"
-unzip -p "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" metadata.json | rg '"version": 3'
+unzip -p "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" metadata.json | rg '"version": 5'

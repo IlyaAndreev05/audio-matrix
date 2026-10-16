@@ -1,7 +1,7 @@
 {
   "uuid": "audio-matrix-quick-settings@ilyaandreev05",
   "name": "Audio Matrix Quick Settings",
-  "description": "Select an output, profile mode and active route channel map, control mute, or open Audio Matrix.",
-  "version": 3,
+  "description": "Adds per-application and output controls to GNOME's standard volume menu.",
+  "version": 5,
   "shell-version": ["50"]
 }
