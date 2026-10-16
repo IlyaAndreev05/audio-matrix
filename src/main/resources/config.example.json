@@ -3,6 +3,7 @@
   "route_groups" : [ ],
   "route_library" : [ ],
   "saved_copies" : [ ],
+  "graph_ui_layout" : { },
   "quick_controls" : [ ],
   "active_route" : "",
   "app" : "audio-matrix",

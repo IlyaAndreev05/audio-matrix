@@ -4,6 +4,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.ilyaandreev05.audiomatrix.audio.AudioNode;
 import io.github.ilyaandreev05.audiomatrix.audio.DeviceSelectorMatcher;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
+import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
+import io.github.ilyaandreev05.audiomatrix.graph.RouterNode;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -41,7 +45,7 @@ public final class GnomeControlBridge implements AutoCloseable {
         for(AudioNode sink:snapshot.sinks()){Map<String,Object> output=new LinkedHashMap<>();output.put("name",sink.name());output.put("description",sink.description());output.put("channels",sink.channels());output.put("default",sink.id()==defaultId);output.put("muted",sink.muted());output.put("volume",Double.isFinite(sink.volume())?Math.max(0,Math.min(1,sink.volume())):0);outputs.add(output);}
         List<Map<String,Object>> devices=maps(config.get("devices"));
         AudioNode active=DeviceSelectorMatcher.resolve(snapshot.sinks(),configured,devices);if(active==null)active=snapshot.sinks().stream().filter(n->n.id()==defaultId).findFirst().orElse(null);
-        Map<String,Object> state=new LinkedHashMap<>();state.put("connected",snapshot.connected());state.put("language",language(config));state.put("outputs",outputs);state.put("selectedOutput",active==null?"system_default":active.name());state.put("muted",active!=null&&active.muted());state.put("mode",profile.getOrDefault("mode","off"));state.put("profile",profile.getOrDefault("name",""));state.put("activeRoute",activeRouteName(config));state.put("channelRoutes",channelRoutes(snapshot,config,profile,active,defaultId,devices));
+        Map<String,Object> state=new LinkedHashMap<>();state.put("apiVersion",1);state.put("connected",snapshot.connected());state.put("language",language(config));state.put("outputs",outputs);state.put("selectedOutput",active==null?"system_default":active.name());state.put("muted",active!=null&&active.muted());state.put("mode",profile.getOrDefault("mode","off"));state.put("profile",profile.getOrDefault("name",""));state.put("activeRoute",activeRouteName(config));state.put("quickControls",quickControls(config));state.put("channelRoutes",channelRoutes(snapshot,config,profile,active,defaultId,devices));
         Map<String,Map<String,Object>> groups=new LinkedHashMap<>();
         for(AudioNode stream:snapshot.streams()){
             String appId=stream.applicationId()==null?"":stream.applicationId();String process=stream.processName()==null?"":stream.processName();
@@ -53,6 +57,21 @@ public final class GnomeControlBridge implements AutoCloseable {
         try{String payload=json.writeValueAsString(state);if(payload.equals(lastState))return;lastState=payload;emitter.execute(()->emit("State",payload));}catch(Exception ignored){}
     }
     private static String activeRouteName(Map<String,Object> config){String id=String.valueOf(config.getOrDefault("active_route",""));if(id.isBlank())return "";for(Map<String,Object> route:maps(config.get("route_library")))if(id.equals(route.get("id")))return String.valueOf(route.getOrDefault("name",id));return id;}
+    static List<Map<String,Object>> quickControls(Map<String,Object> config){
+        String active=String.valueOf(config.getOrDefault("active_route",""));if(active.isBlank())return List.of();
+        Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->active.equals(item.get("id"))).findFirst().orElse(null);if(route==null)return List.of();
+        AudioGraph graph;try{graph=GraphCodec.fromMap(route);}catch(RuntimeException invalid){return List.of();}
+        List<Map<String,Object>> result=new ArrayList<>();
+        for(Map<String,Object> control:maps(config.get("quick_controls"))){if(!active.equals(String.valueOf(control.getOrDefault("route_id",active))))continue;
+            String nodeId=String.valueOf(control.getOrDefault("node_id","")),parameter=String.valueOf(control.getOrDefault("parameter_id",""));GraphNode node=graph.nodes().stream().filter(candidate->candidate.id().equals(nodeId)).findFirst().orElse(null);if(node==null)continue;
+            String kind=controlKind(node.type(),parameter);if(kind.isBlank())continue;Object value=node.parameters().get(parameter);if(value==null)continue;
+            Map<String,Object> item=new LinkedHashMap<>();item.put("id",control.get("id"));item.put("nodeId",nodeId);item.put("parameterId",parameter);item.put("label",control.getOrDefault("label",node.name()));item.put("section",control.getOrDefault("section","Audio Matrix"));item.put("order",control.getOrDefault("order",0));item.put("kind",kind);item.put("value",value);
+            if("links".equals(kind)&&node instanceof RouterNode router){List<Map<String,Object>> options=new ArrayList<>();for(var input:router.inputs())for(var output:router.outputs()){String link=input.id()+"->"+output.id();options.add(Map.of("id",link,"label",input.id()+" → "+output.id()));}item.put("options",options);item.put("multiple",router.multiple());}
+            result.add(item);
+        }
+        result.sort(java.util.Comparator.comparingInt(item->item.get("order") instanceof Number number?number.intValue():0));return List.copyOf(result);
+    }
+    static String controlKind(String nodeType,String parameter){if("gain".equals(nodeType)&&"gain".equals(parameter))return "slider";if("gain".equals(nodeType)&&"muted".equals(parameter))return "toggle";if("gate".equals(nodeType)&&"open".equals(parameter))return "toggle";if("filter".equals(nodeType)&&"enabled".equals(parameter))return "toggle";if(List.of("switch","multi_switch","selector","matrix").contains(nodeType)&&"active_links".equals(parameter))return "links";return "";}
     private void reemitLatestState(){String payload=lastState;if(!closed.get()&&!payload.isBlank())emit("State",payload);}
     static List<Map<String,Object>> channelRoutes(PipeWireBackend.Snapshot snapshot,Map<String,Object> config,Map<String,Object> profile,AudioNode selected,int defaultId,List<Map<String,Object>> devices){
         if(selected==null)return List.of();

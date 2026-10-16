@@ -15,12 +15,14 @@ const TEXT = {
         outputs: 'УСТРОЙСТВА ВЫВОДА', applications: 'ПРИЛОЖЕНИЯ', open: 'Эквалайзер и маршруты — открыть редактор',
         select: 'Сделать системным выходом', mute: 'Mute', unmute: 'Включить звук', streams: 'Потоки',
         profile: 'Профиль', route: 'Маршрут', noApplications: 'Нет активных приложений',
+        controls: 'ЗАКРЕПЛЁННЫЕ ПАРАМЕТРЫ', enabled: 'Включено', disabled: 'Выключено',
     },
     en: {
         title: 'Audio Matrix', connecting: 'Connecting to engine…', unavailable: 'Audio Matrix engine unavailable',
         outputs: 'OUTPUT DEVICES', applications: 'APPLICATIONS', open: 'EQ and routes — open editor',
         select: 'Make system output', mute: 'Mute', unmute: 'Unmute', streams: 'Streams',
         profile: 'Profile', route: 'Route', noApplications: 'No active applications',
+        controls: 'PINNED CONTROLS', enabled: 'Enabled', disabled: 'Disabled',
     },
 };
 
@@ -35,6 +37,7 @@ export default class AudioMatrixQuickSettingsExtension extends Extension {
         this._stale = false;
         this._lastPayload = '';
         this._lastStateAt = GLib.get_monotonic_time();
+        this._sliderTimers = new Map();
         this._dynamic = new PopupMenu.PopupMenuSection();
         this._signalId = Gio.DBus.session.signal_subscribe(
             null, INTERFACE, 'State', OBJECT_PATH, null, Gio.DBusSignalFlags.NONE,
@@ -96,7 +99,7 @@ export default class AudioMatrixQuickSettingsExtension extends Extension {
         const t = TEXT[this._language];
         this._dynamic.removeAll();
         this._dynamic.addMenuItem(new PopupMenu.PopupMenuItem(t.title, {reactive: false, can_focus: false}));
-        const available = Boolean(this._state?.connected && !this._stale);
+        const available = Boolean(this._state?.apiVersion === 1 && this._state?.connected && !this._stale);
         if (!available) {
             this._dynamic.addMenuItem(new PopupMenu.PopupMenuItem(this._state ? t.unavailable : t.connecting,
                 {reactive: false, can_focus: false}));
@@ -109,6 +112,27 @@ export default class AudioMatrixQuickSettingsExtension extends Extension {
         if (this._state.activeRoute)
             this._dynamic.addMenuItem(new PopupMenu.PopupMenuItem(`${t.route}: ${this._state.activeRoute}`,
                 {reactive: false, can_focus: false}));
+        const quickControls = this._state.quickControls || [];
+        if (quickControls.length > 0) {
+            this._dynamic.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+            this._addHeading(t.controls);
+            let currentSection = null;
+            for (const control of quickControls) {
+                const section = control.section || t.controls;
+                if (section !== currentSection) {
+                    currentSection = section;
+                    this._addHeading(section);
+                }
+                if (control.kind === 'slider') {
+                    this._addGraphSlider(control);
+                } else if (control.kind === 'toggle') {
+                    this._addAction(`${control.label || control.parameterId}: ${control.value ? t.enabled : t.disabled}`,
+                        () => this._send('toggle_quick_control', control.id));
+                } else if (control.kind === 'links') {
+                    this._addGraphLinks(control);
+                }
+            }
+        }
         this._addHeading(t.outputs);
         for (const output of this._state.outputs || []) {
             const name = `${output.description || output.name}${output.default ? ' · ✓' : ''}`;
@@ -174,6 +198,41 @@ export default class AudioMatrixQuickSettingsExtension extends Extension {
         this._dynamic.addMenuItem(item);
     }
 
+    _addGraphSlider(control) {
+        const id = String(control.id);
+        this._dynamic.addMenuItem(new PopupMenu.PopupMenuItem(control.label || control.parameterId,
+            {reactive: false, can_focus: false}));
+        const item = new PopupMenu.PopupSliderMenuItem(Math.max(0, Math.min(1, Number(control.value) || 0)));
+        item.connect('value-changed', (_slider, current) => {
+            if (!this._state?.connected || this._stale)
+                return;
+            const pending = this._sliderTimers.get(id);
+            if (pending)
+                GLib.Source.remove(pending);
+            const timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 140, () => {
+                this._sliderTimers.delete(id);
+                this._send('set_quick_control', `${id}\t${current.toFixed(3)}`);
+                return GLib.SOURCE_REMOVE;
+            });
+            this._sliderTimers.set(id, timer);
+        });
+        this._dynamic.addMenuItem(item);
+    }
+
+    _addGraphLinks(control) {
+        const selected = new Set(Array.isArray(control.value) ? control.value : []);
+        const options = control.options || [];
+        const submenu = new PopupMenu.PopupSubMenuMenuItem(
+            `${control.label || control.parameterId} (${selected.size}/${options.length})`, false);
+        for (const option of options) {
+            const active = selected.has(option.id);
+            const item = new PopupMenu.PopupMenuItem(`${active ? '✓' : '○'}  ${option.label || option.id}`);
+            item.connect('activate', () => this._send('set_quick_control_choice', `${control.id}\t${option.id}`));
+            submenu.menu.addMenuItem(item);
+        }
+        this._dynamic.addMenuItem(submenu);
+    }
+
     _send(name, value) {
         if (!this._state?.connected || this._stale)
             return;
@@ -215,6 +274,9 @@ export default class AudioMatrixQuickSettingsExtension extends Extension {
     }
 
     disable() {
+        for (const timer of this._sliderTimers?.values() ?? [])
+            GLib.Source.remove(timer);
+        this._sliderTimers?.clear();
         if (this._retryId)
             GLib.Source.remove(this._retryId);
         if (this._watchdogId)

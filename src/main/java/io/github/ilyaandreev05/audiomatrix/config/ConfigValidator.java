@@ -287,6 +287,24 @@ public final class ConfigValidator {
             GraphNode node=graph.nodes().stream().filter(item->item.id().equals(nodeId)).findFirst().orElse(null);
             if(node==null||!node.parameters().containsKey(parameter))errors.add("quick_controls["+i+"] references an unavailable node parameter");
         }
+        validateGraphLayouts(config,graphs,routeIds,errors);
+    }
+
+    private static void validateGraphLayouts(Map<String,Object> config,Map<String,AudioGraph> graphs,Set<String> routeIds,List<String> errors){
+        Object value=config.get("graph_ui_layout");if(value==null)return;
+        if(!(value instanceof Map<?,?> layouts)){errors.add("graph_ui_layout must be an object");return;}
+        for(Map.Entry<?,?> entry:layouts.entrySet()){
+            String routeId=String.valueOf(entry.getKey());AudioGraph graph=graphs.get(routeId);
+            if(!routeIds.contains(routeId)||graph==null){errors.add("graph_ui_layout references a missing route: "+routeId);continue;}
+            if(!(entry.getValue() instanceof Map<?,?> nodeLayouts)){errors.add("graph_ui_layout["+routeId+"] must be an object");continue;}
+            Set<String> nodeIds=graph.nodes().stream().map(GraphNode::id).collect(java.util.stream.Collectors.toSet());
+            for(Map.Entry<?,?> nodeEntry:nodeLayouts.entrySet()){
+                String nodeId=String.valueOf(nodeEntry.getKey());if(!nodeIds.contains(nodeId)){errors.add("graph_ui_layout["+routeId+"] references a missing node: "+nodeId);continue;}
+                if(!(nodeEntry.getValue() instanceof Map<?,?> point)){errors.add("graph_ui_layout["+routeId+"]."+nodeId+" must be an object");continue;}
+                for(String axis:List.of("x","y")){Object coordinate=point.get(axis);if(!(coordinate instanceof Number number)||!Double.isFinite(number.doubleValue())||number.doubleValue()<0||number.doubleValue()>10000)errors.add("graph_ui_layout["+routeId+"]."+nodeId+"."+axis+" must be between 0 and 10000");}
+                if(point.size()!=2)errors.add("graph_ui_layout["+routeId+"]."+nodeId+" must only contain x and y");
+            }
+        }
     }
 
     private static List<Map<String,Object>> optionalList(Object value,String path,List<String> errors){

@@ -2,6 +2,14 @@ package io.github.ilyaandreev05.audiomatrix.gnome;
 
 import io.github.ilyaandreev05.audiomatrix.audio.AudioNode;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
+import io.github.ilyaandreev05.audiomatrix.config.DefaultConfig;
+import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
+import io.github.ilyaandreev05.audiomatrix.graph.GainNode;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphConnection;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphRouteLibrary;
+import io.github.ilyaandreev05.audiomatrix.graph.OutputNode;
+import io.github.ilyaandreev05.audiomatrix.graph.SourceNode;
+import io.github.ilyaandreev05.audiomatrix.graph.SwitchNode;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -44,5 +52,30 @@ class GnomeControlBridgeTest {
                 "/org/ilya/AudioMatrix: org.ilya.AudioMatrix.Command ('set_channel_map', 'test-route\\tmono_sum')");
 
         assertEquals(new GnomeControlBridge.Command("set_channel_map", "test-route\tmono_sum"), command);
+    }
+
+    @Test void publishesPinnedControlsByStableParameterIdsForTheActiveRouteOnly(){
+        Map<String,Object> config=DefaultConfig.create();List<String> stereo=List.of("FL","FR");
+        AudioGraph graph=new AudioGraph("route-active","Desk graph",List.of(new SourceNode("source","Apps","application:unassigned",stereo),new GainNode("gain","Bass level",stereo,.42,false),new OutputNode("output","Monitor","monitor-id",stereo)),List.of(
+                new GraphConnection("a","source","out","gain","in",true,1),new GraphConnection("b","gain","out","output","in",true,1)));
+        GraphRouteLibrary.saveRoute(config,graph,"");GraphRouteLibrary.activate(config,graph.id());
+        config.put("quick_controls",List.of(
+                Map.of("id","bass-level","route_id",graph.id(),"node_id","gain","parameter_id","gain","label","Bass"),
+                Map.of("id","inactive","route_id","another-route","node_id","gain","parameter_id","gain")));
+
+        List<Map<String,Object>> controls=GnomeControlBridge.quickControls(config);
+
+        assertEquals(1,controls.size());assertEquals("bass-level",controls.getFirst().get("id"));assertEquals("slider",controls.getFirst().get("kind"));assertEquals(.42,controls.getFirst().get("value"));
+    }
+
+    @Test void publishesRouterChoicesForPinnedMatrixParameters(){
+        Map<String,Object> config=DefaultConfig.create();List<String> stereo=List.of("FL","FR");
+        AudioGraph graph=new AudioGraph("route-switch","Output selector",List.of(new SourceNode("source","Apps","application:unassigned",stereo),new SwitchNode("switch","Monitor or AUX",stereo,List.of("monitor","aux"),List.of("in->monitor"))),List.of());
+        GraphRouteLibrary.saveRoute(config,graph,"");GraphRouteLibrary.activate(config,graph.id());
+        config.put("quick_controls",List.of(Map.of("id","output-choice","route_id",graph.id(),"node_id","switch","parameter_id","active_links","label","Playback destination")));
+
+        List<Map<String,Object>> controls=GnomeControlBridge.quickControls(config);
+
+        assertEquals(1,controls.size());Map<String,Object> control=controls.getFirst();assertEquals("links",control.get("kind"));assertEquals(List.of("in->monitor"),control.get("value"));assertEquals(List.of(Map.of("id","in->monitor","label","in → monitor"),Map.of("id","in->aux","label","in → aux")),control.get("options"));assertEquals(false,control.get("multiple"));
     }
 }

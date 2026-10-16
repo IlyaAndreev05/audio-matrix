@@ -665,6 +665,7 @@ public final class AppShell extends BorderPane {
                     actionButton(t("Применить активный граф к PipeWire","Apply active graph to PipeWire"),this::applyRoutes));
             if(!issues.isEmpty())issues.forEach(problem->status.getChildren().add(label(problem,"danger")));
             page.getChildren().add(status);
+            page.getChildren().add(graphCanvasCard(graph));
             page.getChildren().add(graphMatrixCard(graph));
             page.getChildren().add(graphNodeCard(graph));
             page.getChildren().add(graphConnectionCard(graph));
@@ -673,6 +674,55 @@ public final class AppShell extends BorderPane {
         page.getChildren().add(graphSavedCopiesCard(config));
         page.getChildren().add(routeHistoryCard());
         return page;
+    }
+
+    private VBox graphCanvasCard(AudioGraph graph){
+        VBox box=card(t("Схема маршрута","Route canvas"));
+        box.getChildren().add(label(t("Перетаскивай ноды. Положение сохраняется отдельно от аудиосхемы.","Drag nodes. Positions are saved separately from the audio graph."),"muted"));
+        int tallestColumn=Math.max((int)graph.nodes().stream().filter(SourceNode.class::isInstance).count(),(int)graph.nodes().stream().filter(OutputNode.class::isInstance).count());
+        tallestColumn=Math.max(tallestColumn,(int)graph.nodes().stream().filter(node->!(node instanceof SourceNode)&&!(node instanceof OutputNode)).count());
+        double canvasHeight=Math.max(390,tallestColumn*112+55);
+        Pane canvas=new Pane();canvas.setMinHeight(canvasHeight);canvas.setPrefSize(940,canvasHeight);canvas.setStyle("-fx-background-color: #181a1f; -fx-background-radius: 10;");
+        Map<String,Object> allLayouts=map(store.snapshot().get("graph_ui_layout"));
+        Map<String,Object> routeLayout=map(allLayouts.get(graph.id()));
+        Map<String,Node> views=new LinkedHashMap<>();Map<String,Line> lines=new LinkedHashMap<>();
+        Map<String,GraphNode> nodes=new LinkedHashMap<>();graph.nodes().forEach(node->nodes.put(node.id(),node));
+        for(GraphConnection edge:graph.connections()){
+            Line line=new Line();line.setStroke(edge.enabled()?javafx.scene.paint.Color.web("#37b5a5"):javafx.scene.paint.Color.web("#62666f"));line.setStrokeWidth(edge.enabled()?2.5:1.0);if(!edge.enabled())line.getStrokeDashArray().setAll(6.0,5.0);line.setMouseTransparent(true);lines.put(edge.id(),line);canvas.getChildren().add(line);
+        }
+        int sourceIndex=0,processIndex=0,outputIndex=0;
+        Map<String,double[]> initial=new LinkedHashMap<>();
+        for(GraphNode node:graph.nodes()){
+            double defaultX,defaultY;
+            if(node instanceof SourceNode){defaultX=25;defaultY=25+sourceIndex++*112;}
+            else if(node instanceof OutputNode){defaultX=700;defaultY=25+outputIndex++*112;}
+            else{defaultX=360;defaultY=25+processIndex++*95;}
+            Map<String,Object> saved=map(routeLayout.get(node.id()));double x=number(saved.get("x"),defaultX),y=number(saved.get("y"),defaultY);
+            VBox card=new VBox(5);card.setPrefWidth(205);card.setMinHeight(72);card.setLayoutX(x);card.setLayoutY(y);card.setStyle("-fx-background-color: #292d35; -fx-border-color: #656b77; -fx-border-radius: 8; -fx-background-radius: 8; -fx-padding: 9;");
+            Label title=label(node.name(),"card-title");title.setWrapText(true);title.setMaxWidth(180);
+            Label type=label(node.type(),"muted");
+            Label ports=label(t("Входы: ","In: ")+node.inputs().stream().map(AudioPort::id).reduce((a,b)->a+", "+b).orElse("—")+"    "+t("Выходы: ","Out: ")+node.outputs().stream().map(AudioPort::id).reduce((a,b)->a+", "+b).orElse("—"),"muted");ports.setWrapText(true);ports.setMaxWidth(185);
+            card.getChildren().addAll(title,type,ports);views.put(node.id(),card);initial.put(node.id(),new double[]{x,y});canvas.getChildren().add(card);
+        }
+        Runnable refreshLines=()->{
+            for(GraphConnection edge:graph.connections()){
+                Node from=views.get(edge.fromNode()),to=views.get(edge.toNode());Line line=lines.get(edge.id());if(from==null||to==null||line==null)continue;
+                GraphNode source=nodes.get(edge.fromNode()),target=nodes.get(edge.toNode());int fromPort=Math.max(0,source.outputs().stream().map(AudioPort::id).toList().indexOf(edge.fromPort()));int toPort=Math.max(0,target.inputs().stream().map(AudioPort::id).toList().indexOf(edge.toPort()));
+                line.setStartX(from.getLayoutX()+from.getBoundsInLocal().getWidth());line.setStartY(from.getLayoutY()+24+fromPort*15);line.setEndX(to.getLayoutX());line.setEndY(to.getLayoutY()+24+toPort*15);
+            }
+        };
+        refreshLines.run();
+        for(GraphNode node:graph.nodes()){
+            Node view=views.get(node.id());double[] start=initial.get(node.id());double[] pointer=new double[2];boolean[] moved={false};
+            view.setOnMousePressed(event->{pointer[0]=event.getSceneX();pointer[1]=event.getSceneY();start[0]=view.getLayoutX();start[1]=view.getLayoutY();moved[0]=false;event.consume();});
+            view.setOnMouseDragged(event->{double x=Math.max(0,Math.min(730,start[0]+event.getSceneX()-pointer[0]));double y=Math.max(0,Math.min(canvasHeight-85,start[1]+event.getSceneY()-pointer[1]));view.setLayoutX(x);view.setLayoutY(y);moved[0]=true;refreshLines.run();event.consume();});
+            view.setOnMouseReleased(event->{if(moved[0])saveGraphNodePosition(graph.id(),node.id(),view.getLayoutX(),view.getLayoutY());});
+        }
+        box.getChildren().add(canvas);return box;
+    }
+
+    private void saveGraphNodePosition(String routeId,String nodeId,double x,double y){
+        updateRouteConfig(t("Переместить ноду","Move graph node"),config->{Map<String,Object> layouts=map(config.get("graph_ui_layout"));config.put("graph_ui_layout",layouts);Map<String,Object> route=map(layouts.get(routeId));layouts.put(routeId,route);route.put(nodeId,Map.of("x",Math.rint(x),"y",Math.rint(y)));});
     }
 
     private VBox graphMatrixCard(AudioGraph graph){
@@ -763,6 +813,7 @@ public final class AppShell extends BorderPane {
                 if(node instanceof MatrixNode||node instanceof SwitchNode||node instanceof MultiSwitchNode)routerControls.getChildren().add(actionButton(t("Добавить выход","Add output"),()->addRouterPort(graph.id(),node,"output")));
                 row.getChildren().add(routerControls);
             }
+            String quickParameter=quickControlParameter(node);if(!quickParameter.isBlank()){boolean pinned=quickControlPinned(graph.id(),node.id(),quickParameter);row.getChildren().add(actionButton(pinned?t("Открепить от GNOME","Unpin from GNOME"):t("Закрепить в GNOME","Pin in GNOME"),()->toggleGraphQuickControl(graph.id(),node,quickParameter,pinned)));}
             Region space=new Region();HBox.setHgrow(space,Priority.ALWAYS);row.getChildren().add(space);row.getChildren().add(actionButton(t("Удалить","Delete"),()->removeGraphNode(graph.id(),node.id())));box.getChildren().add(row);
         }
         return box;
@@ -845,6 +896,12 @@ public final class AppShell extends BorderPane {
             do{candidate=("input".equals(direction)?"in-":"out-")+number++;}while(ports.contains(candidate));
             ports.add(candidate);parameters.put(key,ports);
         });
+    }
+
+    private String quickControlParameter(GraphNode node){if(node instanceof GainNode)return "gain";if(node instanceof GateNode)return "open";if(node instanceof FilterNode)return "enabled";if(node instanceof RouterNode&&Set.of("switch","multi_switch","selector","matrix").contains(node.type()))return "active_links";return "";}
+    private boolean quickControlPinned(String routeId,String nodeId,String parameter){return maps(store.snapshot().get("quick_controls")).stream().anyMatch(item->routeId.equals(item.get("route_id"))&&nodeId.equals(item.get("node_id"))&&parameter.equals(item.get("parameter_id")));}
+    private void toggleGraphQuickControl(String routeId,GraphNode node,String parameter,boolean pinned){
+        updateRouteConfig(t(pinned?"Открепить параметр от GNOME":"Закрепить параметр в GNOME",pinned?"Unpin graph parameter from GNOME":"Pin graph parameter in GNOME"),config->{List<Map<String,Object>> controls=maps(config.get("quick_controls"));if(pinned){controls.removeIf(item->routeId.equals(item.get("route_id"))&&node.id().equals(item.get("node_id"))&&parameter.equals(item.get("parameter_id")));return;}String id="quick-"+UUID.randomUUID();controls.add(DefaultConfigMap.map("id",id,"route_id",routeId,"node_id",node.id(),"parameter_id",parameter,"label",node.name(),"section","Audio Matrix","order",controls.size()));});
     }
 
     private void updateGraph(String routeId,Consumer<List<GraphNode>> nodeChange){updateRouteConfig(t("Изменить граф","Edit graph"),config->{Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->routeId.equals(item.get("id"))).findFirst().orElseThrow();AudioGraph old=GraphCodec.fromMap(route);List<GraphNode> nodes=new ArrayList<>(old.nodes());nodeChange.accept(nodes);AudioGraph changed=new AudioGraph(old.id(),old.name(),nodes,old.connections());GraphRouteLibrary.saveRoute(config,changed,string(route.get("group_id"),""));});}
@@ -2465,6 +2522,9 @@ public final class AppShell extends BorderPane {
             case "toggle_app_mute" -> setGnomeApplicationLevel(command.value(), true);
             case "set_stream_volume" -> setGnomeStreamLevel(command.value(), false);
             case "toggle_stream_mute" -> setGnomeStreamLevel(command.value(), true);
+            case "set_quick_control" -> setGnomeQuickControl(command.value(),false);
+            case "toggle_quick_control" -> setGnomeQuickControl(command.value(),true);
+            case "set_quick_control_choice" -> setGnomeQuickControlChoice(command.value());
             case "set_mode" -> {
                 if (Set.of("haptic", "subwoofer", "speaker", "hybrid", "multi-output", "off").contains(command.value()))
                     updateRouteConfig(t("Изменён режим выхода из GNOME", "GNOME output mode changed"),
@@ -2473,6 +2533,25 @@ public final class AppShell extends BorderPane {
             case "set_channel_map" -> setGnomeChannelMap(command.value());
             default -> { }
         }
+    }
+
+    private void setGnomeQuickControl(String value,boolean toggle){
+        String[] fields=value.split("\\t",2);if(fields.length<1)return;Map<String,Object> config=store.snapshot();Map<String,Object> control=maps(config.get("quick_controls")).stream().filter(item->fields[0].equals(item.get("id"))).findFirst().orElse(null);if(control==null)return;
+        String routeId=string(control.get("route_id"),string(config.get("active_route"),""));if(!routeId.equals(config.get("active_route")))return;String nodeId=string(control.get("node_id"),""),parameter=string(control.get("parameter_id"),"");
+        Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->routeId.equals(item.get("id"))).findFirst().orElse(null);if(route==null)return;GraphNode node;try{node=GraphCodec.fromMap(route).nodes().stream().filter(candidate->candidate.id().equals(nodeId)).findFirst().orElse(null);}catch(RuntimeException invalid){return;}if(node==null)return;
+        Object next;if(toggle){Object current=node.parameters().get(parameter);if(!(current instanceof Boolean flag))return;next=!flag;}else{if(fields.length<2)return;try{next=Math.max(0,Math.min(1,Double.parseDouble(fields[1])));}catch(NumberFormatException invalid){return;}}
+        updateGraphNodeParameters(routeId,nodeId,parameters->parameters.put(parameter,next));
+    }
+
+    private void setGnomeQuickControlChoice(String value){
+        String[] fields=value.split("\\t",2);if(fields.length!=2)return;
+        Map<String,Object> config=store.snapshot();Map<String,Object> control=maps(config.get("quick_controls")).stream().filter(item->fields[0].equals(item.get("id"))).findFirst().orElse(null);if(control==null||!"active_links".equals(control.get("parameter_id")))return;
+        String routeId=string(control.get("route_id"),string(config.get("active_route"),""));if(!routeId.equals(config.get("active_route")))return;
+        Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->routeId.equals(item.get("id"))).findFirst().orElse(null);if(route==null)return;
+        RouterNode router;try{router=GraphCodec.fromMap(route).nodes().stream().filter(node->node.id().equals(control.get("node_id"))&&node instanceof RouterNode).map(RouterNode.class::cast).findFirst().orElse(null);}catch(RuntimeException invalid){return;}if(router==null)return;
+        String[] endpoints=fields[1].split("->",-1);if(endpoints.length!=2)return;String choice=fields[1];boolean valid=router.inputs().stream().anyMatch(port->port.id().equals(endpoints[0]))&&router.outputs().stream().anyMatch(port->port.id().equals(endpoints[1]));if(!valid)return;
+        List<String> links=new ArrayList<>(router.activeLinks());if(router.multiple()){if(links.contains(choice))links.remove(choice);else links.add(choice);}else{links.clear();links.add(choice);}
+        updateGraphNodeParameters(routeId,router.id(),parameters->parameters.put("active_links",links));
     }
 
     private void setGnomeOutputLevel(String value,boolean toggleMute){String[] fields=value.split("\\t",2);if(fields.length<1)return;AudioNode node=snapshot.sinks().stream().filter(sink->sink.name().equals(fields[0])).findFirst().orElse(null);if(node==null)return;if(toggleMute){boolean muted=!node.muted();backend.setMute(node.id(),muted).whenComplete((ignored,error)->{if(error==null){saveDeviceMute(node,muted);refreshBackend();}});return;}if(fields.length<2)return;try{double level=Math.max(0,Math.min(1,Double.parseDouble(fields[1])));saveDeviceVolume(node,level);refreshBackend();}catch(NumberFormatException ignored){}}

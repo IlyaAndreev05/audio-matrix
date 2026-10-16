@@ -236,6 +236,7 @@ public final class ConfigStore implements AutoCloseable {
         config.putIfAbsent("route_groups", new java.util.ArrayList<>());
         config.putIfAbsent("route_library", new java.util.ArrayList<>());
         config.putIfAbsent("saved_copies", new java.util.ArrayList<>());
+        config.putIfAbsent("graph_ui_layout", new java.util.LinkedHashMap<>());
         config.putIfAbsent("quick_controls", new java.util.ArrayList<>());
         config.putIfAbsent("active_route", "");
     }

@@ -33,6 +33,10 @@ if rg -q 'addExternalIndicator|QuickMenuToggle|SystemIndicator' "$extension_sour
 fi
 rg -q '_volumeOutput' "$extension_source"
 rg -q 'PopupSliderMenuItem' "$extension_source"
+rg -q 'quickControls' "$extension_source"
+rg -q "set_quick_control" "$extension_source"
+rg -q "set_quick_control_choice" "$extension_source"
+rg -q '_addGraphLinks' "$extension_source"
 node --check "$extension_source"
 gnome-extensions pack "$repo_root/gnome/audio-matrix-quick-settings" --force --out-dir "$scratch"
 unzip -t "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip"

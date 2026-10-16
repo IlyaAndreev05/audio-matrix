@@ -48,6 +48,9 @@ public final class GraphRouteLibrary {
                 id("link"), nodeIds.get(edge.fromNode()), edge.fromPort(), nodeIds.get(edge.toNode()), edge.toPort(), edge.enabled(), edge.gain())).toList();
         AudioGraph copy = new AudioGraph(newRouteId, newName == null || newName.isBlank() ? original.name() + " (копия)" : newName, nodes, edges);
         saveRoute(config, copy, String.valueOf(source.getOrDefault("group_id", "")));
+        Map<String,Object> layouts=mutableMap(config,"graph_ui_layout");Map<String,Object> sourceLayout=map(layouts.get(routeId));Map<String,Object> copiedLayout=new LinkedHashMap<>();
+        sourceLayout.forEach((oldNode,value)->{String newNode=nodeIds.get(oldNode);if(newNode!=null)copiedLayout.put(newNode,deepValue(value));});
+        if(!copiedLayout.isEmpty())layouts.put(newRouteId,copiedLayout);
         return copy;
     }
 
@@ -59,6 +62,7 @@ public final class GraphRouteLibrary {
             throw new IllegalArgumentException("Choose another existing route before deleting the active route");
         if (active) config.put("active_route", replacementRouteId);
         routes.removeIf(route -> routeId.equals(route.get("id")));
+        mutableMap(config,"graph_ui_layout").remove(routeId);
     }
 
     public static String createGroup(Map<String, Object> config, String name) {
@@ -100,6 +104,7 @@ public final class GraphRouteLibrary {
         Map<String, Object> copy = new LinkedHashMap<>();
         copy.put("id", id("copy")); copy.put("name", label == null || label.isBlank() ? String.valueOf(route.get("name")) : label);
         copy.put("route", deep(route)); copy.put("active", false);
+        copy.put("ui_layout",deep(map(mutableMap(config,"graph_ui_layout").get(routeId))));
         mutableList(config, "saved_copies").add(copy);
         return String.valueOf(copy.get("id"));
     }
@@ -112,8 +117,9 @@ public final class GraphRouteLibrary {
         AudioGraph graph=GraphCodec.fromMap(snapshot);requireValid(graph);
         List<Map<String,Object>> routes=mutableList(config,"route_library");String temporaryId=id("restore-source");
         Map<String,Object> source=new LinkedHashMap<>(snapshot);source.put("id",temporaryId);routes.add(source);
+        Map<String,Object> layouts=mutableMap(config,"graph_ui_layout");Map<String,Object> savedLayout=map(copy.get("ui_layout"));if(!savedLayout.isEmpty())layouts.put(temporaryId,deep(savedLayout));
         try{return duplicateRoute(config,temporaryId,newName==null||newName.isBlank()?graph.name()+" (копия)":newName);}
-        finally{routes.removeIf(route->temporaryId.equals(route.get("id")));}
+        finally{routes.removeIf(route->temporaryId.equals(route.get("id")));layouts.remove(temporaryId);}
     }
 
     public static void deleteSavedCopy(Map<String,Object> config,String copyId) {
@@ -149,6 +155,8 @@ public final class GraphRouteLibrary {
         if (!(value instanceof List<?>)) { List<Map<String,Object>> created=new ArrayList<>();config.put(key,created);return created; }
         return (List<Map<String,Object>>)value;
     }
+    @SuppressWarnings("unchecked") private static Map<String,Object> mutableMap(Map<String,Object> config,String key){Object value=config.get(key);if(value instanceof Map<?,?> map)return (Map<String,Object>)map;Map<String,Object> created=new LinkedHashMap<>();config.put(key,created);return created;}
+    @SuppressWarnings("unchecked") private static Map<String,Object> map(Object value){if(value instanceof Map<?,?> map)return (Map<String,Object>)map;return Map.of();}
     @SuppressWarnings("unchecked") private static List<Map<String, Object>> maps(Object value) { return value instanceof List<?> list ? (List<Map<String,Object>>)list : List.of(); }
     private static int indexOf(List<Map<String,Object>> list,String id) { for(int i=0;i<list.size();i++)if(id.equals(list.get(i).get("id")))return i;return -1; }
     private static Map<String,Object> find(List<Map<String,Object>> list,String id) { return list.stream().filter(item->id.equals(item.get("id"))).findFirst().orElse(null); }
