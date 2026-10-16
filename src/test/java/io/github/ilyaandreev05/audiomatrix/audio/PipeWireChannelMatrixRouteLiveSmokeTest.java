@@ -88,6 +88,24 @@ class PipeWireChannelMatrixRouteLiveSmokeTest {
             assertEquals(2, limitedOutputs.size(), "The output limiter should connect both channels to the virtual null sink");
             assertTrue(limitedOutputs.stream().allMatch(link -> link.input().startsWith(sinkName + ":")), limitedOutputs.toString());
 
+            PipeWireRouteManager.ApplyReport recoveredReport = manager.reapplyAfterReconnect(config, isolated)
+                    .get(20, TimeUnit.SECONDS);
+            assertEquals(1, recoveredReport.routes());
+            assertEquals(0, recoveredReport.streams(), "The reconnect smoke must not route application streams");
+            assertTrue(manager.active(), "The route graph should be active after reconnect recovery");
+            String recoveredGraph = run("pw-link", "-l");
+            List<PipeWireRouteManager.Link> recoveredIntoMatrix = PipeWireLinkOperations.linksFromNode(recoveredGraph, busNode).stream()
+                    .filter(link -> link.input().startsWith(route.matrixInputNodeName() + ":")).toList();
+            assertEquals(2, recoveredIntoMatrix.size(), "Both source channels should be restored after reconnect");
+            List<PipeWireRouteManager.Link> recoveredRouteOutputs = PipeWireLinkOperations.linksFromNode(recoveredGraph, route.playbackNodeName());
+            assertEquals(2, recoveredRouteOutputs.size(), "The route should reconnect to the output limiter after reconnect");
+            assertTrue(recoveredRouteOutputs.stream().allMatch(link -> link.input().startsWith(limiterInput + ":")),
+                    recoveredRouteOutputs.toString());
+            List<PipeWireRouteManager.Link> recoveredLimitedOutputs = PipeWireLinkOperations.linksFromNode(recoveredGraph, limiterOutput);
+            assertEquals(2, recoveredLimitedOutputs.size(), "The limiter should reconnect to the temporary sink after reconnect");
+            assertTrue(recoveredLimitedOutputs.stream().allMatch(link -> link.input().startsWith(sinkName + ":")),
+                    recoveredLimitedOutputs.toString());
+
             PipeWireBackend.Snapshot after = backend.refresh().get(5, TimeUnit.SECONDS);
             assertEquals(before.defaultSinkId(), after.defaultSinkId());
             AudioNode defaultAfter = after.sinks().stream().filter(node -> node.id() == after.defaultSinkId()).findFirst().orElseThrow();
