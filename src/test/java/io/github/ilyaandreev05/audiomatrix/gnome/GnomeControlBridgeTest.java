@@ -14,7 +14,10 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class GnomeControlBridgeTest {
@@ -47,11 +50,62 @@ class GnomeControlBridgeTest {
                 Map.of("active_routes", List.of()), null, -1, List.of()));
     }
 
+    @Test void hidesTheInternalSystemMixerSinkFromPhysicalOutputControls() {
+        AudioNode systemSink = new AudioNode(13, PipeWireBackend.SYSTEM_MIXER_SINK_NAME, "Audio Matrix System Input",
+                "Audio/Sink", "running", "", "", "", 2, List.of(48000), .8, false, null);
+        PipeWireBackend.Snapshot snapshot = new PipeWireBackend.Snapshot(true, "", List.of(selected, systemSink),
+                List.of(), List.of(), List.of(), Map.of(), systemSink.id(), 0);
+
+        List<Map<String, Object>> outputs = GnomeControlBridge.outputDevices(snapshot);
+
+        assertEquals(List.of("alsa_output.usb-test"), outputs.stream().map(output -> output.get("name")).toList());
+        assertEquals(false, outputs.getFirst().get("default"));
+    }
+
     @Test void decodesEscapedTabFromGdbusCommandSignal() {
         GnomeControlBridge.Command command = GnomeControlBridge.parseCommandLine(
                 "/org/ilya/AudioMatrix: org.ilya.AudioMatrix.Command ('set_channel_map', 'test-route\\tmono_sum')");
 
         assertEquals(new GnomeControlBridge.Command("set_channel_map", "test-route\tmono_sum"), command);
+    }
+
+    @Test void parsesVersionedCommandAndRequestIdFromGdbusSignal() {
+        GnomeControlBridge.Command command = GnomeControlBridge.parseCommandLine(
+                "/org/ilya/AudioMatrix: org.ilya.AudioMatrix.Command (uint32 2, 'request-17', 'set_output_volume', 'speaker\\t0.35')");
+
+        assertEquals(new GnomeControlBridge.Command(2,"request-17","set_output_volume","speaker\t0.35"),command);
+    }
+
+    @Test void parsesMultilineGdbusCommandArguments(){
+        assertEquals(new GnomeControlBridge.Command(2,"request-22","open",""),
+                GnomeControlBridge.parseCommandArguments(List.of("2","request-22","open","")));
+        assertEquals(null,GnomeControlBridge.parseCommandArguments(List.of("2","request-22","open")));
+    }
+
+    @Test void versionedCommandAcknowledgesOnlyAfterItsHandlerCompletes(){
+        CompletableFuture<Void> operation=new CompletableFuture<>();
+        CompletableFuture<GnomeControlBridge.CommandResult> result=GnomeControlBridge.execute(
+                new GnomeControlBridge.Command(2,"request-18","set_output_volume","speaker\t0.35"),ignored->operation);
+
+        assertFalse(result.isDone());
+        operation.complete(null);
+        assertEquals(new GnomeControlBridge.CommandResult("ok","Applied"),result.join());
+    }
+
+    @Test void versionedCommandReturnsActionFailuresAndRejectsOldOrUnknownCommands(){
+        GnomeControlBridge.CommandResult failed=GnomeControlBridge.execute(
+                new GnomeControlBridge.Command(2,"request-19","set_output_volume","speaker\t0.35"),
+                ignored->CompletableFuture.failedFuture(new IllegalStateException("output disconnected"))).join();
+        AtomicBoolean called=new AtomicBoolean();
+        GnomeControlBridge.CommandResult oldApi=GnomeControlBridge.execute(
+                new GnomeControlBridge.Command(1,"request-20","open",""),ignored->{called.set(true);return CompletableFuture.completedFuture(null);}).join();
+        GnomeControlBridge.CommandResult unknown=GnomeControlBridge.execute(
+                new GnomeControlBridge.Command(2,"request-21","delete_everything",""),ignored->{called.set(true);return CompletableFuture.completedFuture(null);}).join();
+
+        assertEquals(new GnomeControlBridge.CommandResult("error","output disconnected"),failed);
+        assertEquals("error",oldApi.status());
+        assertEquals("error",unknown.status());
+        assertFalse(called.get());
     }
 
     @Test void publishesPinnedControlsByStableParameterIdsForTheActiveRouteOnly(){

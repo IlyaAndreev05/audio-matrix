@@ -10,6 +10,7 @@ import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphValidator;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphSubgraph;
 
 public final class ConfigValidator {
     private ConfigValidator() {}
@@ -288,6 +289,43 @@ public final class ConfigValidator {
             if(node==null||!node.parameters().containsKey(parameter))errors.add("quick_controls["+i+"] references an unavailable node parameter");
         }
         validateGraphLayouts(config,graphs,routeIds,errors);
+        validateGraphUiScales(config,routeIds,errors);
+        validateGraphSubgraphs(config,graphs,routeIds,errors);
+    }
+
+    private static void validateGraphSubgraphs(Map<String,Object> config,Map<String,AudioGraph> graphs,Set<String> routeIds,List<String> errors){
+        Object raw=config.get("graph_ui_subgraphs");if(raw==null)return;
+        if(!(raw instanceof Map<?,?> byRoute)){errors.add("graph_ui_subgraphs must be an object");return;}
+        for(Map.Entry<?,?> entry:byRoute.entrySet()){
+            String routeId=String.valueOf(entry.getKey());AudioGraph graph=graphs.get(routeId);
+            if(!routeIds.contains(routeId)||graph==null){errors.add("graph_ui_subgraphs references a missing route: "+routeId);continue;}
+            validateSubgraphList(entry.getValue(),graph,"graph_ui_subgraphs["+routeId+"]",errors);
+        }
+        List<Map<String,Object>> copies=optionalList(config.get("saved_copies"),"saved_copies",new ArrayList<>());
+        for(int i=0;i<copies.size();i++){
+            Map<String,Object> copy=copies.get(i);if(!(copy.get("ui_subgraphs") instanceof List<?> groups))continue;
+            Object rawRoute=copy.get("route");if(!(rawRoute instanceof Map<?,?> route))continue;
+            try{Map<String,Object> decoded=new java.util.LinkedHashMap<>();route.forEach((key,value)->decoded.put(String.valueOf(key),value));
+                validateSubgraphList(groups,GraphCodec.fromMap(decoded),"saved_copies["+i+"].ui_subgraphs",errors);
+            }catch(RuntimeException invalid){errors.add("saved_copies["+i+"].ui_subgraphs cannot be checked: "+invalid.getMessage());}
+        }
+    }
+
+    private static void validateSubgraphList(Object raw,AudioGraph graph,String path,List<String> errors){
+        if(!(raw instanceof List<?> list)){errors.add(path+" must be an array");return;}
+        Set<String> graphNodes=graph.nodes().stream().map(GraphNode::id).collect(java.util.stream.Collectors.toSet());
+        Set<String> groupIds=new HashSet<>(),claimedNodes=new HashSet<>();
+        for(int i=0;i<list.size();i++){
+            if(!(list.get(i) instanceof Map<?,?> map)){errors.add(path+"["+i+"] must be an object");continue;}
+            try{
+                GraphSubgraph group=GraphSubgraph.fromMap(map);
+                if(!groupIds.add(group.id()))errors.add(path+" contains duplicate id "+group.id());
+                for(String nodeId:group.nodeIds()){
+                    if(!graphNodes.contains(nodeId))errors.add(path+"["+i+"] references a missing node "+nodeId);
+                    if(!claimedNodes.add(nodeId))errors.add(path+" node belongs to more than one subgraph: "+nodeId);
+                }
+            }catch(RuntimeException invalid){errors.add(path+"["+i+"] is invalid: "+invalid.getMessage());}
+        }
     }
 
     private static void validateGraphLayouts(Map<String,Object> config,Map<String,AudioGraph> graphs,Set<String> routeIds,List<String> errors){
@@ -304,6 +342,17 @@ public final class ConfigValidator {
                 for(String axis:List.of("x","y")){Object coordinate=point.get(axis);if(!(coordinate instanceof Number number)||!Double.isFinite(number.doubleValue())||number.doubleValue()<0||number.doubleValue()>10000)errors.add("graph_ui_layout["+routeId+"]."+nodeId+"."+axis+" must be between 0 and 10000");}
                 if(point.size()!=2)errors.add("graph_ui_layout["+routeId+"]."+nodeId+" must only contain x and y");
             }
+        }
+    }
+
+    private static void validateGraphUiScales(Map<String,Object> config,Set<String> routeIds,List<String> errors){
+        Object value=config.get("graph_ui_scale");if(value==null)return;
+        if(!(value instanceof Map<?,?> scales)){errors.add("graph_ui_scale must be an object");return;}
+        for(Map.Entry<?,?> entry:scales.entrySet()){
+            String routeId=String.valueOf(entry.getKey());Object scale=entry.getValue();
+            if(!routeIds.contains(routeId)){errors.add("graph_ui_scale references a missing route: "+routeId);continue;}
+            if(!(scale instanceof Number number)||!Double.isFinite(number.doubleValue())||number.doubleValue()<0.5||number.doubleValue()>2.0)
+                errors.add("graph_ui_scale["+routeId+"] must be between 0.5 and 2.0");
         }
     }
 

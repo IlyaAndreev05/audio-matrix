@@ -3,6 +3,8 @@ package io.github.ilyaandreev05.audiomatrix;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.config.ConfigStore;
 import io.github.ilyaandreev05.audiomatrix.config.ConfigValidator;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphPipeWireCompiler;
 import io.github.ilyaandreev05.audiomatrix.ui.AppShell;
 import javafx.application.Application;
 import javafx.scene.Scene;
@@ -10,6 +12,7 @@ import javafx.stage.Stage;
 import javafx.application.Platform;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
@@ -18,6 +21,7 @@ public class AudioMatrixApp extends Application {
     private PipeWireBackend backend;
     private ThemeManager themeManager;
     private AppShell shell;
+    private InstanceControlServer instanceControl;
     private boolean closeInProgress;
     private boolean servicesClosed;
 
@@ -31,11 +35,32 @@ public class AudioMatrixApp extends Application {
             exportDefaultConfig(path); System.exit(0); return;
         }
         if (args.length > 0 && "--diagnose-pipewire".equals(args[0])) { diagnosePipeWire(); System.exit(0); return; }
+        if (args.length > 0 && "--quit".equals(args[0])) {
+            try { InstanceControlServer.requestQuitAndWait(Duration.ofSeconds(20)); }
+            catch (Exception e) { System.err.println("Could not stop Audio Matrix cleanly: " + e.getMessage()); System.exit(1); }
+            return;
+        }
         if ("root".equals(System.getProperty("user.name"))) {
             System.err.println("Audio Matrix refuses to run as root. Start it in the logged-in desktop session.");
             System.exit(2);
         }
-        launch(args);
+        boolean background = List.of(args).contains("--background");
+        try {
+            InstanceControlServer server = InstanceControlServer.acquireOrForward(background ? "background" : "open");
+            if (server == null) {
+                if (background) {
+                    System.err.println("Audio Matrix is already running; stop the existing process before starting its background service.");
+                    System.exit(3);
+                }
+                return;
+            }
+            currentInstanceControl = server;
+            launch(args);
+        } catch (Exception e) {
+            if (currentInstanceControl != null) currentInstanceControl.close();
+            System.err.println("Could not establish the Audio Matrix user-session instance: " + e.getMessage());
+            System.exit(3);
+        }
     }
 
     private static void validateConfig(Path path) {
@@ -43,7 +68,22 @@ public class AudioMatrixApp extends Application {
             var mapper = mapperFor(path);
             Map<String, Object> config = mapper.readValue(path.toFile(), new com.fasterxml.jackson.core.type.TypeReference<>() {});
             List<String> errors = ConfigValidator.validate(config);
-            if (errors.isEmpty()) { System.out.println("Configuration is valid: " + path.toAbsolutePath()); return; }
+            if (errors.isEmpty()) {
+                String activeRoute = String.valueOf(config.getOrDefault("active_route", ""));
+                if (!activeRoute.isBlank()) {
+                    List<?> routes = config.get("route_library") instanceof List<?> list ? list : List.of();
+                    Map<String,Object> route = null;
+                    for (Object candidate : routes) if (candidate instanceof Map<?,?> item && activeRoute.equals(item.get("id"))) {
+                        Map<String,Object> selected = new java.util.LinkedHashMap<>();
+                        for (Map.Entry<?,?> entry : item.entrySet()) selected.put(String.valueOf(entry.getKey()), entry.getValue());
+                        route = selected;
+                        break;
+                    }
+                    if (route == null) throw new IllegalArgumentException("The active route could not be found in route_library.");
+                    GraphPipeWireCompiler.compile(GraphCodec.fromMap(route), config);
+                }
+                System.out.println("Configuration and active graph are valid: " + path.toAbsolutePath()); return;
+            }
             errors.forEach(error -> System.err.println("- " + error)); System.exit(1);
         } catch (Exception e) { System.err.println("Configuration could not be validated: " + e.getMessage()); System.exit(1); }
     }
@@ -75,6 +115,7 @@ public class AudioMatrixApp extends Application {
     }
 
     @Override public void start(Stage stage) throws Exception {
+        Platform.setImplicitExit(false);
         configStore = new ConfigStore(ConfigStore.defaultPath());
         backend = new PipeWireBackend();
         themeManager = new ThemeManager();
@@ -86,18 +127,34 @@ public class AudioMatrixApp extends Application {
         stage.setTitle("Audio Matrix");
         stage.setMinWidth(1024); stage.setMinHeight(680);
         stage.setScene(scene);
-        stage.show();
+        boolean background = getParameters().getRaw().contains("--background");
+        if (!background) stage.show();
         shell.start();
+        instanceControl = currentInstanceControl;
+        if (instanceControl != null) instanceControl.setHandler(command -> Platform.runLater(() -> {
+            if ("open".equals(command)) {
+                stage.setIconified(false);
+                stage.show();
+                stage.toFront();
+                stage.requestFocus();
+            } else if ("quit".equals(command)) {
+                shutdownApplication();
+            }
+        }));
         stage.setOnCloseRequest(event -> {
-            if (servicesClosed) return;
             event.consume();
-            if (closeInProgress) return;
-            closeInProgress = true;
-            shell.closeAsync().whenComplete((ignored, error) -> Platform.runLater(() -> {
-                closeServicesAfterRoutes();
-                stage.close();
-            }));
+            stage.hide();
         });
+    }
+
+    private void shutdownApplication() {
+        if (servicesClosed || closeInProgress) return;
+        closeInProgress = true;
+        shell.closeAsync().whenComplete((ignored, error) -> Platform.runLater(() -> {
+            if (error != null) System.err.println("Audio Matrix cleanup reported: " + error.getMessage());
+            closeServicesAfterRoutes();
+            Platform.exit();
+        }));
     }
 
     private void closeServices() {
@@ -107,6 +164,9 @@ public class AudioMatrixApp extends Application {
         if (themeManager != null) themeManager.close();
         if (backend != null) backend.close();
         if (configStore != null) configStore.close();
+        if (instanceControl != null) instanceControl.close();
+        else if (currentInstanceControl != null) currentInstanceControl.close();
+        currentInstanceControl = null;
     }
 
     private void closeServicesAfterRoutes() {
@@ -115,6 +175,11 @@ public class AudioMatrixApp extends Application {
         if (themeManager != null) themeManager.close();
         if (backend != null) backend.close();
         if (configStore != null) configStore.close();
+        if (instanceControl != null) instanceControl.close();
+        else if (currentInstanceControl != null) currentInstanceControl.close();
+        currentInstanceControl = null;
     }
     @Override public void stop() { closeServices(); }
+
+    private static volatile InstanceControlServer currentInstanceControl;
 }

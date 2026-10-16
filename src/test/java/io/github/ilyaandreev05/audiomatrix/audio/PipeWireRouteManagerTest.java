@@ -14,6 +14,84 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PipeWireRouteManagerTest {
     @Test
+    void masterLevelIsAppliedOnceAtEachPhysicalEndpointAcrossChainedBuses() throws IOException {
+        Map<String, Object> config = chainedBusConfig(false);
+        AudioNode output = sink(39, "test-output", "Test output");
+        PipeWireBackend.Snapshot snapshot = snapshot(List.of(output), output.id());
+        PipeWireRouteManager manager = new PipeWireRouteManager();
+
+        PipeWireRouteManager.Plan plan = manager.plan(config, snapshot);
+        PipeWireRouteManager.RoutePlan internal = plan.routes().stream().filter(route -> route.sink() == null).findFirst().orElseThrow();
+        PipeWireRouteManager.RoutePlan endpoint = plan.routes().stream().filter(route -> route.sink() != null).findFirst().orElseThrow();
+        PipeWireRouteManager.HeadroomEstimate headroom = manager.estimateHeadroom(config, snapshot, output);
+
+        assertEquals(1.0, PipeWireRouteManager.effectiveRoutePlaybackVolume(plan, internal), 1e-9);
+        assertEquals(0.5, PipeWireRouteManager.effectiveRoutePlaybackVolume(plan, endpoint), 1e-9);
+        assertFalse(PipeWireRouteManager.effectiveRoutePlaybackMuted(plan, internal));
+        assertTrue(headroom.available());
+        assertEquals(20 * Math.log10(0.8 * 0.6 * 0.5), headroom.preLimiterPeakDbfs(), 1e-6);
+    }
+
+    @Test
+    void masterMuteTargetsOnlyFinalOutputRoutesAndLevelChangesKeepGraphTopology() throws IOException {
+        Map<String, Object> config = chainedBusConfig(true);
+        AudioNode output = sink(40, "test-output", "Test output");
+        PipeWireBackend.Snapshot snapshot = snapshot(List.of(output), output.id());
+        PipeWireRouteManager manager = new PipeWireRouteManager();
+        PipeWireRouteManager.Plan muted = manager.plan(config, snapshot);
+        PipeWireRouteManager.RoutePlan internal = muted.routes().stream().filter(route -> route.sink() == null).findFirst().orElseThrow();
+        PipeWireRouteManager.RoutePlan endpoint = muted.routes().stream().filter(route -> route.sink() != null).findFirst().orElseThrow();
+
+        assertFalse(PipeWireRouteManager.effectiveRoutePlaybackMuted(muted, internal));
+        assertTrue(PipeWireRouteManager.effectiveRoutePlaybackMuted(muted, endpoint));
+        assertFalse(manager.estimateHeadroom(config, snapshot, output).available());
+
+        ((Map<String, Object>) config.get("mixer")).put("global_volume", 0.25);
+        PipeWireRouteManager.Plan withNewMaster = manager.plan(config, snapshot);
+        assertTrue(PipeWireRouteManager.sameRoutingTopology(muted, withNewMaster));
+        assertEquals(0.25, PipeWireRouteManager.effectiveRoutePlaybackVolume(withNewMaster,
+                withNewMaster.routes().stream().filter(route -> route.sink() != null).findFirst().orElseThrow()), 1e-9);
+    }
+
+    @Test
+    void internalVirtualSystemInputCannotBeUsedAsAGraphPhysicalOutput() throws IOException {
+        Map<String, Object> config = DefaultConfig.create();
+        @SuppressWarnings("unchecked") List<Map<String, Object>> routes = (List<Map<String, Object>>) config.get("routes");
+        routes.add(DefaultConfig.map("id", "music-system-default", "from", "music", "to", "system_default", "enabled", true));
+        @SuppressWarnings("unchecked") List<Map<String, Object>> profiles = (List<Map<String, Object>>) config.get("profiles");
+        profiles.getFirst().put("active_buses", List.of("music"));
+        profiles.getFirst().put("active_routes", List.of("music-system-default"));
+        AudioNode physical = sink(41, "alsa_output.usb-speakers", "USB speakers");
+        AudioNode systemInput = sink(42, PipeWireBackend.SYSTEM_MIXER_SINK_NAME, "Audio Matrix System Input");
+
+        PipeWireRouteManager.Plan plan = new PipeWireRouteManager().plan(config,
+                snapshot(List.of(physical, systemInput), systemInput.id()));
+
+        assertTrue(plan.routes().isEmpty());
+        assertTrue(plan.warnings().stream().anyMatch(warning -> warning.contains("no available output")));
+    }
+
+    private static Map<String, Object> chainedBusConfig(boolean masterMuted) {
+        Map<String, Object> config = DefaultConfig.create();
+        @SuppressWarnings("unchecked") List<Map<String, Object>> buses = (List<Map<String, Object>>) config.get("buses");
+        buses.stream().filter(bus -> "main".equals(bus.get("id"))).findFirst().orElseThrow().put("volume", 0.8);
+        buses.stream().filter(bus -> "effects".equals(bus.get("id"))).findFirst().orElseThrow().put("volume", 0.6);
+        @SuppressWarnings("unchecked") Map<String, Object> mixer = (Map<String, Object>) config.get("mixer");
+        mixer.put("global_volume", 0.5);
+        mixer.put("global_mute", masterMuted);
+        @SuppressWarnings("unchecked") List<Map<String, Object>> devices = (List<Map<String, Object>>) config.get("devices");
+        devices.add(DefaultConfig.map("id", "speaker", "selector", DefaultConfig.map("kind", "name_equals", "value", "test-output"),
+                "role", "output", "volume", 1.0, "mute", false));
+        @SuppressWarnings("unchecked") List<Map<String, Object>> routes = (List<Map<String, Object>>) config.get("routes");
+        routes.add(DefaultConfig.map("id", "main-to-effects", "from", "main", "to", "effects", "enabled", true));
+        routes.add(DefaultConfig.map("id", "effects-to-output", "from", "effects", "to", "speaker", "enabled", true));
+        @SuppressWarnings("unchecked") List<Map<String, Object>> profiles = (List<Map<String, Object>>) config.get("profiles");
+        profiles.getFirst().put("active_buses", List.of("main", "effects"));
+        profiles.getFirst().put("active_routes", List.of("main-to-effects", "effects-to-output"));
+        return config;
+    }
+
+    @Test
     void unpluggedSelectedSinkUsesExplicitFallbackAndReturnsWithoutImplicitDefault() throws IOException {
         Map<String, Object> config = DefaultConfig.create();
         @SuppressWarnings("unchecked") List<Map<String, Object>> routes = (List<Map<String, Object>>) config.get("routes");
@@ -214,6 +292,34 @@ class PipeWireRouteManagerTest {
         assertTrue(plan.warnings().stream().anyMatch(warning -> warning.contains("at least two distinct outputs")));
     }
 
+    @Test
+    void unmatchedEventSoundStudioStreamNeverUsesTheGeneralCatchAllButExactRuleCanRouteIt() throws IOException {
+        Map<String,Object> config = DefaultConfig.create();
+        config.put("graph_default_bus", "main");
+        @SuppressWarnings("unchecked") List<Map<String,Object>> routes = (List<Map<String,Object>>) config.get("routes");
+        routes.add(DefaultConfig.map("id", "main-out", "from", "main", "to", "system_default", "enabled", true));
+        @SuppressWarnings("unchecked") List<Map<String,Object>> profiles = (List<Map<String,Object>>) config.get("profiles");
+        profiles.getFirst().put("active_buses", List.of("main"));
+        profiles.getFirst().put("active_routes", List.of("main-out"));
+        AudioNode sink = sink(70, "default-sink", "Default output");
+        AudioNode eventStream = new AudioNode(71, "event-stream", "Event effects", "Stream/Output/Audio", "running",
+                "Event Sound Studio", "pw-cat", PipeWireRouteManager.EVENT_SOUND_STUDIO_APPLICATION_ID,
+                2, List.of(48000), 1.0, false, null);
+        PipeWireBackend.Snapshot snapshot = snapshotWithStreams(List.of(sink), List.of(eventStream), sink.id());
+        PipeWireRouteManager manager = new PipeWireRouteManager();
+
+        PipeWireRouteManager.Plan isolated = manager.plan(config, snapshot);
+        assertTrue(isolated.streams().isEmpty(), "an unmatched event stream must remain on its isolated virtual sink");
+        assertEquals(List.of("main-out"), isolated.routes().stream().map(PipeWireRouteManager.RoutePlan::id).toList());
+
+        @SuppressWarnings("unchecked") List<Map<String,Object>> applications = (List<Map<String,Object>>) config.get("applications");
+        applications.add(DefaultConfig.map("id", "event-effects", "name", "Event effects", "match",
+                DefaultConfig.map("app_id", PipeWireRouteManager.EVENT_SOUND_STUDIO_APPLICATION_ID), "bus", "main",
+                "volume", 1.0, "mute", false));
+        PipeWireRouteManager.Plan explicitlyRouted = manager.plan(config, snapshot);
+        assertEquals(List.of("event-stream"), explicitlyRouted.routedStreamNames());
+    }
+
     private static AudioNode sink(int id, String name, String description) {
         return new AudioNode(id, name, description, "Audio/Sink", "running", "", "", "", 2,
                 List.of(48000), 1.0, false, null);
@@ -221,6 +327,11 @@ class PipeWireRouteManagerTest {
 
     private static PipeWireBackend.Snapshot snapshot(List<AudioNode> sinks, int defaultSinkId) {
         return new PipeWireBackend.Snapshot(true, "", sinks, List.of(), List.of(), List.of(), Map.of(), defaultSinkId,
+                System.currentTimeMillis());
+    }
+
+    private static PipeWireBackend.Snapshot snapshotWithStreams(List<AudioNode> sinks, List<AudioNode> streams, int defaultSinkId) {
+        return new PipeWireBackend.Snapshot(true, "", sinks, List.of(), streams, List.of(), Map.of(), defaultSinkId,
                 System.currentTimeMillis());
     }
 

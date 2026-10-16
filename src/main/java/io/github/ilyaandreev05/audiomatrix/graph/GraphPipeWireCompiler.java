@@ -1,5 +1,7 @@
 package io.github.ilyaandreev05.audiomatrix.graph;
 
+import io.github.ilyaandreev05.audiomatrix.config.ChannelMatrix;
+
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -60,10 +62,13 @@ public final class GraphPipeWireCompiler {
             visiting.remove(nodeId);return;
         }
         if(node instanceof OutputNode output){
-            String targetKey=path.sourceId+"\u0000"+output.deviceId();
-            if(!sourceOutputs.add(targetKey))throw new IllegalArgumentException("Multiple paths from source '"+path.sourceId+"' reach output '"+output.deviceId()+"'; remove the duplicate branch");
+            ChannelMatrix channelMatrix=output.channelMatrix();
+            String targetChannels=channelMatrix==null?String.join(",",output.inputs().getFirst().channels()):String.join(",",channelMatrix.outputs());
+            String targetKey=path.sourceId+"\u0000"+output.deviceId()+"\u0000"+targetChannels;
+            if(!sourceOutputs.add(targetKey))throw new IllegalArgumentException("Multiple paths from source '"+path.sourceId+"' reach the same channels of output '"+output.deviceId()+"'; remove the duplicate branch");
             String id="graph-"+path.sourceId+"-"+output.id()+"-"+activeRoutes.size();Map<String,Object> route=map("id",id,"name",path.sourceId+" → "+output.name(),"from",path.sourceId,"to",output.deviceId(),"volume",path.muted?0:Math.max(0,Math.min(1,path.gain)),"gain_db",0,"mute",path.muted,"channel_map","stereo","enabled",true);
             route.put("channel_map",layout(output.inputs().getFirst().channels()));
+            if(channelMatrix!=null)route.put("channel_matrix",channelMatrix.toMap());
             if(!path.filters.isEmpty()){String chainId="graph-chain-"+id;route.put("filters_ref","dsp.route_chains."+chainId);routeChains.put(chainId,map("enabled",true,"filters",List.copyOf(path.filters)));}
             routes.add(route);activeRoutes.add(id);visiting.remove(nodeId);return;
         }

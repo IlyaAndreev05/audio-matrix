@@ -51,6 +51,8 @@ public final class GraphRouteLibrary {
         Map<String,Object> layouts=mutableMap(config,"graph_ui_layout");Map<String,Object> sourceLayout=map(layouts.get(routeId));Map<String,Object> copiedLayout=new LinkedHashMap<>();
         sourceLayout.forEach((oldNode,value)->{String newNode=nodeIds.get(oldNode);if(newNode!=null)copiedLayout.put(newNode,deepValue(value));});
         if(!copiedLayout.isEmpty())layouts.put(newRouteId,copiedLayout);
+        Map<String,Object> scales=mutableMap(config,"graph_ui_scale");Object scale=scales.get(routeId);if(scale instanceof Number)scales.put(newRouteId,scale);
+        GraphSubgraphLibrary.duplicateRoute(config, routeId, newRouteId, nodeIds);
         return copy;
     }
 
@@ -63,6 +65,8 @@ public final class GraphRouteLibrary {
         if (active) config.put("active_route", replacementRouteId);
         routes.removeIf(route -> routeId.equals(route.get("id")));
         mutableMap(config,"graph_ui_layout").remove(routeId);
+        mutableMap(config,"graph_ui_scale").remove(routeId);
+        mutableMap(config,"graph_ui_subgraphs").remove(routeId);
     }
 
     public static String createGroup(Map<String, Object> config, String name) {
@@ -105,6 +109,8 @@ public final class GraphRouteLibrary {
         copy.put("id", id("copy")); copy.put("name", label == null || label.isBlank() ? String.valueOf(route.get("name")) : label);
         copy.put("route", deep(route)); copy.put("active", false);
         copy.put("ui_layout",deep(map(mutableMap(config,"graph_ui_layout").get(routeId))));
+        Object scale=mutableMap(config,"graph_ui_scale").get(routeId);if(scale instanceof Number)copy.put("ui_scale",scale);
+        copy.put("ui_subgraphs",GraphSubgraphLibrary.encoded(GraphSubgraphLibrary.forRoute(config,routeId)));
         mutableList(config, "saved_copies").add(copy);
         return String.valueOf(copy.get("id"));
     }
@@ -118,8 +124,10 @@ public final class GraphRouteLibrary {
         List<Map<String,Object>> routes=mutableList(config,"route_library");String temporaryId=id("restore-source");
         Map<String,Object> source=new LinkedHashMap<>(snapshot);source.put("id",temporaryId);routes.add(source);
         Map<String,Object> layouts=mutableMap(config,"graph_ui_layout");Map<String,Object> savedLayout=map(copy.get("ui_layout"));if(!savedLayout.isEmpty())layouts.put(temporaryId,deep(savedLayout));
+        Map<String,Object> scales=mutableMap(config,"graph_ui_scale");if(copy.get("ui_scale") instanceof Number scale)scales.put(temporaryId,scale);
+        Map<String,Object> subgraphs=mutableMap(config,"graph_ui_subgraphs");Object savedSubgraphs=copy.get("ui_subgraphs");if(savedSubgraphs instanceof List<?> list)subgraphs.put(temporaryId,deepValue(list));
         try{return duplicateRoute(config,temporaryId,newName==null||newName.isBlank()?graph.name()+" (копия)":newName);}
-        finally{routes.removeIf(route->temporaryId.equals(route.get("id")));layouts.remove(temporaryId);}
+        finally{routes.removeIf(route->temporaryId.equals(route.get("id")));layouts.remove(temporaryId);scales.remove(temporaryId);subgraphs.remove(temporaryId);}
     }
 
     public static void deleteSavedCopy(Map<String,Object> config,String copyId) {
@@ -131,7 +139,7 @@ public final class GraphRouteLibrary {
         List<String> channels = node.outputs().isEmpty() ? node.inputs().getFirst().channels() : node.outputs().getFirst().channels();
         return switch (node.type()) {
             case "source" -> new SourceNode(id, node.name(), ((SourceNode) node).selector(), channels);
-            case "output" -> new OutputNode(id, node.name(), ((OutputNode) node).deviceId(), channels);
+            case "output" -> new OutputNode(id, node.name(), ((OutputNode) node).deviceId(), channels, ((OutputNode) node).channelMatrix());
             case "gain" -> new GainNode(id, node.name(), channels, ((GainNode) node).gain(), ((GainNode) node).muted());
             case "gate" -> new GateNode(id, node.name(), channels, ((GateNode) node).open());
             case "router" -> { RouterNode router=(RouterNode)node; yield new RouterNode(id,node.name(),channels,channels,router.activeLinks(),router.multiple()); }

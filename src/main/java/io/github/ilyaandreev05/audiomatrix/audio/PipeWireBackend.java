@@ -30,6 +30,7 @@ import java.util.function.Consumer;
 import java.util.zip.CRC32;
 
 public final class PipeWireBackend implements AutoCloseable {
+    public static final String SYSTEM_MIXER_SINK_NAME = "audiomatrix_system";
     private static final int SAMPLE_RATE = 48_000;
     private static final int CALIBRATION_SWEEP_LEAD_MS = 500;
     private final ObjectMapper json = new ObjectMapper();

@@ -7,22 +7,25 @@ import GLib from 'gi://GLib';
 
 const OBJECT_PATH = '/org/ilya/AudioMatrix';
 const INTERFACE = 'org.ilya.AudioMatrix';
+const API_VERSION = 2;
 const STALE_AFTER_SECONDS = 12;
 
 const TEXT = {
     ru: {
         title: 'Audio Matrix', connecting: 'Подключение к движку…', unavailable: 'Движок Audio Matrix недоступен',
         outputs: 'УСТРОЙСТВА ВЫВОДА', applications: 'ПРИЛОЖЕНИЯ', open: 'Эквалайзер и маршруты — открыть редактор',
-        select: 'Сделать системным выходом', mute: 'Mute', unmute: 'Включить звук', streams: 'Потоки',
+        volume: 'Громкость', mute: 'Mute', unmute: 'Включить звук', streams: 'Потоки',
         profile: 'Профиль', route: 'Маршрут', noApplications: 'Нет активных приложений',
         controls: 'ЗАКРЕПЛЁННЫЕ ПАРАМЕТРЫ', enabled: 'Включено', disabled: 'Выключено',
+        commandError: 'Команда не выполнена',
     },
     en: {
         title: 'Audio Matrix', connecting: 'Connecting to engine…', unavailable: 'Audio Matrix engine unavailable',
         outputs: 'OUTPUT DEVICES', applications: 'APPLICATIONS', open: 'EQ and routes — open editor',
-        select: 'Make system output', mute: 'Mute', unmute: 'Unmute', streams: 'Streams',
+        volume: 'Volume', mute: 'Mute', unmute: 'Unmute', streams: 'Streams',
         profile: 'Profile', route: 'Route', noApplications: 'No active applications',
         controls: 'PINNED CONTROLS', enabled: 'Enabled', disabled: 'Disabled',
+        commandError: 'Command failed',
     },
 };
 
@@ -38,6 +41,8 @@ export default class AudioMatrixQuickSettingsExtension extends Extension {
         this._lastPayload = '';
         this._lastStateAt = GLib.get_monotonic_time();
         this._sliderTimers = new Map();
+        this._pendingCommands = new Map();
+        this._commandError = '';
         this._dynamic = new PopupMenu.PopupMenuSection();
         this._signalId = Gio.DBus.session.signal_subscribe(
             null, INTERFACE, 'State', OBJECT_PATH, null, Gio.DBusSignalFlags.NONE,
@@ -48,6 +53,28 @@ export default class AudioMatrixQuickSettingsExtension extends Extension {
                     this._setState(JSON.parse(parameters.deepUnpack()[0]));
                 } catch (error) {
                     console.debug(`Audio Matrix state parse failed: ${error}`);
+                }
+            });
+        this._resultSignalId = Gio.DBus.session.signal_subscribe(
+            null, INTERFACE, 'Result', OBJECT_PATH, null, Gio.DBusSignalFlags.NONE,
+            (_connection, _sender, _path, _iface, _signal, parameters) => {
+                try {
+                    const [version, requestId, status, message] = parameters.deepUnpack();
+                    if (version !== API_VERSION)
+                        return;
+                    const timer = this._pendingCommands.get(requestId);
+                    if (timer)
+                        GLib.Source.remove(timer);
+                    this._pendingCommands.delete(requestId);
+                    if (status !== 'ok') {
+                        this._commandError = String(message || 'Unknown error');
+                        this._render();
+                    } else if (this._commandError) {
+                        this._commandError = '';
+                        this._render();
+                    }
+                } catch (error) {
+                    console.debug(`Audio Matrix command result parse failed: ${error}`);
                 }
             });
         this._watchdogId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 4, () => {
@@ -99,7 +126,10 @@ export default class AudioMatrixQuickSettingsExtension extends Extension {
         const t = TEXT[this._language];
         this._dynamic.removeAll();
         this._dynamic.addMenuItem(new PopupMenu.PopupMenuItem(t.title, {reactive: false, can_focus: false}));
-        const available = Boolean(this._state?.apiVersion === 1 && this._state?.connected && !this._stale);
+        const available = Boolean(this._state?.apiVersion === API_VERSION && this._state?.connected && !this._stale);
+        if (this._commandError)
+            this._dynamic.addMenuItem(new PopupMenu.PopupMenuItem(`${t.commandError}: ${this._commandError}`,
+                {reactive: false, can_focus: false}));
         if (!available) {
             this._dynamic.addMenuItem(new PopupMenu.PopupMenuItem(this._state ? t.unavailable : t.connecting,
                 {reactive: false, can_focus: false}));
@@ -136,10 +166,8 @@ export default class AudioMatrixQuickSettingsExtension extends Extension {
         this._addHeading(t.outputs);
         for (const output of this._state.outputs || []) {
             const name = `${output.description || output.name}${output.default ? ' · ✓' : ''}`;
-            const selector = new PopupMenu.PopupMenuItem(name);
-            selector.connect('activate', () => this._send('select_output', output.name));
-            this._dynamic.addMenuItem(selector);
-            this._addSlider(`${output.name} · ${t.select}`, output.volume,
+            this._dynamic.addMenuItem(new PopupMenu.PopupMenuItem(name, {reactive: false, can_focus: false}));
+            this._addSlider(`${output.name} · ${t.volume}`, output.volume,
                 value => this._send('set_output_volume', `${output.name}\t${value.toFixed(3)}`));
             this._addAction(output.muted ? t.unmute : t.mute,
                 () => this._send('toggle_output_mute', output.name));
@@ -236,8 +264,23 @@ export default class AudioMatrixQuickSettingsExtension extends Extension {
     _send(name, value) {
         if (!this._state?.connected || this._stale)
             return;
-        Gio.DBus.session.emit_signal(null, OBJECT_PATH, INTERFACE, 'Command',
-            new GLib.Variant('(ss)', [name, value]));
+        const requestId = GLib.uuid_string_random();
+        const timer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 5, () => {
+            this._pendingCommands.delete(requestId);
+            this._commandError = 'No response from the Audio Matrix engine';
+            this._render();
+            return GLib.SOURCE_REMOVE;
+        });
+        this._pendingCommands.set(requestId, timer);
+        try {
+            Gio.DBus.session.emit_signal(null, OBJECT_PATH, INTERFACE, 'Command',
+                new GLib.Variant('(usss)', [API_VERSION, requestId, name, value]));
+        } catch (error) {
+            GLib.Source.remove(timer);
+            this._pendingCommands.delete(requestId);
+            this._commandError = String(error);
+            this._render();
+        }
     }
 
     _openApplication(bridgeConnected) {
@@ -277,12 +320,17 @@ export default class AudioMatrixQuickSettingsExtension extends Extension {
         for (const timer of this._sliderTimers?.values() ?? [])
             GLib.Source.remove(timer);
         this._sliderTimers?.clear();
+        for (const timer of this._pendingCommands?.values() ?? [])
+            GLib.Source.remove(timer);
+        this._pendingCommands?.clear();
         if (this._retryId)
             GLib.Source.remove(this._retryId);
         if (this._watchdogId)
             GLib.Source.remove(this._watchdogId);
         if (this._signalId)
             Gio.DBus.session.signal_unsubscribe(this._signalId);
+        if (this._resultSignalId)
+            Gio.DBus.session.signal_unsubscribe(this._resultSignalId);
         this._removeSection();
         this._dynamic?.destroy();
         this._dynamic = null;
