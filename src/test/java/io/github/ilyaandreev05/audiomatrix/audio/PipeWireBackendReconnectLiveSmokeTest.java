@@ -3,6 +3,12 @@ package io.github.ilyaandreev05.audiomatrix.audio;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.ilyaandreev05.audiomatrix.config.DefaultConfig;
+import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphConnection;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphPipeWireCompiler;
+import io.github.ilyaandreev05.audiomatrix.graph.OutputNode;
+import io.github.ilyaandreev05.audiomatrix.graph.SourceNode;
+import io.github.ilyaandreev05.audiomatrix.graph.SwitchNode;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -12,6 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -24,6 +31,95 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** Opt-in private-daemon reconnect checks; WirePlumber runs with its policy-only profile and no hardware monitors. */
 class PipeWireBackendReconnectLiveSmokeTest {
     @TempDir Path tempDir;
+
+    @Test void privatePipeWireSwitchUpdatesLevelsWithoutRecreatingRouteNodes() throws Exception {
+        Assumptions.assumeTrue("1".equals(System.getenv("AUDIO_MATRIX_PIPEWIRE_RECONNECT_SMOKE")),
+                "Run scripts/pipewire-reconnect-smoke.py for the isolated route-switch smoke");
+        for (String command : List.of("pipewire", "wireplumber", "pw-cli", "pw-loopback", "pw-link", "pw-dump", "wpctl"))
+            Assumptions.assumeTrue(commandExists(command), "Requires " + command);
+        isolatedRuntimePath();
+
+        String suffix = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 10);
+        String monitorSinkName = "am_private_switch_" + suffix + "_monitor_input";
+        String monitorOutputName = "am_private_switch_" + suffix + "_monitor_output";
+        String auxSinkName = "am_private_switch_" + suffix + "_aux_input";
+        String auxOutputName = "am_private_switch_" + suffix + "_aux_output";
+        Path monitorSinkConfigPath = tempDir.resolve("private-switch-monitor.conf");
+        Path auxSinkConfigPath = tempDir.resolve("private-switch-aux.conf");
+        Path monitorLog = tempDir.resolve("private-switch-monitor.log");
+        Path auxLog = tempDir.resolve("private-switch-aux.log");
+        Files.writeString(monitorSinkConfigPath, virtualSinkConfig(monitorSinkName, monitorOutputName));
+        Files.writeString(auxSinkConfigPath, virtualSinkConfig(auxSinkName, auxOutputName));
+
+        Process server = startPipeWire();
+        Process policy = null;
+        Process monitorClient = null;
+        Process auxClient = null;
+        PipeWireBackend backend = new PipeWireBackend();
+        PipeWireRouteManager manager = new PipeWireRouteManager();
+        try {
+            assertTrue(waitForCore(server, Duration.ofSeconds(8)), "The private PipeWire server did not start");
+            policy = startWirePlumber("private-switch-wireplumber.log");
+            assertTrue(policy.isAlive(), "The private WirePlumber policy process did not stay alive");
+            monitorClient = startVirtualSink(monitorSinkConfigPath, monitorLog);
+            AudioNode monitorSink = waitForSink(backend, monitorClient, monitorSinkName, monitorLog);
+            auxClient = startVirtualSink(auxSinkConfigPath, auxLog);
+            AudioNode auxSink = waitForSink(backend, auxClient, auxSinkName, auxLog);
+            PipeWireBackend.Snapshot snapshot = backend.refresh().get(8, TimeUnit.SECONDS);
+
+            Map<String, Object> base = DefaultConfig.create();
+            @SuppressWarnings("unchecked") List<Map<String, Object>> devices = (List<Map<String, Object>>) base.get("devices");
+            devices.add(DefaultConfig.map("id", "private-monitor", "selector", DefaultConfig.map("kind", "name_equals", "value", monitorSinkName),
+                    "role", "speaker", "volume", 1.0, "mute", false));
+            devices.add(DefaultConfig.map("id", "private-aux", "selector", DefaultConfig.map("kind", "name_equals", "value", auxSinkName),
+                    "role", "headphones", "volume", 1.0, "mute", false));
+            List<String> stereo = List.of("FL", "FR");
+            SourceNode source = new SourceNode("source", "Applications", "application:unassigned", stereo);
+            SwitchNode monitorChoice = new SwitchNode("switch", "Monitor or AUX", stereo,
+                    List.of("to-monitor", "to-aux"), List.of("in->to-monitor"));
+            SwitchNode auxChoice = new SwitchNode("switch", "Monitor or AUX", stereo,
+                    List.of("to-monitor", "to-aux"), List.of("in->to-aux"));
+            OutputNode monitor = new OutputNode("monitor", "Private monitor", "private-monitor", stereo);
+            OutputNode aux = new OutputNode("aux", "Private AUX", "private-aux", stereo);
+            List<GraphConnection> edges = List.of(
+                    new GraphConnection("source-switch", "source", "out", "switch", "in", true, 1.0),
+                    new GraphConnection("switch-monitor", "switch", "to-monitor", "monitor", "in", true, 1.0),
+                    new GraphConnection("switch-aux", "switch", "to-aux", "aux", "in", true, 1.0));
+            AudioGraph monitorGraph = new AudioGraph("private-switch-route", "Private output switch",
+                    List.of(source, monitorChoice, monitor, aux), edges);
+            AudioGraph auxGraph = new AudioGraph("private-switch-route", "Private output switch",
+                    List.of(source, auxChoice, monitor, aux), edges);
+            Map<String, Object> monitorConfig = GraphPipeWireCompiler.compile(monitorGraph, base);
+            Map<String, Object> auxConfig = GraphPipeWireCompiler.compile(auxGraph, base);
+            PipeWireRouteManager.Plan monitorPlan = manager.plan(monitorConfig, snapshot);
+            PipeWireRouteManager.Plan auxPlan = manager.plan(auxConfig, snapshot);
+            assertTrue(PipeWireRouteManager.sameRoutingTopology(monitorPlan, auxPlan));
+            assertEquals(2, manager.apply(monitorConfig, snapshot).get(20, TimeUnit.SECONDS).routes());
+            Map<String, Integer> before = nodeIdsByName();
+            List<String> routeNodes = monitorPlan.routes().stream().flatMap(route -> java.util.stream.Stream.of(
+                    route.captureNodeName(), route.playbackNodeName())).toList();
+            assertTrue(routeNodes.stream().allMatch(before::containsKey), "All private route nodes should exist before switching");
+
+            assertEquals(2, manager.apply(auxConfig, snapshot).get(20, TimeUnit.SECONDS).routes());
+            Map<String, Integer> after = nodeIdsByName();
+            assertEquals(routeNodes.stream().collect(java.util.stream.Collectors.toMap(name -> name, before::get)),
+                    routeNodes.stream().collect(java.util.stream.Collectors.toMap(name -> name, after::get)),
+                    "A Switch change should update route levels without restarting route processes");
+            assertEquals(monitorSink.name(), monitorPlan.routes().stream().filter(route -> route.sink() != null
+                    && route.sink().id() == monitorSink.id()).findFirst().orElseThrow().sink().name());
+            assertEquals(auxSink.name(), auxPlan.routes().stream().filter(route -> route.sink() != null
+                    && route.sink().id() == auxSink.id()).findFirst().orElseThrow().sink().name());
+        } finally {
+            try { manager.closeAsync().get(10, TimeUnit.SECONDS); }
+            finally {
+                backend.close();
+                stop(monitorClient);
+                stop(auxClient);
+                stop(policy);
+                stop(server);
+            }
+        }
+    }
 
     @Test void backendPublishesFreshSnapshotAfterPrivatePipeWireRestarts() throws Exception {
         Assumptions.assumeTrue("1".equals(System.getenv("AUDIO_MATRIX_PIPEWIRE_RECONNECT_SMOKE")),
@@ -296,6 +392,17 @@ class PipeWireBackendReconnectLiveSmokeTest {
         throw new IOException("PipeWire node description was not found: " + description);
     }
 
+    private Map<String, Integer> nodeIdsByName() throws Exception {
+        Map<String, Integer> result = new LinkedHashMap<>();
+        for (JsonNode node : new ObjectMapper().readTree(run("pw-dump", "-N"))) {
+            JsonNode props = node.path("info").path("props");
+            String name = props.path("node.name").asText("");
+            int id = node.path("id").asInt(-1);
+            if (!name.isBlank() && id >= 0) result.put(name, id);
+        }
+        return result;
+    }
+
     private String run(String... command) throws Exception {
         Path output = Files.createTempFile(tempDir, "pw-command-", ".out");
         try {
@@ -340,6 +447,7 @@ class PipeWireBackendReconnectLiveSmokeTest {
     }
 
     private static void stop(Process server) throws InterruptedException {
+        if (server == null) return;
         if (server.isAlive()) server.destroy();
         if (server.isAlive() && !server.waitFor(2, TimeUnit.SECONDS)) server.destroyForcibly();
         if (server.isAlive()) server.waitFor(2, TimeUnit.SECONDS);

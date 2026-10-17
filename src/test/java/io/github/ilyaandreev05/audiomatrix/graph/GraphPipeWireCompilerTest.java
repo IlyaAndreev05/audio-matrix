@@ -93,9 +93,14 @@ class GraphPipeWireCompilerTest {
 
         Map<String,Object> compiled=GraphPipeWireCompiler.compile(graph,DefaultConfig.create());
 
-        assertEquals(1,((List<?>)compiled.get("routes")).size());
-        @SuppressWarnings("unchecked") Map<String,Object> route=(Map<String,Object>)((List<?>)compiled.get("routes")).getFirst();
-        assertEquals("system_default",route.get("to"));
+        @SuppressWarnings("unchecked") List<Map<String,Object>> routes=(List<Map<String,Object>>)compiled.get("routes");
+        assertEquals(2,routes.size());
+        Map<String,Object> selected=routes.stream().filter(route->"system_default".equals(route.get("to"))).findFirst().orElseThrow();
+        Map<String,Object> inactive=routes.stream().filter(route->"unused-id".equals(route.get("to"))).findFirst().orElseThrow();
+        assertEquals(1.0,selected.get("volume"));
+        assertEquals(false,selected.get("mute"));
+        assertEquals(0.0,inactive.get("volume"));
+        assertEquals(true,inactive.get("mute"));
         AudioGraph decoded=GraphCodec.fromMap(GraphCodec.toMap(graph));
         assertEquals(List.of("in-a->out-b"),((MatrixNode)decoded.nodes().stream().filter(MatrixNode.class::isInstance).findFirst().orElseThrow()).activeLinks());
     }
@@ -108,9 +113,19 @@ class GraphPipeWireCompilerTest {
         AudioGraph switchGraph=new AudioGraph("route-switch","Switch",List.of(source,single,monitor,aux),List.of(
                 link("source","out","single","in"),link("single","to-monitor","monitor","in"),link("single","to-aux","aux","in")));
         Map<String,Object> switchPlan=GraphPipeWireCompiler.compile(switchGraph,DefaultConfig.create());
-        assertEquals(1,((List<?>)switchPlan.get("routes")).size());
-        @SuppressWarnings("unchecked") Map<String,Object> route=(Map<String,Object>)((List<?>)switchPlan.get("routes")).getFirst();
-        assertEquals("aux-id",route.get("to"));
+        @SuppressWarnings("unchecked") List<Map<String,Object>> switchRoutes=(List<Map<String,Object>>)switchPlan.get("routes");
+        assertEquals(2,switchRoutes.size());
+        Map<String,Object> activeAux=switchRoutes.stream().filter(route->"aux-id".equals(route.get("to"))).findFirst().orElseThrow();
+        Map<String,Object> inactiveMonitor=switchRoutes.stream().filter(route->"monitor-id".equals(route.get("to"))).findFirst().orElseThrow();
+        assertEquals(1.0,activeAux.get("volume"));
+        assertEquals(0.0,inactiveMonitor.get("volume"));
+
+        SwitchNode switched=new SwitchNode("single","Single select",STEREO,List.of("to-monitor","to-aux"),List.of("in->to-monitor"));
+        AudioGraph switchedGraph=new AudioGraph("route-switch","Switch",List.of(source,switched,monitor,aux),switchGraph.connections());
+        @SuppressWarnings("unchecked") List<Map<String,Object>> switchedRoutes=(List<Map<String,Object>>)GraphPipeWireCompiler.compile(switchedGraph,DefaultConfig.create()).get("routes");
+        assertEquals(switchRoutes.stream().map(route->route.get("id")).toList(),switchedRoutes.stream().map(route->route.get("id")).toList());
+        assertEquals(1.0,switchedRoutes.stream().filter(route->"monitor-id".equals(route.get("to"))).findFirst().orElseThrow().get("volume"));
+        assertEquals(0.0,switchedRoutes.stream().filter(route->"aux-id".equals(route.get("to"))).findFirst().orElseThrow().get("volume"));
 
         MultiSwitchNode multi=new MultiSwitchNode("multi","Multi select",STEREO,List.of("to-monitor","to-aux"),List.of("in->to-monitor","in->to-aux"));
         AudioGraph multiGraph=new AudioGraph("route-multi","Multi",List.of(source,multi,monitor,aux),List.of(
@@ -140,12 +155,33 @@ class GraphPipeWireCompilerTest {
 
         assertEquals(2,((List<?>)compiled.get("routes")).size());
         @SuppressWarnings("unchecked") List<Map<String,Object>> routes=(List<Map<String,Object>>)compiled.get("routes");
-        Map<String,Object> rearRoute=routes.stream().filter(route->String.valueOf(route.get("id")).contains("-rear-")).findFirst().orElseThrow();
+        Map<String,Object> rearRoute=routes.stream().filter(route->route.containsKey("channel_matrix")).findFirst().orElseThrow();
         assertEquals(Map.of("inputs",STEREO,"outputs",List.of("RL","RR"),"coefficients",List.of(List.of(1.0,0.0),List.of(0.0,1.0))),rearRoute.get("channel_matrix"));
 
         AudioGraph decoded=GraphCodec.fromMap(GraphCodec.toMap(graph));
         OutputNode decodedRear=(OutputNode)decoded.nodes().stream().filter(OutputNode.class::isInstance).map(OutputNode.class::cast).filter(node->node.id().equals("rear")).findFirst().orElseThrow();
         assertEquals(List.of("RL","RR"),decodedRear.channelMatrix().outputs());
+    }
+
+    @Test void sharesOnePostMixLimiterAcrossFrontAndRearPairsOfOnePhysicalDevice(){
+        SourceNode source=new SourceNode("source","Applications","application:unassigned",STEREO);
+        MultiSwitchNode split=new MultiSwitchNode("split","Family outputs",STEREO,List.of("front","rear"),List.of("in->front","in->rear"));
+        FilterNode limiter=new FilterNode("limiter","Vibration limiter",STEREO,"limiter",true,
+                Map.of("ceiling_db",-2.0,"lookahead_ms",5.0,"release_ms",80.0));
+        OutputNode front=new OutputNode("front-output","Green AUX", "family17h",STEREO);
+        OutputNode rear=new OutputNode("rear-output","Black AUX", "family17h",STEREO,
+                new ChannelMatrix(STEREO,List.of("RL","RR"),List.of(List.of(1.0,0.0),List.of(0.0,1.0))));
+        AudioGraph graph=new AudioGraph("family-route","Family channel pairs",List.of(source,split,limiter,front,rear),List.of(
+                link("source","out","split","in"),link("split","front","limiter","in"),link("limiter","out","front-output","in"),
+                link("split","rear","rear-output","in")));
+
+        Map<String,Object> compiled=GraphPipeWireCompiler.compile(graph,DefaultConfig.create());
+
+        @SuppressWarnings("unchecked") Map<String,Object> dsp=(Map<String,Object>)compiled.get("dsp");
+        @SuppressWarnings("unchecked") Map<String,Object> outputLimiters=(Map<String,Object>)dsp.get("output_limiters");
+        @SuppressWarnings("unchecked") Map<String,Object> familyLimiter=(Map<String,Object>)outputLimiters.get("family17h");
+        assertEquals(-2.0,familyLimiter.get("ceiling_db"));
+        assertEquals(2,((List<?>)compiled.get("routes")).size());
     }
 
     private static GraphConnection link(String from,String fromPort,String to,String toPort){return new GraphConnection("link-"+from+"-"+to,from,fromPort,to,toPort,true,1);}

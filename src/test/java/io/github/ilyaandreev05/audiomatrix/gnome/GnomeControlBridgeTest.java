@@ -124,7 +124,7 @@ class GnomeControlBridgeTest {
 
     @Test void publishesRouterChoicesForPinnedMatrixParameters(){
         Map<String,Object> config=DefaultConfig.create();List<String> stereo=List.of("FL","FR");
-        AudioGraph graph=new AudioGraph("route-switch","Output selector",List.of(new SourceNode("source","Apps","application:unassigned",stereo),new SwitchNode("switch","Monitor or AUX",stereo,List.of("monitor","aux"),List.of("in->monitor"))),List.of());
+        AudioGraph graph=new AudioGraph("route-switch","Output selector",List.of(new SourceNode("source","Apps","application:unassigned",stereo),new SwitchNode("switch","Monitor or AUX",stereo,List.of("monitor","aux"),List.of("in->monitor")),new OutputNode("monitor-output","Monitor","monitor-id",stereo),new OutputNode("aux-output","AUX","aux-id",stereo)),List.of(new GraphConnection("source-switch","source","out","switch","in",true,1),new GraphConnection("switch-monitor","switch","monitor","monitor-output","in",true,1),new GraphConnection("switch-aux","switch","aux","aux-output","in",true,1)));
         GraphRouteLibrary.saveRoute(config,graph,"");GraphRouteLibrary.activate(config,graph.id());
         config.put("quick_controls",List.of(Map.of("id","output-choice","route_id",graph.id(),"node_id","switch","parameter_id","active_links","label","Playback destination")));
 

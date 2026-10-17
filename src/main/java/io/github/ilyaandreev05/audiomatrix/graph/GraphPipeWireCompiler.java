@@ -2,12 +2,14 @@ package io.github.ilyaandreev05.audiomatrix.graph;
 
 import io.github.ilyaandreev05.audiomatrix.config.ChannelMatrix;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 /** Compiles the safe, supported graph subset to Audio Matrix's existing PipeWire route plan. */
 public final class GraphPipeWireCompiler {
@@ -41,7 +43,7 @@ public final class GraphPipeWireCompiler {
         }
         for(SourceNode source:sources){
             List<GraphConnection> first=outgoing(graph,source.id());
-            for(GraphConnection edge:first){PathState state=new PathState(source.id(),edge.gain(),false,new ArrayList<>());walk(edge.toNode(),edge.toPort(),state,nodes,graph,new HashSet<>(),routes,activeRouteIds,routeChains,outputLimiters,sourceOutputs);}
+            for(GraphConnection edge:first){PathState state=new PathState(source.id(),edge.gain(),false,true,new ArrayList<>(),new ArrayList<>());state.edgeIds.add(edge.id());walk(edge.toNode(),edge.toPort(),state,nodes,graph,new HashSet<>(),routes,activeRouteIds,routeChains,outputLimiters,sourceOutputs);}
         }
         if(routes.isEmpty())throw new IllegalArgumentException("The graph has no enabled path from a source to an output");
         Map<String,Object> result=deep(baseConfig);
@@ -62,21 +64,25 @@ public final class GraphPipeWireCompiler {
         if(path.outputLimiter!=null&&!(node instanceof OutputNode)&&!(node instanceof RouterNode))
             throw new IllegalArgumentException("Peak limiter nodes must be the final processor before an output; move '"+node.name()+"' before the limiter");
         if(node instanceof RouterNode router){
-            for(String active:router.activeLinks()){
-                String[] pair=active.split("->",2);if(pair.length!=2||!pair[0].equals(incomingPort))continue;
-                for(GraphConnection edge:outgoing(graph,nodeId))if(edge.fromPort().equals(pair[1])){PathState branch=path.copy();applyEdgeGain(branch,edge);walk(edge.toNode(),edge.toPort(),branch,nodes,graph,new HashSet<>(visiting),routes,activeRoutes,routeChains,outputLimiters,sourceOutputs);}
+            for(GraphConnection edge:outgoing(graph,nodeId)){
+                PathState branch=path.copy();
+                branch.selected&=router.activeLinks().contains(incomingPort+"->"+edge.fromPort());
+                applyEdgeGain(branch,edge);
+                walk(edge.toNode(),edge.toPort(),branch,nodes,graph,new HashSet<>(visiting),routes,activeRoutes,routeChains,outputLimiters,sourceOutputs);
             }
             visiting.remove(nodeId);return;
         }
         if(node instanceof OutputNode output){
-            if(outputLimiters.containsKey(output.deviceId())&&!java.util.Objects.equals(outputLimiters.get(output.deviceId()),path.outputLimiter))
-                throw new IllegalArgumentException("All active paths to output '"+output.name()+"' must share the same post-mix limiter");
-            outputLimiters.put(output.deviceId(),path.outputLimiter);
+            Map<String,Object> existingLimiter=outputLimiters.get(output.deviceId());
+            if(path.outputLimiter!=null&&existingLimiter!=null&&!java.util.Objects.equals(existingLimiter,path.outputLimiter))
+                throw new IllegalArgumentException("All paths to physical output '"+output.deviceId()+"' must share the same post-mix limiter");
+            if(path.outputLimiter!=null)outputLimiters.put(output.deviceId(),path.outputLimiter);
+            else outputLimiters.putIfAbsent(output.deviceId(),null);
             ChannelMatrix channelMatrix=output.channelMatrix();
             String targetChannels=channelMatrix==null?String.join(",",output.inputs().getFirst().channels()):String.join(",",channelMatrix.outputs());
             String targetKey=path.sourceId+"\u0000"+output.deviceId()+"\u0000"+targetChannels;
-            if(!sourceOutputs.add(targetKey))throw new IllegalArgumentException("Multiple paths from source '"+path.sourceId+"' reach the same channels of output '"+output.deviceId()+"'; remove the duplicate branch");
-            String id="graph-"+path.sourceId+"-"+output.id()+"-"+activeRoutes.size();Map<String,Object> route=map("id",id,"name",path.sourceId+" → "+output.name(),"from",path.sourceId,"to",output.deviceId(),"volume",path.muted?0:Math.max(0,Math.min(1,path.gain)),"gain_db",0,"mute",path.muted,"channel_map","stereo","enabled",true);
+            if(path.selected&&!sourceOutputs.add(targetKey))throw new IllegalArgumentException("Multiple paths from source '"+path.sourceId+"' are selected for the same channels of output '"+output.deviceId()+"'; route alternatives through a Switch or Matrix node");
+            String id=stableRouteId(path,output);boolean muted=path.muted||!path.selected;Map<String,Object> route=map("id",id,"name",path.sourceId+" → "+output.name(),"from",path.sourceId,"to",output.deviceId(),"volume",muted?0:Math.max(0,Math.min(1,path.gain)),"gain_db",0,"mute",muted,"channel_map","stereo","enabled",true);
             route.put("channel_map",layout(output.inputs().getFirst().channels()));
             if(channelMatrix!=null)route.put("channel_matrix",channelMatrix.toMap());
             if(!path.filters.isEmpty()){String chainId="graph-chain-"+id;route.put("filters_ref","dsp.route_chains."+chainId);routeChains.put(chainId,map("enabled",true,"filters",List.copyOf(path.filters)));}
@@ -104,6 +110,12 @@ public final class GraphPipeWireCompiler {
         if(path.outputLimiter!=null&&Math.abs(edge.gain()-1.0)>1e-9)
             throw new IllegalArgumentException("A post-mix peak limiter must be the final signal processor before an output");
         path.gain*=edge.gain();
+        path.edgeIds.add(edge.id());
+    }
+
+    private static String stableRouteId(PathState path,OutputNode output){
+        String identity=path.sourceId+"\u0000"+output.id()+"\u0000"+String.join("\u0000",path.edgeIds);
+        return "graph-"+UUID.nameUUIDFromBytes(identity.getBytes(StandardCharsets.UTF_8));
     }
 
     private static List<GraphConnection> outgoing(AudioGraph graph,String id){return graph.connections().stream().filter(GraphConnection::enabled).filter(edge->edge.fromNode().equals(id)).toList();}
@@ -115,5 +127,5 @@ public final class GraphPipeWireCompiler {
     private static Map<String,Object> map(Object...pairs){Map<String,Object> result=new LinkedHashMap<>();for(int i=0;i<pairs.length;i+=2)result.put((String)pairs[i],pairs[i+1]);return result;}
     @SuppressWarnings("unchecked") private static Map<String,Object> deep(Map<String,Object> value){Map<String,Object> result=new LinkedHashMap<>();value.forEach((key,item)->result.put(key,copy(item)));return result;}
     private static Object copy(Object value){if(value instanceof Map<?,?> map){Map<String,Object> result=new LinkedHashMap<>();map.forEach((key,item)->result.put(String.valueOf(key),copy(item)));return result;}if(value instanceof List<?> list)return list.stream().map(GraphPipeWireCompiler::copy).toList();return value;}
-    private static final class PathState{final String sourceId;double gain;boolean muted;final List<Map<String,Object>> filters;Map<String,Object> outputLimiter;PathState(String sourceId,double gain,boolean muted,List<Map<String,Object>> filters){this.sourceId=sourceId;this.gain=gain;this.muted=muted;this.filters=filters;}PathState copy(){PathState copy=new PathState(sourceId,gain,muted,new ArrayList<>(filters));copy.outputLimiter=outputLimiter;return copy;}}
+    private static final class PathState{final String sourceId;double gain;boolean muted;boolean selected;final List<Map<String,Object>> filters;final List<String> edgeIds;Map<String,Object> outputLimiter;PathState(String sourceId,double gain,boolean muted,boolean selected,List<Map<String,Object>> filters,List<String> edgeIds){this.sourceId=sourceId;this.gain=gain;this.muted=muted;this.selected=selected;this.filters=filters;this.edgeIds=edgeIds;}PathState copy(){PathState copy=new PathState(sourceId,gain,muted,selected,new ArrayList<>(filters),new ArrayList<>(edgeIds));copy.outputLimiter=outputLimiter;return copy;}}
 }

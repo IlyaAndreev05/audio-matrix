@@ -244,7 +244,7 @@ public final class PipeWireRouteManager implements AutoCloseable {
         }
         if (active && appliedPlan != null && processesAlive() && sameRoutingTopology(appliedPlan, plan)) {
             try {
-                updateLiveLevels(plan);
+                updateLiveLevels(appliedPlan, plan);
                 activeTransitionMs = transitionMillis(config);
                 appliedPlan = plan;
                 appliedSignature = signature;
@@ -691,17 +691,37 @@ public final class PipeWireRouteManager implements AutoCloseable {
         return true;
     }
 
+    static List<RoutePlan> routeLevelUpdateOrder(Plan previous, Plan next) {
+        Map<String, RoutePlan> previousRoutes = new LinkedHashMap<>();
+        previous.routes().forEach(route -> previousRoutes.put(route.id(), route));
+        List<RoutePlan> lowering = new ArrayList<>(), remaining = new ArrayList<>();
+        for (RoutePlan route : next.routes()) {
+            RoutePlan before = previousRoutes.get(route.id());
+            if (before == null) { remaining.add(route); continue; }
+            boolean wasMuted = effectiveRoutePlaybackMuted(previous, before);
+            boolean nowMuted = effectiveRoutePlaybackMuted(next, route);
+            double wasLevel = wasMuted ? 0.0 : effectiveRoutePlaybackVolume(previous, before);
+            double nowLevel = nowMuted ? 0.0 : effectiveRoutePlaybackVolume(next, route);
+            if ((nowMuted && !wasMuted) || nowLevel + 1e-9 < wasLevel) lowering.add(route);
+            else remaining.add(route);
+        }
+        List<RoutePlan> ordered = new ArrayList<>(next.routes().size());
+        ordered.addAll(lowering);
+        ordered.addAll(remaining);
+        return List.copyOf(ordered);
+    }
+
     private static boolean sameSink(AudioNode left, AudioNode right) {
         return left == null ? right == null : right != null && left.id() == right.id() && left.name().equals(right.name());
     }
 
-    private void updateLiveLevels(Plan plan) throws Exception {
+    private void updateLiveLevels(Plan previous, Plan plan) throws Exception {
         for (BusPlan bus : plan.buses().values()) {
             int id = findNodeId(bus.nodeName());
             run(List.of("wpctl", "set-volume", Integer.toString(id), Double.toString(bus.volume())), COMMAND_TIMEOUT);
             run(List.of("wpctl", "set-mute", Integer.toString(id), bus.muted() ? "1" : "0"), COMMAND_TIMEOUT);
         }
-        for (RoutePlan route : plan.routes()) {
+        for (RoutePlan route : routeLevelUpdateOrder(previous, plan)) {
             int id = findNodeId(route.playbackNodeName());
             double volume = effectiveRoutePlaybackVolume(plan, route);
             boolean muted = effectiveRoutePlaybackMuted(plan, route);

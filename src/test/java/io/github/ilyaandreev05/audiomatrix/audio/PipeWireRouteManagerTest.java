@@ -6,6 +6,7 @@ import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
 import io.github.ilyaandreev05.audiomatrix.graph.FilterNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphConnection;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphPipeWireCompiler;
+import io.github.ilyaandreev05.audiomatrix.graph.SwitchNode;
 import io.github.ilyaandreev05.audiomatrix.graph.OutputNode;
 import io.github.ilyaandreev05.audiomatrix.graph.SourceNode;
 
@@ -95,6 +96,57 @@ class PipeWireRouteManagerTest {
         assertTrue(PipeWireRouteManager.sameRoutingTopology(muted, withNewMaster));
         assertEquals(0.25, PipeWireRouteManager.effectiveRoutePlaybackVolume(withNewMaster,
                 withNewMaster.routes().stream().filter(route -> route.sink() != null).findFirst().orElseThrow()), 1e-9);
+    }
+
+    @Test
+    void switchingGraphOutputUpdatesLiveRouteLevelsWithoutChangingPipeWireTopology() throws IOException {
+        Map<String, Object> config = DefaultConfig.create();
+        @SuppressWarnings("unchecked") List<Map<String, Object>> devices = (List<Map<String, Object>>) config.get("devices");
+        devices.add(DefaultConfig.map("id", "monitor", "selector", DefaultConfig.map("kind", "name_equals", "value", "test-monitor"),
+                "role", "speaker", "volume", 1.0, "mute", false));
+        devices.add(DefaultConfig.map("id", "aux", "selector", DefaultConfig.map("kind", "name_equals", "value", "test-aux"),
+                "role", "headphones", "volume", 1.0, "mute", false));
+        List<String> stereo = List.of("FL", "FR");
+        SourceNode source = new SourceNode("source", "Applications", "application:unassigned", stereo);
+        SwitchNode toMonitor = new SwitchNode("switch", "Output selector", stereo,
+                List.of("to-monitor", "to-aux"), List.of("in->to-monitor"));
+        OutputNode monitor = new OutputNode("monitor", "Monitor", "monitor", stereo);
+        OutputNode aux = new OutputNode("aux", "AUX", "aux", stereo);
+        List<GraphConnection> connections = List.of(
+                new GraphConnection("source-switch", "source", "out", "switch", "in", true, 1.0),
+                new GraphConnection("switch-monitor", "switch", "to-monitor", "monitor", "in", true, 1.0),
+                new GraphConnection("switch-aux", "switch", "to-aux", "aux", "in", true, 1.0));
+        AudioGraph monitorGraph = new AudioGraph("switching-route", "Switching route",
+                List.of(source, toMonitor, monitor, aux), connections);
+        SwitchNode toAux = new SwitchNode("switch", "Output selector", stereo,
+                List.of("to-monitor", "to-aux"), List.of("in->to-aux"));
+        AudioGraph auxGraph = new AudioGraph("switching-route", "Switching route",
+                List.of(source, toAux, monitor, aux), connections);
+
+        AudioNode monitorSink = sink(71, "test-monitor", "Monitor");
+        AudioNode auxSink = sink(72, "test-aux", "AUX");
+        PipeWireBackend.Snapshot snapshot = snapshot(List.of(monitorSink, auxSink), monitorSink.id());
+        PipeWireRouteManager manager = new PipeWireRouteManager();
+        PipeWireRouteManager.Plan monitorPlan = manager.plan(GraphPipeWireCompiler.compile(monitorGraph, config), snapshot);
+        PipeWireRouteManager.Plan auxPlan = manager.plan(GraphPipeWireCompiler.compile(auxGraph, config), snapshot);
+
+        assertTrue(PipeWireRouteManager.sameRoutingTopology(monitorPlan, auxPlan));
+        assertEquals(monitorPlan.routes().stream().map(PipeWireRouteManager.RoutePlan::id).toList(),
+                auxPlan.routes().stream().map(PipeWireRouteManager.RoutePlan::id).toList());
+        assertEquals(2, monitorPlan.routes().size());
+        assertEquals(1.0, monitorPlan.routes().stream().filter(route -> route.sink() != null && route.sink().id() == monitorSink.id())
+                .findFirst().orElseThrow().volume());
+        assertEquals(0.0, monitorPlan.routes().stream().filter(route -> route.sink() != null && route.sink().id() == auxSink.id())
+                .findFirst().orElseThrow().volume());
+        assertEquals(0.0, auxPlan.routes().stream().filter(route -> route.sink() != null && route.sink().id() == monitorSink.id())
+                .findFirst().orElseThrow().volume());
+        assertEquals(1.0, auxPlan.routes().stream().filter(route -> route.sink() != null && route.sink().id() == auxSink.id())
+                .findFirst().orElseThrow().volume());
+        assertEquals(List.of(auxSink.name(), monitorSink.name()), PipeWireRouteManager.routeLevelUpdateOrder(auxPlan, monitorPlan)
+                .stream().map(route -> route.sink().name()).toList(),
+                "The old AUX path must be lowered before the new monitor path is raised");
+        assertEquals(List.of(monitorSink.name(), auxSink.name()), PipeWireRouteManager.routeLevelUpdateOrder(monitorPlan, auxPlan)
+                .stream().map(route -> route.sink().name()).toList());
     }
 
     @Test
