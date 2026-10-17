@@ -11,6 +11,7 @@ import io.github.ilyaandreev05.audiomatrix.audio.DeviceSelectorMatcher;
 import io.github.ilyaandreev05.audiomatrix.audio.DspComparisonConfig;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireRouteManager;
+import io.github.ilyaandreev05.audiomatrix.audio.RouteInputSignature;
 import io.github.ilyaandreev05.audiomatrix.audio.ProfileRoutePolicy;
 import io.github.ilyaandreev05.audiomatrix.config.ConfigArchive;
 import io.github.ilyaandreev05.audiomatrix.config.ChannelMatrix;
@@ -2903,13 +2904,7 @@ public final class AppShell extends BorderPane {
     private Map<String,Object> runtimeGraphConfig(Map<String,Object> config){String active=string(config.get("active_route"),"");if(active.isBlank())return config;Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->active.equals(item.get("id"))).findFirst().orElseThrow(()->new IllegalArgumentException("Active graph route is missing: "+active));return GraphPipeWireCompiler.compile(GraphCodec.fromMap(route),config);}
 
     private String routeInputSignature(Map<String, Object> config, PipeWireBackend.Snapshot current) {
-        List<String> sinks = current.sinks().stream().map(node -> node.id() + ":" + node.name()).sorted().toList();
-        List<String> streams = current.streams().stream().map(node -> node.id() + ":" + node.name() + ":" + node.applicationId() + ":" + node.processName()).sorted().toList();
-        int hash = Objects.hash(config.get("active_profile"), config.get("active_route"), config.get("route_library"), config.get("profiles"), config.get("buses"),
-                config.get("routes"), config.get("applications"), config.get("devices"), config.get("dsp"),
-                config.get("mixer"), config.get("engine"), backend.connectionGeneration(), current.connected(),
-                current.defaultSinkId(), sinks, streams);
-        return Integer.toHexString(hash);
+        return RouteInputSignature.create(config, current, backend.connectionGeneration());
     }
 
     public synchronized CompletableFuture<Void> closeAsync() {
