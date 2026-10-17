@@ -32,6 +32,11 @@ application {
 
 test { useJUnitPlatform() }
 
+tasks.register('verifyClassSize', Exec) {
+    commandLine 'python3', 'scripts/check_class_size.py'
+}
+tasks.named('test') { dependsOn tasks.named('verifyClassSize') }
+
 def limiterSource = file('src/main/native/audiomatrix_limiter.c')
 def limiterHeader = file('src/main/native/ladspa_abi.h')
 def limiterOutputDir = layout.buildDirectory.dir('generated-resources/limiter').get().asFile

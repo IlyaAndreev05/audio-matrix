@@ -208,125 +208,22 @@ public final class ConfigStore implements AutoCloseable {
     }
 
     private void backupBeforeSchemaUpgrade() throws IOException {
-        String base=file.getFileName()+".before-schema-3";
-        Path backup=file.resolveSibling(base);
-        for(int suffix=1;Files.exists(backup);suffix++)backup=file.resolveSibling(base+"."+suffix);
-        Files.copy(file,backup);
+        ConfigMigration.backupBeforeSchemaUpgrade(file);
     }
 
     private void migrateLegacyYaml() throws IOException, ConfigValidationException {
-        Path legacy = legacyFile;
-        if (legacy == null || Files.exists(file) || !Files.exists(legacy)) return;
-        ObjectMapper yaml = new ObjectMapper(new YAMLFactory());
-        Map<String, Object> parsed;
-        try {
-            parsed = yaml.readValue(Files.readAllBytes(legacy), MAP_TYPE);
-        } catch (Exception error) {
-            throw new ConfigValidationException(List.of("Legacy YAML could not be read; it was left untouched: " + error.getMessage()));
-        }
-        int version = parsed.get("schema_version") instanceof Number number ? number.intValue() : -1;
-        if (version < 3) upgradeConfig(parsed);
-        List<String> errors = ConfigValidator.validate(parsed);
-        if (!errors.isEmpty()) throw new ConfigValidationException(errors);
-        Path backup = legacy.resolveSibling("config.yaml.before-json");
-        if (Files.exists(backup)) throw new IOException("Legacy backup already exists; refusing to overwrite " + backup);
-        Files.copy(legacy, backup);
-        try {
-            atomicWrite(mapper.writeValueAsBytes(parsed));
-        } catch (IOException | RuntimeException failure) {
-            Files.deleteIfExists(file);
-            throw failure;
-        }
+        ConfigMigration.migrateLegacyYaml(file, legacyFile, mapper);
     }
 
     @SuppressWarnings("unchecked")
     static void upgradeConfig(Map<String,Object> config) {
-        int schema = config.get("schema_version") instanceof Number number ? number.intValue() : -1;
-        if (schema < 2) {
-            config.putIfAbsent("route_groups", new ArrayList<>());
-            config.putIfAbsent("route_library", new ArrayList<>());
-            config.putIfAbsent("saved_copies", new ArrayList<>());
-            config.putIfAbsent("graph_ui_layout", new LinkedHashMap<>());
-            config.putIfAbsent("graph_ui_scale", new LinkedHashMap<>());
-            config.putIfAbsent("graph_ui_subgraphs", new LinkedHashMap<>());
-            config.putIfAbsent("quick_controls", new ArrayList<>());
-            config.putIfAbsent("active_route", "");
-            schema = 2;
-        }
-        if (schema < 3) {
-            List<Map<String,Object>> profiles = config.get("profiles") instanceof List<?> list
-                    ? (List<Map<String,Object>>) list : new ArrayList<>();
-            if (!(config.get("profiles") instanceof List<?>)) config.put("profiles", profiles);
-            String activeProfile = String.valueOf(config.getOrDefault("active_profile", ""));
-            boolean hasActiveProfile=false;
-            for(Map<String,Object> profile:profiles)if(activeProfile.equals(profile.get("id"))){hasActiveProfile=true;break;}
-            if (!hasActiveProfile) {
-                activeProfile = profiles.isEmpty() ? "desk" : String.valueOf(profiles.getFirst().get("id"));
-                if (profiles.isEmpty()) profiles.add(DefaultConfig.map("id", activeProfile,
-                        "name", "Рабочий стол", "mode", "hybrid", "default_output", "system_default"));
-                config.put("active_profile", activeProfile);
-            }
-            List<Map<String,Object>> groups = config.get("route_groups") instanceof List<?> list
-                    ? (List<Map<String,Object>>) list : new ArrayList<>();
-            if (!(config.get("route_groups") instanceof List<?>)) config.put("route_groups", groups);
-            List<Map<String,Object>> routes = config.get("route_library") instanceof List<?> list
-                    ? (List<Map<String,Object>>) list : new ArrayList<>();
-            if (!(config.get("route_library") instanceof List<?>)) config.put("route_library", routes);
-            Map<String,String> groupProfiles = new LinkedHashMap<>();
-            for (Map<String,Object> group : groups) {
-                group.putIfAbsent("profile_id", activeProfile);
-                groupProfiles.put(String.valueOf(group.get("id")), String.valueOf(group.get("profile_id")));
-            }
-            for (Map<String,Object> route : routes) {
-                String groupId = String.valueOf(route.getOrDefault("group_id", ""));
-                route.putIfAbsent("profile_id", groupProfiles.getOrDefault(groupId, activeProfile));
-            }
-            String activeRoute = String.valueOf(config.getOrDefault("active_route", ""));
-            for (Map<String,Object> profile : profiles) {
-                String profileId = String.valueOf(profile.get("id"));
-                String selected = "";
-                if (profileId.equals(activeProfile) && !activeRoute.isBlank()
-                        && routes.stream().anyMatch(route -> activeRoute.equals(route.get("id")) && profileId.equals(route.get("profile_id")))) {
-                    selected = activeRoute;
-                } else {
-                    selected = routes.stream().filter(route -> profileId.equals(route.get("profile_id")))
-                            .map(route -> String.valueOf(route.get("id"))).findFirst().orElse("");
-                }
-                profile.putIfAbsent("selected_route_id", selected);
-            }
-            if (config.get("saved_copies") instanceof List<?> copies) {
-                for (Object raw : copies) if (raw instanceof Map<?,?> copyRaw) {
-                    Map<String,Object> copy = (Map<String,Object>) copyRaw;
-                    if (!copy.containsKey("profile_id") && copy.get("route") instanceof Map<?,?> routeRaw) {
-                        Object profileId = routeRaw.get("profile_id");
-                        copy.put("profile_id", profileId == null ? activeProfile : profileId);
-                    }
-                }
-            }
-            config.put("schema_version", 3);
-        }
+        ConfigMigration.upgradeConfig(config);
     }
 
     private void startWatcher() {
-        watcherExecutor.submit(() -> {
-            try (var watch = FileSystems.getDefault().newWatchService()) {
-                file.getParent().register(watch, java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY,
-                        java.nio.file.StandardWatchEventKinds.ENTRY_CREATE);
-                while (!closed) {
-                    var key = watch.take(); boolean changed = false;
-                    for (var event : key.pollEvents()) if (event.context() instanceof Path p && p.equals(file.getFileName())) changed = true;
-                    key.reset();
-                    if (!changed) continue;
-                    Thread.sleep(180);
-                    if (diskMatchesCurrent()) continue;
-                    try { reload(); }
-                    catch (ConfigValidationException | IOException e) {
-                        diagnostic = e.getMessage(); publish(new ConfigEvent(snapshot(), "Configuration rejected: " + diagnostic));
-                    }
-                }
-            } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-            catch (IOException e) { diagnostic = "Configuration watcher stopped: " + e.getMessage(); }
-        });
+        ConfigWatcher.start(file, watcherExecutor, () -> closed, this::diskMatchesCurrent, this::reload,
+                error -> { diagnostic = error.getMessage(); publish(new ConfigEvent(snapshot(), "Configuration rejected: " + diagnostic)); },
+                error -> diagnostic = "Configuration watcher stopped: " + error.getMessage());
     }
 
     private synchronized boolean diskMatchesCurrent() throws IOException {
@@ -334,37 +231,11 @@ public final class ConfigStore implements AutoCloseable {
     }
 
     private void atomicWrite(byte[] data) throws IOException {
-        Path temp = Files.createTempFile(file.getParent(), ".config-", ".json.tmp");
-        try {
-            try (FileChannel channel = FileChannel.open(temp, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
-                channel.write(java.nio.ByteBuffer.wrap(data)); channel.force(true);
-            }
-            try { Files.setPosixFilePermissions(temp, EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE)); }
-            catch (UnsupportedOperationException ignored) { }
-            try { Files.move(temp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
-            catch (AtomicMoveNotSupportedException e) { throw new IOException("The config filesystem does not support atomic replacement", e); }
-        } finally { Files.deleteIfExists(temp); }
+        ConfigFileIO.atomicWrite(file, data);
     }
-    private static String hash(byte[] bytes) {
-        try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)); }
-        catch (NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
-    }
-    @SuppressWarnings("unchecked") private static Map<String, Object> deepCopy(Map<String, Object> source) {
-        return (Map<String, Object>) copyValue(source);
-    }
-    private static Object copyValue(Object value) {
-        if (value instanceof Map<?, ?> map) {
-            Map<String, Object> copy = new LinkedHashMap<>();
-            map.forEach((key, item) -> copy.put(String.valueOf(key), copyValue(item)));
-            return copy;
-        }
-        if (value instanceof List<?> list) {
-            List<Object> copy = new ArrayList<>(list.size());
-            list.forEach(item -> copy.add(copyValue(item)));
-            return copy;
-        }
-        return value;
-    }
+    private static String hash(byte[] bytes) { return ConfigFileIO.hash(bytes); }
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> deepCopy(Map<String, Object> source) { return ConfigFileIO.deepCopy(source); }
     private static final class VersionedConfig extends LinkedHashMap<String, Object> {
         private static final long serialVersionUID = 1L;
         private final long revision;

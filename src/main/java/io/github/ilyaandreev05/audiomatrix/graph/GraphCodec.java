@@ -42,6 +42,7 @@ public final class GraphCodec {
                 case "switch" -> new SwitchNode(nodeId, nodeName, channels, ports(parameters.get("output_ports"),List.of("out")), strings(parameters.get("active_links")));
                 case "multi_switch" -> new MultiSwitchNode(nodeId, nodeName, channels, ports(parameters.get("output_ports"),List.of("out")), strings(parameters.get("active_links")));
                 case "selector" -> new SelectorNode(nodeId, nodeName, channels, ports(parameters.get("input_ports"),List.of("in")), strings(parameters.get("active_links")));
+                case "multi_selector" -> new MultiSelectorNode(nodeId, nodeName, channels, ports(parameters.get("input_ports"),List.of("in")), strings(parameters.get("active_links")));
                 case "matrix" -> new MatrixNode(nodeId, nodeName, channels, ports(parameters.get("input_ports"),List.of("in")), ports(parameters.get("output_ports"),List.of("out")), strings(parameters.get("active_links")));
                 case "router" -> new RouterNode(nodeId, nodeName, channels, channels,
                         strings(parameters.get("active_links")), Boolean.TRUE.equals(parameters.get("multiple")));

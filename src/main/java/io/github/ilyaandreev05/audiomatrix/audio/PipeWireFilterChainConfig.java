@@ -115,76 +115,7 @@ final class PipeWireFilterChainConfig {
 
     static String renderMatrix(String description, String inputNodeName, String outputNodeName,
                                ChannelMatrix matrix) throws IOException {
-        if (matrix.inputs().isEmpty() || matrix.outputs().isEmpty()
-                || matrix.inputs().size() > 8 || matrix.outputs().size() > 8)
-            throw new IOException("A channel matrix must have between 1 and 8 input and output channels");
-        StringBuilder nodes = new StringBuilder();
-        List<String> graphInputs = new ArrayList<>(), graphOutputs = new ArrayList<>(), links = new ArrayList<>();
-        List<String> copies = new ArrayList<>();
-        for (String input : matrix.inputs()) {
-            String name = "copy_" + channelToken(input);
-            copies.add(name);
-            appendNode(nodes, "{ type = builtin name = " + name + " label = copy }");
-            graphInputs.add(name + ":In");
-        }
-        for (int outputIndex = 0; outputIndex < matrix.outputs().size(); outputIndex++) {
-            String output = matrix.outputs().get(outputIndex);
-            String mixer = "matrix_" + channelToken(output);
-            List<String> controls = new ArrayList<>();
-            for (int inputIndex = 0; inputIndex < matrix.inputs().size(); inputIndex++) {
-                double coefficient = matrix.coefficients().get(outputIndex).get(inputIndex);
-                controls.add(quote("Gain " + (inputIndex + 1)) + " = " + decimal(Math.abs(coefficient)));
-            }
-            appendNode(nodes, "{ type = builtin name = " + mixer + " label = mixer control = { " + String.join(" ", controls) + " } }");
-            graphOutputs.add(mixer + ":Out");
-            for (int inputIndex = 0; inputIndex < matrix.inputs().size(); inputIndex++) {
-                double coefficient = matrix.coefficients().get(outputIndex).get(inputIndex);
-                if (coefficient == 0.0) continue;
-                String source = copies.get(inputIndex) + ":Out";
-                if (coefficient < 0.0) {
-                    String invert = "invert_" + channelToken(output) + "_" + channelToken(matrix.inputs().get(inputIndex));
-                    appendNode(nodes, "{ type = builtin name = " + invert + " label = invert }");
-                    links.add("          { output = " + quote(source) + " input = " + quote(invert + ":In") + " }");
-                    source = invert + ":Out";
-                }
-                links.add("          { output = " + quote(source) + " input = " + quote(mixer + ":In " + (inputIndex + 1)) + " }");
-            }
-        }
-        String inputPositions = positionArg(matrix.inputs());
-        String outputPositions = positionArg(matrix.outputs());
-        String linksBlock = "links = [\n" + String.join("\n", links) + "\n        ]";
-        return """
-                context.properties = { log.level = 1 }
-                context.spa-libs = {
-                  audio.convert.* = audioconvert/libspa-audioconvert
-                  support.* = support/libspa-support
-                }
-                context.modules = [
-                  { name = libpipewire-module-rt args = { } flags = [ ifexists nofail ] }
-                  { name = libpipewire-module-protocol-native }
-                  { name = libpipewire-module-client-node }
-                  { name = libpipewire-module-adapter }
-                  { name = libpipewire-module-filter-chain args = {
-                      node.description = "%s"
-                      media.name = "%s"
-                      filter.graph = {
-                        nodes = [
-                %s
-                        ]
-                        inputs = [ %s ]
-                        outputs = [ %s ]
-                        %s
-                      }
-                      capture.props = { node.name = %s media.class = Audio/Sink node.autoconnect = false audio.channels = %d audio.position = %s }
-                      playback.props = { node.name = %s node.passive = true node.autoconnect = false audio.channels = %d audio.position = %s }
-                    }
-                  }
-                ]
-                """.formatted(escape(description), escape(description), nodes,
-                String.join(" ", graphInputs.stream().map(PipeWireFilterChainConfig::quote).toList()),
-                String.join(" ", graphOutputs.stream().map(PipeWireFilterChainConfig::quote).toList()),
-                linksBlock, inputNodeName, matrix.inputs().size(), inputPositions,
-                outputNodeName, matrix.outputs().size(), outputPositions);
+        return PipeWireChannelMatrixConfig.render(description, inputNodeName, outputNodeName, matrix);
     }
 
     private static void validateFilters(List<Map<String, Object>> filters, List<String> positions) throws IOException {

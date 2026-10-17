@@ -64,15 +64,19 @@ public final class GraphPipeWireCompiler {
         if(path.outputLimiter!=null&&!(node instanceof OutputNode)&&!(node instanceof RouterNode))
             throw new IllegalArgumentException("Peak limiter nodes must be the final processor before an output; move '"+node.name()+"' before the limiter");
         if(node instanceof RouterNode router){
+            boolean protectMix = node instanceof MultiSelectorNode && activeInputCount(router, graph) > 1;
             for(GraphConnection edge:outgoing(graph,nodeId)){
                 PathState branch=path.copy();
                 branch.selected&=router.activeLinks().contains(incomingPort+"->"+edge.fromPort());
+                branch.protectMixedOutput |= protectMix && branch.selected;
                 applyEdgeGain(branch,edge);
                 walk(edge.toNode(),edge.toPort(),branch,nodes,graph,new HashSet<>(visiting),routes,activeRoutes,routeChains,outputLimiters,sourceOutputs);
             }
             visiting.remove(nodeId);return;
         }
         if(node instanceof OutputNode output){
+            if(path.protectMixedOutput && path.outputLimiter == null)
+                path.outputLimiter = Map.of("enabled", true, "ceiling_db", -1.0, "lookahead_ms", 5.0, "release_ms", 80.0);
             Map<String,Object> existingLimiter=outputLimiters.get(output.deviceId());
             if(path.outputLimiter!=null&&existingLimiter!=null&&!java.util.Objects.equals(existingLimiter,path.outputLimiter))
                 throw new IllegalArgumentException("All paths to physical output '"+output.deviceId()+"' must share the same post-mix limiter");
@@ -113,6 +117,17 @@ public final class GraphPipeWireCompiler {
         path.edgeIds.add(edge.id());
     }
 
+    private static long activeInputCount(RouterNode router, AudioGraph graph) {
+        Set<String> connectedInputs = graph.connections().stream().filter(GraphConnection::enabled)
+                .filter(edge -> edge.toNode().equals(router.id())).map(GraphConnection::toPort)
+                .collect(java.util.stream.Collectors.toSet());
+        Set<String> connectedOutputs = outgoing(graph, router.id()).stream().map(GraphConnection::fromPort)
+                .collect(java.util.stream.Collectors.toSet());
+        return router.activeLinks().stream().map(link -> link.split("->", 2))
+                .filter(parts -> parts.length == 2 && connectedInputs.contains(parts[0]) && connectedOutputs.contains(parts[1]))
+                .map(parts -> parts[0]).distinct().count();
+    }
+
     private static String stableRouteId(PathState path,OutputNode output){
         String identity=path.sourceId+"\u0000"+output.id()+"\u0000"+String.join("\u0000",path.edgeIds);
         return "graph-"+UUID.nameUUIDFromBytes(identity.getBytes(StandardCharsets.UTF_8));
@@ -127,5 +142,5 @@ public final class GraphPipeWireCompiler {
     private static Map<String,Object> map(Object...pairs){Map<String,Object> result=new LinkedHashMap<>();for(int i=0;i<pairs.length;i+=2)result.put((String)pairs[i],pairs[i+1]);return result;}
     @SuppressWarnings("unchecked") private static Map<String,Object> deep(Map<String,Object> value){Map<String,Object> result=new LinkedHashMap<>();value.forEach((key,item)->result.put(key,copy(item)));return result;}
     private static Object copy(Object value){if(value instanceof Map<?,?> map){Map<String,Object> result=new LinkedHashMap<>();map.forEach((key,item)->result.put(String.valueOf(key),copy(item)));return result;}if(value instanceof List<?> list)return list.stream().map(GraphPipeWireCompiler::copy).toList();return value;}
-    private static final class PathState{final String sourceId;double gain;boolean muted;boolean selected;final List<Map<String,Object>> filters;final List<String> edgeIds;Map<String,Object> outputLimiter;PathState(String sourceId,double gain,boolean muted,boolean selected,List<Map<String,Object>> filters,List<String> edgeIds){this.sourceId=sourceId;this.gain=gain;this.muted=muted;this.selected=selected;this.filters=filters;this.edgeIds=edgeIds;}PathState copy(){PathState copy=new PathState(sourceId,gain,muted,selected,new ArrayList<>(filters),new ArrayList<>(edgeIds));copy.outputLimiter=outputLimiter;return copy;}}
+    private static final class PathState{final String sourceId;double gain;boolean muted;boolean selected;boolean protectMixedOutput;final List<Map<String,Object>> filters;final List<String> edgeIds;Map<String,Object> outputLimiter;PathState(String sourceId,double gain,boolean muted,boolean selected,List<Map<String,Object>> filters,List<String> edgeIds){this.sourceId=sourceId;this.gain=gain;this.muted=muted;this.selected=selected;this.filters=filters;this.edgeIds=edgeIds;}PathState copy(){PathState copy=new PathState(sourceId,gain,muted,selected,new ArrayList<>(filters),new ArrayList<>(edgeIds));copy.outputLimiter=outputLimiter;copy.protectMixedOutput=protectMixedOutput;return copy;}}
 }

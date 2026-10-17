@@ -64,7 +64,7 @@ public final class GraphRouteLibrary {
         String newRouteId = id("route");
         Map<String, String> nodeIds = new HashMap<>();
         original.nodes().forEach(node -> nodeIds.put(node.id(), id(node.type())));
-        List<GraphNode> nodes = original.nodes().stream().map(node -> copyNode(node, nodeIds.get(node.id()))).toList();
+        List<GraphNode> nodes = original.nodes().stream().map(node -> GraphNodeCopies.copy(node, nodeIds.get(node.id()))).toList();
         List<GraphConnection> edges = original.connections().stream().map(edge -> new GraphConnection(
                 id("link"), nodeIds.get(edge.fromNode()), edge.fromPort(), nodeIds.get(edge.toNode()), edge.toPort(), edge.enabled(), edge.gain())).toList();
         AudioGraph copy = new AudioGraph(newRouteId, newName == null || newName.isBlank() ? original.name() + " (копия)" : newName, nodes, edges);
@@ -74,7 +74,7 @@ public final class GraphRouteLibrary {
         if(!copiedLayout.isEmpty())layouts.put(newRouteId,copiedLayout);
         Map<String,Object> scales=mutableMap(config,"graph_ui_scale");Object scale=scales.get(routeId);if(scale instanceof Number)scales.put(newRouteId,scale);
         GraphSubgraphLibrary.duplicateRoute(config, routeId, newRouteId, nodeIds);
-        duplicateQuickControls(config,routeId,newRouteId,nodeIds);
+        GraphQuickControls.duplicate(config,routeId,newRouteId,nodeIds);
         return copy;
     }
 
@@ -144,47 +144,15 @@ public final class GraphRouteLibrary {
     }
 
     public static String saveInactiveCopy(Map<String, Object> config, String routeId, String label) {
-        Map<String, Object> route = find(maps(config.get("route_library")), routeId);
-        if (route == null) throw new IllegalArgumentException("Route does not exist: " + routeId);
-        Map<String, Object> copy = new LinkedHashMap<>();
-        copy.put("id", id("copy")); copy.put("name", label == null || label.isBlank() ? String.valueOf(route.get("name")) : label);
-        copy.put("route", deep(route)); copy.put("profile_id",route.get("profile_id")); copy.put("active", false);
-        copy.put("ui_layout",deep(map(mutableMap(config,"graph_ui_layout").get(routeId))));
-        Object scale=mutableMap(config,"graph_ui_scale").get(routeId);if(scale instanceof Number)copy.put("ui_scale",scale);
-        copy.put("ui_subgraphs",GraphSubgraphLibrary.encoded(GraphSubgraphLibrary.forRoute(config,routeId)));
-        copy.put("quick_controls",maps(config.get("quick_controls")).stream().filter(control->routeId.equals(control.get("route_id"))).map(GraphRouteLibrary::deep).toList());
-        mutableList(config, "saved_copies").add(copy);
-        return String.valueOf(copy.get("id"));
+        return GraphSavedCopyLibrary.save(config, routeId, label);
     }
 
     public static AudioGraph restoreSavedCopy(Map<String,Object> config,String copyId,String newName) {
-        Map<String,Object> copy=find(maps(config.get("saved_copies")),copyId);
-        if(copy==null)throw new IllegalArgumentException("Saved copy does not exist: "+copyId);
-        Object value=copy.get("route");if(!(value instanceof Map<?,?> raw))throw new IllegalArgumentException("Saved copy has no route snapshot");
-        Map<String,Object> snapshot=new LinkedHashMap<>();raw.forEach((key,item)->snapshot.put(String.valueOf(key),item));
-        AudioGraph graph=GraphCodec.fromMap(snapshot);requireValid(graph);
-        List<Map<String,Object>> routes=mutableList(config,"route_library");String temporaryId=id("restore-source");
-        String profileId=String.valueOf(copy.getOrDefault("profile_id",snapshot.getOrDefault("profile_id",activeProfileId(config))));
-        if(find(maps(config.get("profiles")),profileId)==null)profileId=activeProfileId(config);
-        String groupId=String.valueOf(snapshot.getOrDefault("group_id",""));
-        Map<String,Object> group=find(maps(config.get("route_groups")),groupId);
-        if(group==null||!profileId.equals(group.get("profile_id")))groupId="";
-        Map<String,Object> source=new LinkedHashMap<>(snapshot);source.put("id",temporaryId);source.put("profile_id",profileId);source.put("group_id",groupId);routes.add(source);
-        Map<String,Object> layouts=mutableMap(config,"graph_ui_layout");Map<String,Object> savedLayout=map(copy.get("ui_layout"));if(!savedLayout.isEmpty())layouts.put(temporaryId,deep(savedLayout));
-        Map<String,Object> scales=mutableMap(config,"graph_ui_scale");if(copy.get("ui_scale") instanceof Number scale)scales.put(temporaryId,scale);
-        Map<String,Object> subgraphs=mutableMap(config,"graph_ui_subgraphs");Object savedSubgraphs=copy.get("ui_subgraphs");if(savedSubgraphs instanceof List<?> list)subgraphs.put(temporaryId,deepValue(list));
-        List<Map<String,Object>> controls=mutableList(config,"quick_controls");
-        if(copy.get("quick_controls") instanceof List<?> savedControls)for(Object rawControl:savedControls)if(rawControl instanceof Map<?,?> rawMap){
-            Map<String,Object> control=new LinkedHashMap<>();rawMap.forEach((key,item)->control.put(String.valueOf(key),deepValue(item)));
-            control.put("id",id("quick"));control.put("route_id",temporaryId);controls.add(control);
-        }
-        try{return duplicateRoute(config,temporaryId,newName==null||newName.isBlank()?graph.name()+" (копия)":newName,profileId,groupId);}
-        finally{routes.removeIf(route->temporaryId.equals(route.get("id")));layouts.remove(temporaryId);scales.remove(temporaryId);subgraphs.remove(temporaryId);controls.removeIf(control->temporaryId.equals(control.get("route_id")));}
+        return GraphSavedCopyLibrary.restore(config, copyId, newName);
     }
 
     public static void deleteSavedCopy(Map<String,Object> config,String copyId) {
-        List<Map<String,Object>> copies=mutableList(config,"saved_copies");if(indexOf(copies,copyId)<0)throw new IllegalArgumentException("Saved copy does not exist: "+copyId);
-        copies.removeIf(copy->copyId.equals(copy.get("id")));
+        GraphSavedCopyLibrary.delete(config, copyId);
     }
 
     public static String activeProfileId(Map<String,Object> config){
@@ -209,53 +177,25 @@ public final class GraphRouteLibrary {
         if(group==null||!profileId.equals(group.get("profile_id")))throw new IllegalArgumentException("Route group does not belong to profile "+profileId);
     }
 
-    private static void duplicateQuickControls(Map<String,Object> config,String fromRoute,String toRoute,Map<String,String> nodeIds){
-        List<Map<String,Object>> controls=mutableList(config,"quick_controls");
-        List<Map<String,Object>> copies=new ArrayList<>();
-        for(Map<String,Object> control:List.copyOf(controls))if(fromRoute.equals(control.get("route_id"))){
-            String nodeId=String.valueOf(control.get("node_id"));String newNodeId=nodeIds.get(nodeId);if(newNodeId==null)continue;
-            Map<String,Object> copy=deep(control);copy.put("id",id("quick"));copy.put("route_id",toRoute);copy.put("node_id",newNodeId);copies.add(copy);
-        }
-        controls.addAll(copies);
-    }
-
-    private static GraphNode copyNode(GraphNode node, String id) {
-        List<String> channels = node.outputs().isEmpty() ? node.inputs().getFirst().channels() : node.outputs().getFirst().channels();
-        return switch (node.type()) {
-            case "source" -> new SourceNode(id, node.name(), ((SourceNode) node).selector(), channels);
-            case "output" -> new OutputNode(id, node.name(), ((OutputNode) node).deviceId(), channels, ((OutputNode) node).channelMatrix());
-            case "gain" -> new GainNode(id, node.name(), channels, ((GainNode) node).gain(), ((GainNode) node).muted());
-            case "gate" -> new GateNode(id, node.name(), channels, ((GateNode) node).open());
-            case "router" -> { RouterNode router=(RouterNode)node; yield new RouterNode(id,node.name(),channels,channels,router.activeLinks(),router.multiple()); }
-            case "switch" -> new SwitchNode(id,node.name(),channels,node.outputs().stream().map(AudioPort::id).toList(),((RouterNode)node).activeLinks());
-            case "multi_switch" -> new MultiSwitchNode(id,node.name(),channels,node.outputs().stream().map(AudioPort::id).toList(),((RouterNode)node).activeLinks());
-            case "selector" -> new SelectorNode(id,node.name(),channels,node.inputs().stream().map(AudioPort::id).toList(),((RouterNode)node).activeLinks());
-            case "matrix" -> new MatrixNode(id,node.name(),channels,node.inputs().stream().map(AudioPort::id).toList(),node.outputs().stream().map(AudioPort::id).toList(),((RouterNode)node).activeLinks());
-            case "mixer" -> new MixerNode(id,node.name(),channels,((MixerNode)node).inputGains());
-            case "filter" -> { FilterNode filter=(FilterNode)node;Map<String,Object> parameters=new LinkedHashMap<>(filter.parameters());parameters.remove("processor");parameters.remove("enabled");yield new FilterNode(id,node.name(),channels,filter.processor(),filter.enabled(),parameters); }
-            default -> throw new IllegalArgumentException("Unsupported graph node type: " + node.type());
-        };
-    }
-
-    private static void requireValid(AudioGraph graph) {
+    static void requireValid(AudioGraph graph) {
         List<String> errors = GraphValidator.validate(graph);
         if (!errors.isEmpty()) throw new IllegalArgumentException(String.join("; ", errors));
     }
     private static String id(String prefix) { return prefix + "-" + UUID.randomUUID(); }
-    @SuppressWarnings("unchecked") private static List<Map<String, Object>> mutableList(Map<String, Object> config, String key) {
+    @SuppressWarnings("unchecked") static List<Map<String, Object>> mutableList(Map<String, Object> config, String key) {
         Object value = config.get(key);
         if (!(value instanceof List<?>)) { List<Map<String,Object>> created=new ArrayList<>();config.put(key,created);return created; }
         return (List<Map<String,Object>>)value;
     }
-    @SuppressWarnings("unchecked") private static Map<String,Object> mutableMap(Map<String,Object> config,String key){Object value=config.get(key);if(value instanceof Map<?,?> map)return (Map<String,Object>)map;Map<String,Object> created=new LinkedHashMap<>();config.put(key,created);return created;}
-    @SuppressWarnings("unchecked") private static Map<String,Object> map(Object value){if(value instanceof Map<?,?> map)return (Map<String,Object>)map;return Map.of();}
-    @SuppressWarnings("unchecked") private static List<Map<String, Object>> maps(Object value) { return value instanceof List<?> list ? (List<Map<String,Object>>)list : List.of(); }
-    private static int indexOf(List<Map<String,Object>> list,String id) { for(int i=0;i<list.size();i++)if(id.equals(list.get(i).get("id")))return i;return -1; }
-    private static Map<String,Object> find(List<Map<String,Object>> list,String id) { return id==null?null:list.stream().filter(item->id.equals(item.get("id"))).findFirst().orElse(null); }
-    @SuppressWarnings("unchecked") private static Map<String,Object> deep(Map<String,Object> value) {
+    @SuppressWarnings("unchecked") static Map<String,Object> mutableMap(Map<String,Object> config,String key){Object value=config.get(key);if(value instanceof Map<?,?> map)return (Map<String,Object>)map;Map<String,Object> created=new LinkedHashMap<>();config.put(key,created);return created;}
+    @SuppressWarnings("unchecked") static Map<String,Object> map(Object value){if(value instanceof Map<?,?> map)return (Map<String,Object>)map;return Map.of();}
+    @SuppressWarnings("unchecked") static List<Map<String, Object>> maps(Object value) { return value instanceof List<?> list ? (List<Map<String,Object>>)list : List.of(); }
+    static int indexOf(List<Map<String,Object>> list,String id) { for(int i=0;i<list.size();i++)if(id.equals(list.get(i).get("id")))return i;return -1; }
+    static Map<String,Object> find(List<Map<String,Object>> list,String id) { return id==null?null:list.stream().filter(item->id.equals(item.get("id"))).findFirst().orElse(null); }
+    @SuppressWarnings("unchecked") static Map<String,Object> deep(Map<String,Object> value) {
         Map<String,Object> result=new LinkedHashMap<>();value.forEach((key,item)->result.put(key,deepValue(item)));return result;
     }
-    private static Object deepValue(Object value) {
+    static Object deepValue(Object value) {
         if(value instanceof Map<?,?> map){Map<String,Object> result=new LinkedHashMap<>();map.forEach((key,item)->result.put(String.valueOf(key),deepValue(item)));return result;}
         if(value instanceof List<?> list){List<Object> result=new ArrayList<>();list.forEach(item->result.add(deepValue(item)));return result;}
         return value;
