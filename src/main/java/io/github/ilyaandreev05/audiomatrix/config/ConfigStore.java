@@ -188,7 +188,7 @@ public final class ConfigStore implements AutoCloseable {
             diagnostic = "Configuration could not be parsed: " + e.getMessage();
             throw new ConfigValidationException(List.of(diagnostic));
         }
-        boolean upgraded = parsed.get("schema_version") instanceof Number version && version.intValue() < 4;
+        boolean upgraded = parsed.get("schema_version") instanceof Number version && version.intValue() < 5;
         if (upgraded) upgradeConfig(parsed);
         List<String> errors = ConfigValidator.validate(parsed);
         if (!errors.isEmpty()) {
@@ -196,7 +196,7 @@ public final class ConfigStore implements AutoCloseable {
             throw new ConfigValidationException(errors);
         }
         if (upgraded) {
-            backupBeforeSchemaUpgrade();
+            backupBeforeSchemaUpgrade(5);
             bytes = mapper.writeValueAsBytes(parsed);
             atomicWrite(bytes);
         }
@@ -207,8 +207,8 @@ public final class ConfigStore implements AutoCloseable {
         if (notify) publish(new ConfigEvent(current, "External configuration reloaded"));
     }
 
-    private void backupBeforeSchemaUpgrade() throws IOException {
-        ConfigMigration.backupBeforeSchemaUpgrade(file);
+    private void backupBeforeSchemaUpgrade(int schema) throws IOException {
+        ConfigMigration.backupBeforeSchemaUpgrade(file, schema);
     }
 
     private void migrateLegacyYaml() throws IOException, ConfigValidationException {

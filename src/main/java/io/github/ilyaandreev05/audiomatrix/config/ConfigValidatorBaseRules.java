@@ -7,7 +7,7 @@ import java.util.Set;
 final class ConfigValidatorBaseRules {
     private ConfigValidatorBaseRules() {}
     static void validate(ConfigValidationContext ctx) {
-        if (ConfigValidationValues.number(ctx.config.get("schema_version"), -1) != 4) ctx.errors.add("schema_version must be 4");
+        if (ConfigValidationValues.number(ctx.config.get("schema_version"), -1) != 5) ctx.errors.add("schema_version must be 5");
         if (!"audio-matrix".equals(ctx.config.get("app"))) ctx.errors.add("app must be audio-matrix");
         ConfigValidationValues.required(ctx.config, "active_profile", String.class, ctx.errors);
         Map<String, Object> ui = ConfigValidationValues.object(ctx.config.get("ui"), "ui", ctx.errors);

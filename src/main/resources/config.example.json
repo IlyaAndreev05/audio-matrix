@@ -1,5 +1,5 @@
 {
-  "schema_version" : 4,
+  "schema_version" : 5,
   "route_groups" : [ ],
   "route_library" : [ ],
   "saved_copies" : [ ],
@@ -48,7 +48,8 @@
       "name" : "Обработка звука",
       "order" : 3,
       "collapsed" : false
-    } ]
+    } ],
+    "pins" : [ ]
   },
   "engine" : {
     "backend" : "pipewire",

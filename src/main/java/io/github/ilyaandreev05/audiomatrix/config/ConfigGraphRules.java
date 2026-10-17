@@ -71,6 +71,7 @@ final class ConfigGraphRules {
             GraphNode node=graph.nodes().stream().filter(item->item.id().equals(nodeId)).findFirst().orElse(null);
             if(node==null||!node.parameters().containsKey(parameter))errors.add("quick_controls["+i+"] references an unavailable node parameter");
         }
+        ConfigPinnedNodeRules.validate(config, graphs, controls, errors);
         validateGraphLayouts(config,graphs,routeIds,errors);
         validateGraphUiScales(config,routeIds,errors);
         validateGraphSubgraphs(config,graphs,routeIds,errors);

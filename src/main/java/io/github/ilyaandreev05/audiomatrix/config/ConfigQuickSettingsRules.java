@@ -26,11 +26,35 @@ final class ConfigQuickSettingsRules {
             if (!(group.get("collapsed") instanceof Boolean))
                 errors.add("quick_settings.groups[" + index + "].collapsed must be boolean");
         }
+        validatePins(settings, groupIds, errors);
         List<Map<String, Object>> controls = ConfigValidationValues.optionalList(config.get("quick_controls"), "quick_controls", errors);
         for (int index = 0; index < controls.size(); index++) {
             String groupId = String.valueOf(controls.get(index).getOrDefault("group_id", ""));
             if (groupId.isBlank() || !groupIds.contains(groupId))
                 errors.add("quick_controls[" + index + "].group_id must reference a quick settings group");
+        }
+    }
+
+    private static void validatePins(Map<String, Object> settings, Set<String> groupIds, List<String> errors) {
+        List<Map<String, Object>> pins = ConfigValidationValues.optionalList(
+                settings.get("pins"), "quick_settings.pins", errors);
+        ConfigValidationValues.checkUniqueIds(pins, "quick_settings.pins", errors);
+        for (int index = 0; index < pins.size(); index++) {
+            Map<String, Object> pin = pins.get(index);
+            for (String key : List.of("route_id", "node_id", "group_id"))
+                if (!(pin.get(key) instanceof String value) || value.isBlank())
+                    errors.add("quick_settings.pins[" + index + "]." + key + " must not be blank");
+            if (!groupIds.contains(String.valueOf(pin.get("group_id"))))
+                errors.add("quick_settings.pins[" + index + "].group_id must reference a quick settings group");
+            Object order = pin.get("order");
+            if (!(order instanceof Number number) || number.doubleValue() != Math.rint(number.doubleValue()) || number.intValue() < 0)
+                errors.add("quick_settings.pins[" + index + "].order must be a non-negative integer");
+            if (!Set.of("DEFAULT", "COMPACT", "EXPANDED").contains(pin.get("view")))
+                errors.add("quick_settings.pins[" + index + "].view is unsupported");
+            if (!(pin.get("control_ids") instanceof List<?> controls))
+                errors.add("quick_settings.pins[" + index + "].control_ids must be an array");
+            else if (controls.stream().anyMatch(item -> !(item instanceof String)))
+                errors.add("quick_settings.pins[" + index + "].control_ids must contain strings");
         }
     }
 }

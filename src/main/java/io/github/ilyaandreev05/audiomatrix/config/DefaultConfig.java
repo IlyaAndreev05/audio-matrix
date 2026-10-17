@@ -10,7 +10,7 @@ public final class DefaultConfig {
 
     public static Map<String, Object> create() {
         Map<String, Object> root = map();
-        root.put("schema_version", 4);
+        root.put("schema_version", 5);
         root.put("route_groups", new ArrayList<>());
         root.put("route_library", new ArrayList<>());
         root.put("saved_copies", new ArrayList<>());

@@ -12,7 +12,8 @@ public final class QuickSettingsConfig {
 
     public static Map<String, Object> defaults() {
         return DefaultConfig.map("enabled", true, "show_output", true, "show_mode", true,
-                "show_mute", true, "open_full_settings", true, "groups", defaultGroups());
+                "show_mute", true, "open_full_settings", true, "groups", defaultGroups(),
+                "pins", new ArrayList<>());
     }
 
     public static List<Map<String, Object>> defaultGroups() {
@@ -37,6 +38,50 @@ public final class QuickSettingsConfig {
 
     public static List<Map<String, Object>> groups(Map<String, Object> config) {
         return maps(object(config.get("quick_settings")).get("groups"));
+    }
+
+    public static List<Map<String, Object>> pins(Map<String, Object> config) {
+        return QuickSettingsPinLibrary.pins(config);
+    }
+
+    public static Map<String, Object> pinNode(Map<String, Object> config, String routeId, String nodeId,
+                                               String groupId, int order, String view) {
+        return QuickSettingsPinLibrary.pinNode(config, routeId, nodeId, groupId, order, view);
+    }
+
+    public static void attachControl(Map<String, Object> config, String routeId, String nodeId, String controlId) {
+        QuickSettingsPinLibrary.attachControl(config, routeId, nodeId, controlId);
+    }
+
+    public static void removeControl(Map<String, Object> config, String routeId, String nodeId, String controlId,
+                                     boolean keepEmptyPin) {
+        QuickSettingsPinLibrary.removeControl(config, routeId, nodeId, controlId, keepEmptyPin);
+    }
+
+    public static void removeNode(Map<String, Object> config, String routeId, String nodeId) {
+        QuickSettingsPinLibrary.removeNode(config, routeId, nodeId);
+    }
+
+    public static void removeRoute(Map<String, Object> config, String routeId) {
+        QuickSettingsPinLibrary.removeRoute(config, routeId);
+    }
+
+    public static void duplicateRoute(Map<String, Object> config, String sourceRoute, String targetRoute,
+                                      Map<String, String> nodeIds, Map<String, String> controlIds) {
+        QuickSettingsPinLibrary.duplicateRoute(config, sourceRoute, targetRoute, nodeIds, controlIds);
+    }
+
+    public static List<Map<String, Object>> copyPinsForRoute(Map<String, Object> config, String routeId) {
+        return QuickSettingsPinLibrary.copyPinsForRoute(config, routeId);
+    }
+
+    public static Map<String, String> restorePinsFromCopy(Map<String, Object> config, Object savedPins,
+                                                           String targetRoute, Map<String, String> controlIds) {
+        return QuickSettingsPinLibrary.restorePinsFromCopy(config, savedPins, targetRoute, controlIds);
+    }
+
+    public static void migrateNodePins(Map<String, Object> config) {
+        QuickSettingsPinLibrary.migrateNodePins(config);
     }
 
     public static Map<String, Object> findOrCreateGroup(Map<String, Object> config, String name) {

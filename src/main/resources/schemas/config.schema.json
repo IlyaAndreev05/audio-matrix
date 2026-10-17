@@ -5,12 +5,12 @@
   "type": "object",
   "required": ["schema_version", "app", "active_profile", "ui", "mixer", "quick_settings", "engine", "devices", "applications", "buses", "routes", "dsp", "profiles", "calibrations"],
   "properties": {
-    "schema_version": {"const": 4},
+    "schema_version": {"const": 5},
     "app": {"const": "audio-matrix"},
     "active_profile": {"type": "string", "minLength": 1},
     "ui": {"$ref": "#/$defs/ui"},
     "mixer": {"$ref": "#/$defs/mixer"},
-    "quick_settings": {"type": "object", "required": ["groups"], "properties": {"enabled": {"type": "boolean"}, "show_output": {"type": "boolean"}, "show_mode": {"type": "boolean"}, "show_mute": {"type": "boolean"}, "groups": {"type": "array", "items": {"type": "object", "required": ["id", "name", "order", "collapsed"], "properties": {"id": {"type": "string", "minLength": 1}, "name": {"type": "string", "minLength": 1}, "order": {"type": "integer", "minimum": 0}, "collapsed": {"type": "boolean"}}, "additionalProperties": false}}}, "additionalProperties": true},
+    "quick_settings": {"type": "object", "required": ["groups", "pins"], "properties": {"enabled": {"type": "boolean"}, "show_output": {"type": "boolean"}, "show_mode": {"type": "boolean"}, "show_mute": {"type": "boolean"}, "groups": {"type": "array", "items": {"type": "object", "required": ["id", "name", "order", "collapsed"], "properties": {"id": {"type": "string", "minLength": 1}, "name": {"type": "string", "minLength": 1}, "order": {"type": "integer", "minimum": 0}, "collapsed": {"type": "boolean"}}, "additionalProperties": false}}, "pins": {"type": "array", "items": {"$ref": "#/$defs/quick_pin"}}}, "additionalProperties": true},
     "engine": {"type": "object", "properties": {"backend": {"const": "pipewire"}, "device_loss_policy": {"enum": ["mute", "pause", "fallback"]}, "transition_ms": {"type": "integer", "minimum": 0, "maximum": 1000}}, "additionalProperties": true},
     "devices": {"type": "array", "items": {"$ref": "#/$defs/device"}},
     "applications": {"type": "array", "items": {"$ref": "#/$defs/application"}},
@@ -29,6 +29,7 @@
     "export": {"type": "object", "additionalProperties": true}
   },
   "$defs": {
+    "quick_pin": {"type": "object", "required": ["id", "route_id", "node_id", "group_id", "order", "view", "control_ids"], "properties": {"id": {"type": "string", "minLength": 1}, "route_id": {"type": "string", "minLength": 1}, "node_id": {"type": "string", "minLength": 1}, "group_id": {"type": "string", "minLength": 1}, "order": {"type": "integer", "minimum": 0}, "view": {"enum": ["DEFAULT", "COMPACT", "EXPANDED"]}, "control_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}}, "additionalProperties": false},
     "volume": {"type": "number", "minimum": 0, "maximum": 1},
     "ui": {"type": "object", "required": ["language", "theme"], "properties": {"language": {"enum": ["ru", "en"]}, "theme": {"enum": ["light", "dark", "system"]}, "start_minimized": {"type": "boolean"}}, "additionalProperties": true},
     "mixer": {"type": "object", "required": ["global_volume", "global_mute"], "properties": {"global_volume": {"$ref": "#/$defs/volume"}, "global_mute": {"type": "boolean"}, "global_eq": {"$ref": "#/$defs/eq"}}, "additionalProperties": true},
