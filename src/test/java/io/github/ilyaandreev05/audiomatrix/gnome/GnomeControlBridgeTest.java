@@ -114,12 +114,12 @@ class GnomeControlBridgeTest {
                 new GraphConnection("a","source","out","gain","in",true,1),new GraphConnection("b","gain","out","output","in",true,1)));
         GraphRouteLibrary.saveRoute(config,graph,"");GraphRouteLibrary.activate(config,graph.id());
         config.put("quick_controls",List.of(
-                Map.of("id","bass-level","route_id",graph.id(),"node_id","gain","parameter_id","gain","label","Bass"),
+                Map.of("id","bass-level","route_id",graph.id(),"node_id","gain","parameter_id","gain","label","Bass","section","Bass / events","order",4),
                 Map.of("id","inactive","route_id","another-route","node_id","gain","parameter_id","gain")));
 
         List<Map<String,Object>> controls=GnomeControlBridge.quickControls(config);
 
-        assertEquals(1,controls.size());assertEquals("bass-level",controls.getFirst().get("id"));assertEquals("slider",controls.getFirst().get("kind"));assertEquals(.42,controls.getFirst().get("value"));
+        assertEquals(1,controls.size());assertEquals("bass-level",controls.getFirst().get("id"));assertEquals("slider",controls.getFirst().get("kind"));assertEquals(.42,controls.getFirst().get("value"));assertEquals("Bass / events",controls.getFirst().get("section"));assertEquals(4,controls.getFirst().get("order"));
     }
 
     @Test void publishesRouterChoicesForPinnedMatrixParameters(){
