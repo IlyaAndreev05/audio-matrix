@@ -124,6 +124,7 @@ tasks.register('packageDeb', Exec) {
         copy { from file('src/main/systemd/user/audiomatrix-system-sink.sh'); into helperDirectory }
         copy { from files('scripts/enable-audiomatrix-events-service.sh', 'scripts/disable-audiomatrix-events-service.sh',
                 'scripts/enable-audiomatrix-service.sh', 'scripts/disable-audiomatrix-service.sh',
+                'scripts/restart-audiomatrix-safe.sh',
                 'scripts/install-gnome-quick-settings.sh', 'scripts/uninstall-gnome-quick-settings.sh',
                 'scripts/install-chrome-tab-capture.sh', 'scripts/uninstall-chrome-tab-capture.sh'); into helperDirectory }
         new File(helperDirectory, 'audiomatrix-system-sink.sh').setExecutable(true, false)
@@ -131,6 +132,7 @@ tasks.register('packageDeb', Exec) {
         new File(helperDirectory, 'disable-audiomatrix-events-service.sh').setExecutable(true, false)
         new File(helperDirectory, 'enable-audiomatrix-service.sh').setExecutable(true, false)
         new File(helperDirectory, 'disable-audiomatrix-service.sh').setExecutable(true, false)
+        new File(helperDirectory, 'restart-audiomatrix-safe.sh').setExecutable(true, false)
         new File(helperDirectory, 'install-gnome-quick-settings.sh').setExecutable(true, false)
         new File(helperDirectory, 'uninstall-gnome-quick-settings.sh').setExecutable(true, false)
         new File(helperDirectory, 'install-chrome-tab-capture.sh').setExecutable(true, false)

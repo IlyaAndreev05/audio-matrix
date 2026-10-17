@@ -38,9 +38,12 @@ kill -TERM "$service_pid"
 wait "$service_pid"
 
 status_calls="$(awk '$1 == "status" { count++ } END { print count + 0 }' "$scratch/wpctl.log")"
-if (( status_calls > 5 )); then
+if (( status_calls > 3 )); then
     echo "System sink monitor polled too often: $status_calls status calls in 3.4 seconds" >&2
     exit 1
 fi
-grep -Fxq 'set-default 71' "$scratch/wpctl.log"
-printf 'System sink polling verified: %s status calls in 3.4 seconds, previous default restored in the fake PipeWire CLI.\n' "$status_calls"
+if grep -q '^set-default ' "$scratch/wpctl.log"; then
+    echo 'Stopping the system-sink monitor changed the selected output' >&2
+    exit 1
+fi
+printf 'System sink polling verified: %s status calls in 3.4 seconds; stopping it left the selected virtual output unchanged.\n' "$status_calls"
