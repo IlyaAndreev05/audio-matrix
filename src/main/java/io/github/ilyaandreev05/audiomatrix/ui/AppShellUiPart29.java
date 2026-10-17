@@ -21,6 +21,7 @@ abstract class AppShellUiPart29 extends AppShellUiPart28 {
             case "open" -> { Platform.runLater(() -> { if (getScene() != null && getScene().getWindow() instanceof javafx.stage.Stage stage) { stage.setIconified(false); stage.toFront(); stage.requestFocus(); } }); yield CompletableFuture.completedFuture(null); }
             case "select_route" -> updateRouteConfigCommand(t("Выбран маршрут из GNOME", "Route selected from GNOME"), config -> GraphRouteLibrary.activate(config, command.value()));
             case "set_quick_group_collapsed" -> setGnomeQuickGroupCollapsed(command.value());
+            case "set_quick_pin_view" -> setGnomeQuickPinView(command.value());
             case "select_output" -> { Platform.runLater(() -> setNotice(t("Выходы выбираются в графе маршрутов.", "Output routing is selected in the route graph."), false)); yield CompletableFuture.completedFuture(null); }
             case "toggle_mute" -> { AudioNode node=activeOutputNode(); if(node==null)yield CompletableFuture.failedFuture(new IllegalStateException("No active physical output")); boolean muted=!node.muted(); yield backend.setMute(node.id(),muted).thenCompose(ignored->store.updateAsync(config->{Map<String,Object> device=ensureDevice(config,node);device.put("mute",muted);})).thenRun(this::refreshBackend); }
             case "set_output_volume" -> setGnomeOutputLevel(command.value(),false);

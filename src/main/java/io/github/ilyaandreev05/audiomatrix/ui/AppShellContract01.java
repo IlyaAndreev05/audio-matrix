@@ -74,6 +74,9 @@ abstract class AppShellContract01 extends AppShellBase {
     protected abstract String quickControlParameter(GraphNode node);
     protected abstract boolean quickControlPinned(String routeId,String nodeId,String parameter);
     protected abstract void toggleGraphQuickControl(String routeId,GraphNode node,String parameter,boolean pinned);
+    protected abstract boolean graphNodePinned(String routeId,String nodeId);
+    protected abstract void toggleGraphNodePin(String routeId,GraphNode node,boolean pinned);
+    protected abstract CompletableFuture<Void> setGnomeQuickPinView(String value);
     protected abstract void updateGraph(String routeId,Consumer<List<GraphNode>> nodeChange);
     protected abstract void saveGraph(String routeId,AudioGraph graph);
     protected abstract void updateGraphNodeParameters(String routeId,String nodeId,Consumer<Map<String,Object>> change);
