@@ -35,7 +35,7 @@ public final class GnomeControlBridge implements AutoCloseable {
     private static final java.util.Set<String> SUPPORTED_COMMANDS=java.util.Set.of("open","select_output","toggle_mute",
             "set_output_volume","toggle_output_mute","set_app_volume","toggle_app_mute","set_stream_volume",
             "toggle_stream_mute","set_quick_control","toggle_quick_control","set_quick_control_choice",
-            "set_quick_group_collapsed","select_route","set_mode","set_channel_map");
+            "set_quick_group_collapsed","set_quick_pin_view","select_route","set_mode","set_channel_map");
     private final PipeWireBackend backend;
     private final Function<Command,CompletableFuture<Void>> commands;
     private final ObjectMapper json=new ObjectMapper();
@@ -51,7 +51,8 @@ public final class GnomeControlBridge implements AutoCloseable {
         int defaultId=snapshot.defaultSinkId();List<Map<String,Object>> devices=maps(config.get("devices"));
         List<Map<String,Object>> outputs=GnomeOutputState.devices(snapshot,devices);
         AudioNode active=DeviceSelectorMatcher.resolve(snapshot.sinks(),configured,devices);if(active!=null&&active.name().startsWith("audiomatrix_"))active=null;if(active==null)active=snapshot.sinks().stream().filter(n->n.id()==defaultId&&!n.name().startsWith("audiomatrix_")).findFirst().orElse(null);
-        Map<String,Object> state=new LinkedHashMap<>();state.put("apiVersion",API_VERSION);state.put("revision",Long.toString(configRevision));state.put("connected",snapshot.connected());state.put("language",language(config));state.put("outputs",outputs);state.put("selectedOutput",active==null?"system_default":active.name());state.put("muted",active!=null&&active.muted());state.put("mode",profile.getOrDefault("mode","off"));state.put("profile",profile.getOrDefault("name",""));state.put("activeRoute",activeRouteName(config));state.put("activeRouteId",config.getOrDefault("active_route",""));state.put("routes",GnomeQuickSettingsState.routes(config));state.put("quickGroups",GnomeQuickSettingsState.groups(config));state.put("quickControls",quickControls(config));state.put("channelRoutes",channelRoutes(snapshot,config,profile,active,defaultId,devices));
+        List<Map<String,Object>> quickControls=quickControls(config);
+        Map<String,Object> state=new LinkedHashMap<>();state.put("apiVersion",API_VERSION);state.put("revision",Long.toString(configRevision));state.put("connected",snapshot.connected());state.put("language",language(config));state.put("outputs",outputs);state.put("selectedOutput",active==null?"system_default":active.name());state.put("muted",active!=null&&active.muted());state.put("mode",profile.getOrDefault("mode","off"));state.put("profile",profile.getOrDefault("name",""));state.put("activeRoute",activeRouteName(config));state.put("activeRouteId",config.getOrDefault("active_route",""));state.put("routes",GnomeQuickSettingsState.routes(config));state.put("quickGroups",GnomeQuickSettingsState.groups(config));state.put("quickControls",quickControls);state.put("channelRoutes",channelRoutes(snapshot,config,profile,active,defaultId,devices));
         Map<String,Map<String,Object>> groups=new LinkedHashMap<>();
         for(AudioNode stream:snapshot.streams()){
             String appId=stream.applicationId()==null?"":stream.applicationId();String process=stream.processName()==null?"":stream.processName();
@@ -60,6 +61,8 @@ public final class GnomeControlBridge implements AutoCloseable {
             @SuppressWarnings("unchecked") List<Map<String,Object>> children=(List<Map<String,Object>>)group.get("streams");Map<String,Object> child=new LinkedHashMap<>();child.put("id",stream.id());child.put("name",stream.name());child.put("description",stream.description());child.put("volume",Double.isFinite(stream.volume())?Math.max(0,Math.min(1,stream.volume())):0);child.put("muted",stream.muted());children.add(child);
         }
         state.put("applications",List.copyOf(groups.values()));
+        state.put("quickPins",GnomeQuickSettingsPins.build(config,snapshot,quickControls,
+                List.copyOf(groups.values()),outputs));
         try{String payload=json.writeValueAsString(state);if(payload.equals(lastState))return;lastState=payload;emitter.execute(()->emit("State",payload));}catch(Exception ignored){}
     }
     static List<Map<String,Object>> outputDevices(PipeWireBackend.Snapshot snapshot){

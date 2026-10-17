@@ -63,11 +63,12 @@ gnome-extensions pack "$extension_source" --force --out-dir "$scratch" \
     --extra-source=menu-text.js \
     --extra-source=state-client.js \
     --extra-source=menu-rows.js \
+    --extra-source=menu-applications.js \
     --extra-source=menu-renderer.js \
     --extra-source=volume-menu-adapter.js
 unzip -t "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip"
-unzip -p "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" metadata.json | rg '"version": 8'
-for module in menu-text.js state-client.js menu-rows.js menu-renderer.js volume-menu-adapter.js; do
+unzip -p "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" metadata.json | rg '"version": 9'
+for module in menu-text.js state-client.js menu-rows.js menu-applications.js menu-renderer.js volume-menu-adapter.js; do
     unzip -Z1 "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" | grep -Fxq "$module"
 done
 

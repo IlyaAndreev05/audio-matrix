@@ -2,10 +2,8 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import Atk from 'gi://Atk';
 import St from 'gi://St';
 import AudioMatrixMenuRows from './menu-rows.js';
+import AudioMatrixMenuApplications from './menu-applications.js';
 import {TEXT} from './menu-text.js';
-
-const SOURCE_GROUP = 'sources';
-const OUTPUT_GROUP = 'outputs';
 
 function structureSignature(snapshot) {
     const state = snapshot.state || {};
@@ -14,10 +12,13 @@ function structureSignature(snapshot) {
         profile: state.profile, activeRoute: state.activeRoute, activeRouteId: state.activeRouteId,
         routes: (state.routes || []).map(({id, name}) => [id, name]),
         groups: (state.quickGroups || []).map(({id, name, order, collapsed}) => [id, name, order, collapsed]),
-        outputs: (state.outputs || []).map(({id, name, description}) => [id, name, description]),
-        applications: (state.applications || []).map(application => [
-            application.id, application.name, application.application_id, application.process,
-            (application.streams || []).map(stream => [stream.id, stream.name, stream.description]),
+        pins: (state.quickPins || []).map(pin => [
+            pin.id, pin.routeId, pin.nodeId, pin.name, pin.nodeType, pin.groupId, pin.order, pin.view,
+            (pin.controls || []).map(control => [control.id, control.parameterId, control.label, control.kind,
+                control.multiple, (control.options || []).map(option => [option.id, option.label])]),
+            (pin.applications || []).map(application => [application.id, application.name,
+                (application.streams || []).map(stream => [stream.id, stream.name, stream.description])]),
+            pin.output ? [pin.output.id, pin.output.name, pin.output.description, pin.output.available] : null,
         ]),
         controls: (state.quickControls || []).map(control => [
             control.id, control.nodeId, control.parameterId, control.label, control.section,
@@ -85,6 +86,8 @@ export default class AudioMatrixMenuRenderer {
         this._sendCommand = send;
         this._groupOpenState = new Map();
         this._groupCollapsedState = new Map();
+        this._pinOpenState = new Map();
+        this._pinViewState = new Map();
         this._levelRows = new Map();
         this._toggleRows = new Map();
         this._linkRows = new Map();
@@ -93,6 +96,11 @@ export default class AudioMatrixMenuRenderer {
         this._rows = new AudioMatrixMenuRows({
             section, getLanguage: () => this._getSnapshot().language, send,
             queueSliderCommand, onOpen, onDragBegin, onDragEnd,
+        });
+        this._applications = new AudioMatrixMenuApplications({
+            addLevelRow: (options, target) => this._addLevelRow(options, target),
+            rows: this._rows,
+            send: (name, value) => this._send(name, value),
         });
     }
 
@@ -121,12 +129,13 @@ export default class AudioMatrixMenuRenderer {
         }
         this._addRoutePicker(state, t);
         this._column = createScrollableGroups(this._section);
-        const controls = state.quickControls || [];
         const groups = state.quickGroups || [];
         for (const group of groups)
-            this._renderGroup(group, state, controls, t);
+            this._renderGroup(group, state.quickPins || [], t);
         this._groupOpenState = new Map([...this._groupOpenState].filter(([id]) => groups.some(group => group.id === id)));
         this._groupCollapsedState = new Map(groups.map(group => [String(group.id), Boolean(group.collapsed)]));
+        this._pinOpenState = new Map([...this._pinOpenState].filter(([id]) => (state.quickPins || []).some(pin => pin.id === id)));
+        this._pinViewState = new Map((state.quickPins || []).map(pin => [String(pin.id), String(pin.view || 'DEFAULT')]));
         this._section.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._rows.addAction(t.open, () => this._onOpen(true), 'preferences-system-symbolic');
     }
@@ -144,7 +153,7 @@ export default class AudioMatrixMenuRenderer {
         this._section.addMenuItem(picker);
     }
 
-    _renderGroup(group, state, controls, t) {
+    _renderGroup(group, pins, t) {
         const id = String(group.id || group.name);
         const collapsed = Boolean(group.collapsed);
         const previousCollapsed = this._groupCollapsedState.get(id);
@@ -156,11 +165,10 @@ export default class AudioMatrixMenuRenderer {
         header.add_accessible_state(Atk.StateType.EXPANDABLE);
         if (open) header.add_accessible_state(Atk.StateType.EXPANDED);
         const content = new PopupMenu.PopupMenuSection();
-        const entries = controls.filter(control => String(control.groupId || control.section) === id)
+        const entries = pins.filter(pin => String(pin.groupId) === id)
             .sort((left, right) => Number(left.order || 0) - Number(right.order || 0));
-        if (id === SOURCE_GROUP) this._renderApplications(state, t, content);
-        if (id === OUTPUT_GROUP) this._renderOutputs(state, t, content);
-        this._renderControls(entries, content);
+        for (const pin of entries)
+            this._renderPin(pin, t, content);
         this._column.addMenuItem(header);
         this._column.addMenuItem(content);
         content.actor.visible = open;
@@ -181,50 +189,56 @@ export default class AudioMatrixMenuRenderer {
         });
     }
 
-    _renderApplications(state, t, target) {
-        const applications = state.applications || [];
-        if (applications.length === 0) {
-            target.addMenuItem(new PopupMenu.PopupMenuItem(t.noApplications, {reactive: false, can_focus: false}));
+    _renderPin(pin, t, target) {
+        const id = String(pin.id);
+        const view = String(pin.view || 'DEFAULT');
+        const previousView = this._pinViewState.get(id);
+        const viewChanged = previousView !== undefined && previousView !== view;
+        const open = viewChanged ? view !== 'COMPACT' : (this._pinOpenState.get(id) ?? view !== 'COMPACT');
+        const header = new PopupMenu.PopupImageMenuItem(
+            String(pin.name || pin.nodeId), open ? 'pan-down-symbolic' : 'pan-end-symbolic');
+        header.add_accessible_state(Atk.StateType.EXPANDABLE);
+        if (open) header.add_accessible_state(Atk.StateType.EXPANDED);
+        const content = new PopupMenu.PopupMenuSection();
+        if (pin.nodeType === 'source')
+            this._applications.render(pin.applications || [], t, content);
+        if (pin.nodeType === 'output')
+            this._renderPinnedOutput(pin, t, content);
+        this._renderControls(pin.controls || [], content);
+        target.addMenuItem(header);
+        target.addMenuItem(content);
+        content.actor.visible = open;
+        this._pinOpenState.set(id, open);
+        const toggle = () => {
+            const nextOpen = !this._pinOpenState.get(id);
+            this._pinOpenState.set(id, nextOpen);
+            content.actor.visible = nextOpen;
+            header.setIcon(nextOpen ? 'pan-down-symbolic' : 'pan-end-symbolic');
+            if (nextOpen) header.add_accessible_state(Atk.StateType.EXPANDED);
+            else header.remove_accessible_state(Atk.StateType.EXPANDED);
+            this._send('set_quick_pin_view', id + '\t' + (nextOpen ? 'EXPANDED' : 'COMPACT'));
+        };
+        header.activate = toggle;
+        header.connect('activate', () => {
+            toggle();
+            header.stop_emission_by_name('activate');
+        });
+    }
+
+    _renderPinnedOutput(pin, t, target) {
+        const output = pin.output;
+        if (!output?.available) {
+            target.addMenuItem(new PopupMenu.PopupMenuItem(t.unavailable, {reactive: false, can_focus: false}));
             return;
         }
-        for (const application of applications) {
-            this._addLevelRow({
-                id: `app:${application.id}`, name: application.name || application.id,
-                icon: this._rows.applicationIcon(application), value: application.volume,
-                muted: application.muted, mutedLabel: application.muted ? t.unmute : t.mute,
-                onValue: value => this._send('set_app_volume', `${application.id}\t${value.toFixed(3)}`),
-                onMute: () => this._send('toggle_app_mute', application.id),
-            }, target);
-            this._renderStreams(application, t, target);
-        }
-    }
-
-    _renderStreams(application, t, target) {
-        const streams = application.streams || [];
-        if (streams.length === 0) return;
-        const submenu = new PopupMenu.PopupSubMenuMenuItem(`${application.name || t.streams} (${streams.length})`, false);
-        for (const stream of streams) {
-            this._addLevelRow({
-                id: `stream:${stream.id}`, name: stream.description || stream.name,
-                icon: 'audio-x-generic-symbolic', value: stream.volume, muted: stream.muted,
-                mutedLabel: stream.muted ? t.unmute : t.mute,
-                onValue: value => this._send('set_stream_volume', `${stream.id}\t${value.toFixed(3)}`),
-                onMute: () => this._send('toggle_stream_mute', String(stream.id)),
-            }, submenu.menu);
-        }
-        target.addMenuItem(submenu);
-    }
-
-    _renderOutputs(state, t, target) {
-        for (const output of state.outputs || []) {
-            this._addLevelRow({
-                id: `output:${output.id || output.name}`, name: output.description || output.name,
-                icon: this._rows.outputIcon(output), value: output.volume, muted: output.muted,
-                mutedLabel: output.muted ? t.unmute : t.mute,
-                onValue: value => this._send('set_output_volume', `${output.id || output.name}\t${value.toFixed(3)}`),
-                onMute: () => this._send('toggle_output_mute', output.id || output.name),
-            }, target);
-        }
+        this._addLevelRow({
+            id: 'output:' + (output.id || output.name), name: output.description || output.name,
+            icon: this._rows.outputIcon(output), value: output.volume, muted: output.muted,
+            mutedLabel: output.muted ? t.unmute : t.mute,
+            onValue: value => this._send('set_output_volume',
+                (output.id || output.name) + '\t' + value.toFixed(3)),
+            onMute: () => this._send('toggle_output_mute', output.id || output.name),
+        }, target);
     }
 
     _renderControls(controls, target) {
@@ -265,8 +279,11 @@ export default class AudioMatrixMenuRenderer {
     destroy() {
         this._section = null;
         this._rows = null;
+        this._applications = null;
         this._levelRows.clear();
         this._toggleRows.clear();
         this._linkRows.clear();
+        this._pinOpenState.clear();
+        this._pinViewState.clear();
     }
 }
