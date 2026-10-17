@@ -284,10 +284,8 @@ public final class PipeWireBackend implements AutoCloseable {
             JsonNode info = object.path("info");
             JsonNode props = info.path("props");
             String mediaClass = props.path("media.class").asText("");
-            if (!(mediaClass.startsWith("Audio/Sink") || mediaClass.startsWith("Audio/Source") || mediaClass.startsWith("Stream/Output/Audio"))) continue;
             String name = props.path("node.name").asText("");
-            if (name.isBlank()) continue;
-            if (name.startsWith("audiomatrix_")) continue;
+            if (!isSnapshotAudioNode(mediaClass, name)) continue;
             int id = object.path("id").asInt(-1);
             String description = props.path("node.description").asText(name);
             String state = info.path("state").asText("unknown").toLowerCase();
@@ -318,6 +316,13 @@ public final class PipeWireBackend implements AutoCloseable {
         int defaultSinkId = defaultSinkId(controlStatus);
         return new Snapshot(true, "", List.copyOf(sinks), List.copyOf(sources), List.copyOf(streams),
                 List.copyOf(recent.values()), Collections.unmodifiableMap(seen), defaultSinkId, System.currentTimeMillis());
+    }
+
+    static boolean isSnapshotAudioNode(String mediaClass, String name) {
+        if (mediaClass == null || name == null || name.isBlank()) return false;
+        if (!(mediaClass.startsWith("Audio/Sink") || mediaClass.startsWith("Audio/Source")
+                || mediaClass.startsWith("Stream/Output/Audio"))) return false;
+        return !name.startsWith("audiomatrix_") || SYSTEM_MIXER_SINK_NAME.equals(name);
     }
 
     static int defaultSinkId(String status) {

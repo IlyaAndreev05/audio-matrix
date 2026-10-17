@@ -26,7 +26,6 @@ if [ -r "$previous_sink_file" ]; then
 fi
 
 systemctl --user disable --now audiomatrix.service || true
-/opt/audiomatrix/bin/AudioMatrix --quit
 systemctl --user stop audiomatrix-system-sink.service || true
 if [ -n "$previous_sink" ]; then audiomatrix_set_default_sink "$previous_sink"; fi
 
