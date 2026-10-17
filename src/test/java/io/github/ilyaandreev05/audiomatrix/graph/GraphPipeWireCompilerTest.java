@@ -31,6 +31,44 @@ class GraphPipeWireCompilerTest {
         assertFalse(compiled.toString().contains("node_id"));
     }
 
+    @Test void compilesPeakLimiterAsOutputStageAfterRouteFilters(){
+        SourceNode source=new SourceNode("source-main","Applications","application:unassigned",STEREO);
+        FilterNode lowPass=new FilterNode("filter-low","Low pass",STEREO,"low_pass",true,Map.of("frequency_hz",100.0,"slope_db_oct",24.0));
+        FilterNode limiter=new FilterNode("limiter","Peak limiter",STEREO,"limiter",true,
+                Map.of("ceiling_db",-2.0,"lookahead_ms",5.0,"release_ms",80.0));
+        OutputNode output=new OutputNode("output-haptic","Vibrodynamic","haptic-output",STEREO);
+        AudioGraph graph=new AudioGraph("route-limited","Limited bass",List.of(source,lowPass,limiter,output),List.of(
+                link("source-main","out","filter-low","in"),link("filter-low","out","limiter","in"),
+                link("limiter","out","output-haptic","in")));
+
+        Map<String,Object> compiled=GraphPipeWireCompiler.compile(graph,DefaultConfig.create());
+
+        @SuppressWarnings("unchecked") Map<String,Object> route=(Map<String,Object>)((List<?>)compiled.get("routes")).getFirst();
+        @SuppressWarnings("unchecked") Map<String,Object> dsp=(Map<String,Object>)compiled.get("dsp");
+        @SuppressWarnings("unchecked") Map<String,Object> routeChains=(Map<String,Object>)dsp.get("route_chains");
+        @SuppressWarnings("unchecked") Map<String,Object> chain=(Map<String,Object>)routeChains.get(String.valueOf(route.get("filters_ref")).substring("dsp.route_chains.".length()));
+        @SuppressWarnings("unchecked") List<Map<String,Object>> filters=(List<Map<String,Object>>)chain.get("filters");
+        @SuppressWarnings("unchecked") Map<String,Object> outputLimiters=(Map<String,Object>)dsp.get("output_limiters");
+        @SuppressWarnings("unchecked") Map<String,Object> outputLimiter=(Map<String,Object>)outputLimiters.get("haptic-output");
+
+        assertEquals(List.of("low_pass"),filters.stream().map(filter->filter.get("type")).toList());
+        assertEquals(-2.0,outputLimiter.get("ceiling_db"));
+        assertEquals(5.0,outputLimiter.get("lookahead_ms"));
+        assertEquals(80.0,outputLimiter.get("release_ms"));
+    }
+
+    @Test void rejectsSignalProcessingAfterAPostMixLimiter(){
+        SourceNode source=new SourceNode("source","Applications","application:unassigned",STEREO);
+        FilterNode limiter=new FilterNode("limiter","Peak limiter",STEREO,"limiter",true,Map.of("ceiling_db",-1.0));
+        GainNode gain=new GainNode("gain","Post limiter gain",STEREO,.8,false);
+        OutputNode output=new OutputNode("output","Output","shared-output",STEREO);
+        AudioGraph graph=new AudioGraph("route-conflict","Post limiter gain",List.of(source,limiter,gain,output),List.of(
+                link("source","out","limiter","in"),link("limiter","out","gain","in"),link("gain","out","output","in")));
+
+        IllegalArgumentException error=assertThrows(IllegalArgumentException.class,()->GraphPipeWireCompiler.compile(graph,DefaultConfig.create()));
+        assertTrue(error.getMessage().contains("final processor before an output"),error.getMessage());
+    }
+
     @Test void compilesStableApplicationSelectorsAndMultiOutputBranches(){
         SourceNode browser=new SourceNode("browser","Chrome","application:org.chromium.Chromium",STEREO);
         OutputNode monitor=new OutputNode("monitor","Monitor","monitor-id",STEREO);

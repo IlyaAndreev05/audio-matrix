@@ -22,7 +22,8 @@ public final class GraphPipeWireCompiler {
             throw new IllegalArgumentException("Legacy router node '"+node.name()+"' has no typed switching behavior; replace it with a Switch, MultiSwitch, Selector or Matrix node");
         List<Map<String,Object>> buses=new ArrayList<>(),routes=new ArrayList<>(),applications=new ArrayList<>();
         List<String> activeBusIds=new ArrayList<>(),activeRouteIds=new ArrayList<>();
-        Map<String,Object> routeChains=new LinkedHashMap<>();Set<String> sourceSelectors=new HashSet<>(),sourceOutputs=new HashSet<>();String defaultBus="";
+        Map<String,Object> routeChains=new LinkedHashMap<>();Map<String,Map<String,Object>> outputLimiters=new LinkedHashMap<>();
+        Set<String> sourceSelectors=new HashSet<>(),sourceOutputs=new HashSet<>();String defaultBus="";
         for(SourceNode source:sources){
             String layout=layout(source.outputs().getFirst().channels());activeBusIds.add(source.id());
             buses.add(map("id",source.id(),"name",source.name(),"role","general","channels",layout,"volume",1.0,"mute",false));
@@ -40,28 +41,37 @@ public final class GraphPipeWireCompiler {
         }
         for(SourceNode source:sources){
             List<GraphConnection> first=outgoing(graph,source.id());
-            for(GraphConnection edge:first){PathState state=new PathState(source.id(),edge.gain(),false,new ArrayList<>());walk(edge.toNode(),edge.toPort(),state,nodes,graph,new HashSet<>(),routes,activeRouteIds,routeChains,sourceOutputs);}
+            for(GraphConnection edge:first){PathState state=new PathState(source.id(),edge.gain(),false,new ArrayList<>());walk(edge.toNode(),edge.toPort(),state,nodes,graph,new HashSet<>(),routes,activeRouteIds,routeChains,outputLimiters,sourceOutputs);}
         }
         if(routes.isEmpty())throw new IllegalArgumentException("The graph has no enabled path from a source to an output");
         Map<String,Object> result=deep(baseConfig);
         result.put("buses",buses);result.put("routes",routes);result.put("applications",applications);result.put("graph_default_bus",defaultBus);
         Map<String,Object> profile=activeProfile(result);profile.put("mode","multi-output");profile.put("active_buses",activeBusIds);profile.put("active_routes",activeRouteIds);
         Map<String,Object> dsp=object(result.get("dsp"));result.put("dsp",dsp);Map<String,Object> chains=object(dsp.get("route_chains"));dsp.put("route_chains",chains);chains.putAll(routeChains);
+        Map<String,Object> encodedOutputLimiters=new LinkedHashMap<>();
+        outputLimiters.forEach((deviceId,limiter)->{if(limiter!=null)encodedOutputLimiters.put(deviceId,new LinkedHashMap<>(limiter));});
+        dsp.put("output_limiters",encodedOutputLimiters);
         return result;
     }
 
     private static void walk(String nodeId,String incomingPort,PathState path,Map<String,GraphNode> nodes,AudioGraph graph,Set<String> visiting,
-                             List<Map<String,Object>> routes,List<String> activeRoutes,Map<String,Object> routeChains,Set<String> sourceOutputs){
+                             List<Map<String,Object>> routes,List<String> activeRoutes,Map<String,Object> routeChains,
+                             Map<String,Map<String,Object>> outputLimiters,Set<String> sourceOutputs){
         if(!visiting.add(nodeId))throw new IllegalArgumentException("Feedback cycle reached during graph compilation");
         GraphNode node=nodes.get(nodeId);if(node==null)throw new IllegalArgumentException("Connection references missing node "+nodeId);
+        if(path.outputLimiter!=null&&!(node instanceof OutputNode)&&!(node instanceof RouterNode))
+            throw new IllegalArgumentException("Peak limiter nodes must be the final processor before an output; move '"+node.name()+"' before the limiter");
         if(node instanceof RouterNode router){
             for(String active:router.activeLinks()){
                 String[] pair=active.split("->",2);if(pair.length!=2||!pair[0].equals(incomingPort))continue;
-                for(GraphConnection edge:outgoing(graph,nodeId))if(edge.fromPort().equals(pair[1])){PathState branch=path.copy();branch.gain*=edge.gain();walk(edge.toNode(),edge.toPort(),branch,nodes,graph,new HashSet<>(visiting),routes,activeRoutes,routeChains,sourceOutputs);}
+                for(GraphConnection edge:outgoing(graph,nodeId))if(edge.fromPort().equals(pair[1])){PathState branch=path.copy();applyEdgeGain(branch,edge);walk(edge.toNode(),edge.toPort(),branch,nodes,graph,new HashSet<>(visiting),routes,activeRoutes,routeChains,outputLimiters,sourceOutputs);}
             }
             visiting.remove(nodeId);return;
         }
         if(node instanceof OutputNode output){
+            if(outputLimiters.containsKey(output.deviceId())&&!java.util.Objects.equals(outputLimiters.get(output.deviceId()),path.outputLimiter))
+                throw new IllegalArgumentException("All active paths to output '"+output.name()+"' must share the same post-mix limiter");
+            outputLimiters.put(output.deviceId(),path.outputLimiter);
             ChannelMatrix channelMatrix=output.channelMatrix();
             String targetChannels=channelMatrix==null?String.join(",",output.inputs().getFirst().channels()):String.join(",",channelMatrix.outputs());
             String targetKey=path.sourceId+"\u0000"+output.deviceId()+"\u0000"+targetChannels;
@@ -75,13 +85,25 @@ public final class GraphPipeWireCompiler {
         if(node instanceof GainNode gain){path.gain*=gain.gain();path.muted|=gain.muted();}
         else if(node instanceof GateNode gate)path.muted|=!gate.open();
         else if(node instanceof FilterNode filter&&filter.enabled()){
-            Map<String,Object> encoded=new LinkedHashMap<>(filter.parameters());encoded.remove("processor");encoded.remove("enabled");encoded.put("type",filter.processor());encoded.putIfAbsent("enabled",true);path.filters.add(encoded);
+            if("limiter".equals(filter.processor())){
+                if(path.outputLimiter!=null)throw new IllegalArgumentException("A path can contain only one post-mix peak limiter");
+                Map<String,Object> limiter=new LinkedHashMap<>(filter.parameters());limiter.remove("processor");limiter.remove("enabled");
+                limiter.put("enabled",true);path.outputLimiter=Map.copyOf(limiter);
+            }else{
+                Map<String,Object> encoded=new LinkedHashMap<>(filter.parameters());encoded.remove("processor");encoded.remove("enabled");encoded.put("type",filter.processor());encoded.putIfAbsent("enabled",true);path.filters.add(encoded);
+            }
         }else if(node instanceof MixerNode mixer){path.gain*=mixer.inputGains().getOrDefault(incomingPort,0.0);}
         else throw new IllegalArgumentException("Unsupported processing node "+node.type()+" '"+node.name()+"'");
         List<GraphConnection> next=outgoing(graph,nodeId);
         if(next.isEmpty())throw new IllegalArgumentException("Node '"+node.name()+"' has no connection to an output");
-        for(GraphConnection edge:next){if(!edge.enabled())continue;PathState branch=path.copy();branch.gain*=edge.gain();walk(edge.toNode(),edge.toPort(),branch,nodes,graph,new HashSet<>(visiting),routes,activeRoutes,routeChains,sourceOutputs);}
+        for(GraphConnection edge:next){if(!edge.enabled())continue;PathState branch=path.copy();applyEdgeGain(branch,edge);walk(edge.toNode(),edge.toPort(),branch,nodes,graph,new HashSet<>(visiting),routes,activeRoutes,routeChains,outputLimiters,sourceOutputs);}
         visiting.remove(nodeId);
+    }
+
+    private static void applyEdgeGain(PathState path,GraphConnection edge){
+        if(path.outputLimiter!=null&&Math.abs(edge.gain()-1.0)>1e-9)
+            throw new IllegalArgumentException("A post-mix peak limiter must be the final signal processor before an output");
+        path.gain*=edge.gain();
     }
 
     private static List<GraphConnection> outgoing(AudioGraph graph,String id){return graph.connections().stream().filter(GraphConnection::enabled).filter(edge->edge.fromNode().equals(id)).toList();}
@@ -93,5 +115,5 @@ public final class GraphPipeWireCompiler {
     private static Map<String,Object> map(Object...pairs){Map<String,Object> result=new LinkedHashMap<>();for(int i=0;i<pairs.length;i+=2)result.put((String)pairs[i],pairs[i+1]);return result;}
     @SuppressWarnings("unchecked") private static Map<String,Object> deep(Map<String,Object> value){Map<String,Object> result=new LinkedHashMap<>();value.forEach((key,item)->result.put(key,copy(item)));return result;}
     private static Object copy(Object value){if(value instanceof Map<?,?> map){Map<String,Object> result=new LinkedHashMap<>();map.forEach((key,item)->result.put(String.valueOf(key),copy(item)));return result;}if(value instanceof List<?> list)return list.stream().map(GraphPipeWireCompiler::copy).toList();return value;}
-    private static final class PathState{final String sourceId;double gain;boolean muted;final List<Map<String,Object>> filters;PathState(String sourceId,double gain,boolean muted,List<Map<String,Object>> filters){this.sourceId=sourceId;this.gain=gain;this.muted=muted;this.filters=filters;}PathState copy(){return new PathState(sourceId,gain,muted,new ArrayList<>(filters));}}
+    private static final class PathState{final String sourceId;double gain;boolean muted;final List<Map<String,Object>> filters;Map<String,Object> outputLimiter;PathState(String sourceId,double gain,boolean muted,List<Map<String,Object>> filters){this.sourceId=sourceId;this.gain=gain;this.muted=muted;this.filters=filters;}PathState copy(){PathState copy=new PathState(sourceId,gain,muted,new ArrayList<>(filters));copy.outputLimiter=outputLimiter;return copy;}}
 }

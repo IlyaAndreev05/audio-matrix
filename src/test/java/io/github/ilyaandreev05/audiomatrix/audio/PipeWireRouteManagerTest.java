@@ -2,6 +2,12 @@ package io.github.ilyaandreev05.audiomatrix.audio;
 
 import org.junit.jupiter.api.Test;
 import io.github.ilyaandreev05.audiomatrix.config.DefaultConfig;
+import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
+import io.github.ilyaandreev05.audiomatrix.graph.FilterNode;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphConnection;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphPipeWireCompiler;
+import io.github.ilyaandreev05.audiomatrix.graph.OutputNode;
+import io.github.ilyaandreev05.audiomatrix.graph.SourceNode;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -13,6 +19,44 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PipeWireRouteManagerTest {
+    @Test
+    void graphPeakLimiterRunsInOutputStageAfterTheRouteFilterChain() throws IOException {
+        Map<String, Object> config = DefaultConfig.create();
+        @SuppressWarnings("unchecked") List<Map<String, Object>> devices = (List<Map<String, Object>>) config.get("devices");
+        devices.add(DefaultConfig.map("id", "haptic-output", "selector", DefaultConfig.map("kind", "name_equals", "value", "test-output"),
+                "role", "haptic_output", "volume", 1.0, "mute", false));
+        List<String> stereo = List.of("FL", "FR");
+        SourceNode source = new SourceNode("source", "Applications", "application:unassigned", stereo);
+        FilterNode lowPass = new FilterNode("low-pass", "Bass filter", stereo, "low_pass", true,
+                Map.of("frequency_hz", 100.0, "slope_db_oct", 24.0));
+        FilterNode limiter = new FilterNode("limiter", "Vibration limiter", stereo, "limiter", true,
+                Map.of("ceiling_db", -2.0, "lookahead_ms", 5.0, "release_ms", 80.0));
+        OutputNode output = new OutputNode("output", "Vibrodynamic", "haptic-output", stereo);
+        AudioGraph graph = new AudioGraph("route-haptic", "Haptic branch", List.of(source, lowPass, limiter, output), List.of(
+                new GraphConnection("source-low-pass", "source", "out", "low-pass", "in", true, 1.0),
+                new GraphConnection("low-pass-limiter", "low-pass", "out", "limiter", "in", true, 1.0),
+                new GraphConnection("limiter-output", "limiter", "out", "output", "in", true, 1.0)));
+        Map<String, Object> runtime = GraphPipeWireCompiler.compile(graph, config);
+        AudioNode outputSink = sink(61, "test-output", "Test output");
+        PipeWireRouteManager manager = new PipeWireRouteManager();
+
+        PipeWireRouteManager.Plan plan = manager.plan(runtime, snapshot(List.of(outputSink), outputSink.id()));
+        List<Map<String, Object>> outputLimiter = manager.outputLimiterFilters(runtime, "haptic-output");
+
+        assertEquals(1, plan.routes().size());
+        assertTrue(plan.outputs().containsKey("test-output"));
+        assertEquals(-2.0, outputLimiter.getFirst().get("ceiling_db"));
+        assertEquals(5.0, outputLimiter.getFirst().get("lookahead_ms"));
+        assertEquals(80.0, outputLimiter.getFirst().get("release_ms"));
+
+        FilterNode updatedLimiter = new FilterNode("limiter", "Vibration limiter", stereo, "limiter", true,
+                Map.of("ceiling_db", -3.0, "lookahead_ms", 5.0, "release_ms", 80.0));
+        AudioGraph updatedGraph = new AudioGraph("route-haptic", "Haptic branch", List.of(source, lowPass, updatedLimiter, output), graph.connections());
+        PipeWireRouteManager.Plan updatedPlan = manager.plan(GraphPipeWireCompiler.compile(updatedGraph, config),
+                snapshot(List.of(outputSink), outputSink.id()));
+        assertFalse(PipeWireRouteManager.sameRoutingTopology(plan, updatedPlan));
+    }
+
     @Test
     void masterLevelIsAppliedOnceAtEachPhysicalEndpointAcrossChainedBuses() throws IOException {
         Map<String, Object> config = chainedBusConfig(false);

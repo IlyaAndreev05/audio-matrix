@@ -579,7 +579,7 @@ public final class PipeWireRouteManager implements AutoCloseable {
         for (RoutePlan route : routes) {
             if (route.sink() == null || outputPlans.containsKey(route.sink().name())) continue;
             List<Map<String, Object>> filters = outputFilters(route.sink(), devices, config);
-            List<Map<String, Object>> limiterFilters = outputLimiterFilters(config);
+            List<Map<String, Object>> limiterFilters = outputLimiterFilters(config, configuredOutputDeviceId(route.sink(), devices));
             if (filters.isEmpty() && limiterFilters.isEmpty()) continue;
             List<String> positions = streamPositions(route.sink().channels());
             String input = outputNodeName("dsp_input", route.sink().name());
@@ -765,7 +765,15 @@ public final class PipeWireRouteManager implements AutoCloseable {
     }
 
     List<Map<String, Object>> outputLimiterFilters(Map<String, Object> config) {
-        Map<String, Object> limiter = object(object(config.get("dsp")).get("limiter"));
+        return outputLimiterFilters(config, "");
+    }
+
+    List<Map<String, Object>> outputLimiterFilters(Map<String, Object> config, String outputDeviceId) {
+        Map<String, Object> dsp = object(config.get("dsp"));
+        Map<String, Object> outputLimiters = object(dsp.get("output_limiters"));
+        Map<String, Object> outputLimiter = object(outputLimiters.get(outputDeviceId));
+        Map<String, Object> limiter = Boolean.TRUE.equals(outputLimiter.get("enabled"))
+                ? outputLimiter : object(dsp.get("limiter"));
         if (!Boolean.TRUE.equals(limiter.get("enabled"))) return List.of();
         return List.of(Map.of("type", "limiter", "enabled", true,
                 "ceiling_db", number(limiter.get("ceiling_db"), -1),
@@ -832,6 +840,12 @@ public final class PipeWireRouteManager implements AutoCloseable {
                 .filter(device -> DeviceSelectorMatcher.matches(sink, object(device.get("selector")))).toList();
         if (matching.size() != 1) return matching.isEmpty() ? "" : "ambiguous";
         return text(matching.getFirst().get("role"), "");
+    }
+
+    private static String configuredOutputDeviceId(AudioNode sink, List<Map<String, Object>> devices) {
+        List<Map<String, Object>> matching = devices.stream()
+                .filter(device -> DeviceSelectorMatcher.matches(sink, object(device.get("selector")))).toList();
+        return matching.size() == 1 ? text(matching.getFirst().get("id"), "") : "";
     }
 
     private static boolean hasLowPass(List<Map<String, Object>> filters) {
