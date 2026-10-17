@@ -12,6 +12,7 @@ import io.github.ilyaandreev05.audiomatrix.audio.DspComparisonConfig;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireRouteManager;
 import io.github.ilyaandreev05.audiomatrix.audio.RouteInputSignature;
+import io.github.ilyaandreev05.audiomatrix.audio.RouteApplyGate;
 import io.github.ilyaandreev05.audiomatrix.audio.ProfileRoutePolicy;
 import io.github.ilyaandreev05.audiomatrix.config.ConfigArchive;
 import io.github.ilyaandreev05.audiomatrix.config.ChannelMatrix;
@@ -187,7 +188,7 @@ public final class AppShell extends BorderPane {
     private final Set<String> selectedSubgraphNodeIds = ConcurrentHashMap.newKeySet();
     private CheckBox dspReferenceToggle;
     private boolean autoApplySuppressedUntilRestart;
-    private String lastRouteInputSignature = "";
+    private final RouteApplyGate routeApplyGate = new RouteApplyGate();
     private long lastAppliedConnectionGeneration;
     private int initializedSystemMixerSinkId = -1;
 
@@ -2789,27 +2790,33 @@ public final class AppShell extends BorderPane {
         Map<String, Object> config = store.snapshot();
         autoApplySuppressedUntilRestart = false;
         setNotice(t("Обновляю состояние PipeWire и применяю граф…", "Refreshing PipeWire and applying the graph…"), false);
-        backend.refresh().thenCompose(current -> {
+        backend.refresh().thenAccept(current -> {
             snapshot = current;
             updateMeterTarget();
-            return routeManager.apply(runtimeDspConfig(config, current), current);
-        }).whenComplete((report, error) -> Platform.runLater(() -> {
-            if (error != null) {
-                setNotice(t("Граф PipeWire не применён: ", "PipeWire graph was not applied: ") + rootMessage(error), true);
-                showPage(currentPage);
+            CompletableFuture<PipeWireRouteManager.ApplyReport> apply = requestRouteApply(config, current, true, false);
+            if (apply == null) {
+                Platform.runLater(() -> setNotice(t("Граф уже обновляется; повторный запрос объединён с текущим.",
+                        "The graph is already updating; this request was coalesced."), false));
                 return;
             }
-            routesRequested = routeManager.active();
-            lastRouteInputSignature = routeInputSignature(config, snapshot);
-            lastAppliedConnectionGeneration = backend.connectionGeneration();
-            autoApplySuppressedUntilRestart = false;
-            String summary = t("Создано шин: ", "Buses: ") + report.buses()
-                    + t(", маршрутов: ", ", routes: ") + report.routes()
-                    + t(", потоков: ", ", streams: ") + report.streams();
-            if (!report.warnings().isEmpty()) summary += " · " + String.join("; ", report.warnings());
-            setNotice(summary, false);
-            showPage(currentPage);
-        }));
+            apply.whenComplete((report, error) -> Platform.runLater(() -> {
+                RouteApplyGate.Completion completion = finishRouteApply(error == null);
+                if (error != null) {
+                    routesRequested = true;
+                    setNotice(t("Граф PipeWire не применён: ", "PipeWire graph was not applied: ") + rootMessage(error), true);
+                } else {
+                    routesRequested = routeManager.active();
+                    autoApplySuppressedUntilRestart = false;
+                    String summary = t("Создано шин: ", "Buses: ") + report.buses()
+                            + t(", маршрутов: ", ", routes: ") + report.routes()
+                            + t(", потоков: ", ", streams: ") + report.streams();
+                    if (!report.warnings().isEmpty()) summary += " · " + String.join("; ", report.warnings());
+                    setNotice(summary, false);
+                }
+                retryPendingRouteApply(completion);
+                showPage(currentPage);
+            }));
+        });
     }
 
     private void clearRoutes() {
@@ -2817,6 +2824,7 @@ public final class AppShell extends BorderPane {
         dspReferenceMode = false;
         autoApplySuppressedUntilRestart = true;
         routeManager.clear().whenComplete((ignored, error) -> Platform.runLater(() -> {
+            routeApplyGate.reset();
             if (error != null) setNotice(t("Не удалось сбросить граф: ", "Could not clear the graph: ") + rootMessage(error), true);
             else setNotice(t("Маршруты сброшены; исходные связи потоков восстановлены.", "Routes cleared; original stream links restored."), false);
             showPage(currentPage);
@@ -2825,12 +2833,15 @@ public final class AppShell extends BorderPane {
 
     private void maybeApplyConfiguredRoutes(Map<String, Object> config, PipeWireBackend.Snapshot current) {
         boolean autoApply = Boolean.TRUE.equals(map(config.get("engine")).get("apply_on_start")) && !autoApplySuppressedUntilRestart;
-        String signature = routeInputSignature(config, current);
         if (!current.connected()) {
             if (routeManager.active()) {
-                lastRouteInputSignature = signature;
-                routeManager.apply(runtimeDspConfig(config, current), current).whenComplete((ignored, error) -> Platform.runLater(() -> {
+                CompletableFuture<PipeWireRouteManager.ApplyReport> apply = requestRouteApply(config, current, false, false);
+                if (apply == null) return;
+                apply.whenComplete((ignored, error) -> Platform.runLater(() -> {
+                    RouteApplyGate.Completion completion = finishRouteApply(error == null);
                     routesRequested = true;
+                    if (error != null) System.err.println("Audio Matrix route apply failed while PipeWire was offline: " + rootMessage(error));
+                    retryPendingRouteApply(completion);
                     showPage(currentPage);
                 }));
             }
@@ -2839,23 +2850,52 @@ public final class AppShell extends BorderPane {
         if (!routesRequested && !autoApply) return;
         long connectionGeneration = backend.connectionGeneration();
         boolean reconnected = connectionGeneration != lastAppliedConnectionGeneration;
-        if (!reconnected && signature.equals(lastRouteInputSignature)) return;
-        lastRouteInputSignature = signature;
-        CompletableFuture<PipeWireRouteManager.ApplyReport> apply = reconnected
-                ? routeManager.reapplyAfterReconnect(runtimeDspConfig(config, current), current)
-                : routeManager.apply(runtimeDspConfig(config, current), current);
+        CompletableFuture<PipeWireRouteManager.ApplyReport> apply = requestRouteApply(config, current, false, reconnected);
+        if (apply == null) return;
         apply.whenComplete((report, error) -> Platform.runLater(() -> {
+            RouteApplyGate.Completion completion = finishRouteApply(error == null);
             if (error != null) {
-                lastRouteInputSignature = "";
-                routesRequested = routeManager.active() || !current.connected();
+                routesRequested = true;
+                System.err.println("Audio Matrix automatic route apply failed: " + rootMessage(error));
                 setNotice(t("Не удалось обновить применённый граф: ", "Could not update the applied graph: ") + rootMessage(error), true);
             } else {
                 routesRequested = routeManager.active();
-                lastAppliedConnectionGeneration = connectionGeneration;
                 if (currentPage == Page.ROUTES) setNotice(routeManager.status(), false);
             }
+            retryPendingRouteApply(completion);
             showPage(currentPage);
         }));
+    }
+
+    private CompletableFuture<PipeWireRouteManager.ApplyReport> requestRouteApply(
+            Map<String, Object> config, PipeWireBackend.Snapshot current, boolean force, boolean reconnect) {
+        long generation = backend.connectionGeneration();
+        String signature = routeInputSignature(config, current, generation);
+        if (!routeApplyGate.request(signature, generation, force)) return null;
+        try {
+            Map<String, Object> runtimeConfig = runtimeDspConfig(config, current);
+            return reconnect ? routeManager.reapplyAfterReconnect(runtimeConfig, current)
+                    : routeManager.apply(runtimeConfig, current);
+        } catch (RuntimeException error) {
+            return CompletableFuture.failedFuture(error);
+        }
+    }
+
+    private RouteApplyGate.Completion finishRouteApply(boolean succeeded) {
+        PipeWireBackend.Snapshot current = backend.current();
+        Map<String, Object> config = store.snapshot();
+        long generation = backend.connectionGeneration();
+        String observedSignature = routeInputSignature(config, current, generation);
+        lastAppliedConnectionGeneration = generation;
+        return routeApplyGate.complete(succeeded, observedSignature, generation);
+    }
+
+    private void retryPendingRouteApply(RouteApplyGate.Completion completion) {
+        if (completion.forcePending()) {
+            Platform.runLater(this::applyRoutes);
+        } else if (completion.retryPending()) {
+            Platform.runLater(() -> maybeApplyConfiguredRoutes(store.snapshot(), backend.current()));
+        }
     }
 
     private void setDspReferenceMode(boolean referenceMode) {
@@ -2871,25 +2911,37 @@ public final class AppShell extends BorderPane {
         dspReferenceMode = referenceMode;
         Map<String, Object> config = store.snapshot();
         setNotice(t("Обновляю PipeWire для A/B…", "Updating PipeWire for A/B…"), false);
-        backend.refresh().thenCompose(current -> {
+        backend.refresh().thenAccept(current -> {
             snapshot = current;
             updateMeterTarget();
-            return routeManager.apply(runtimeDspConfig(config, current), current);
-        }).whenComplete((report, error) -> Platform.runLater(() -> {
-            dspReferenceUpdateInProgress = false;
-            if (error != null) {
-                dspReferenceMode = previous;
-                setNotice(t("A/B не применён: ", "A/B was not applied: ") + rootMessage(error), true);
-            } else {
-                routesRequested = routeManager.active();
-                lastRouteInputSignature = routeInputSignature(config, snapshot);
-                lastAppliedConnectionGeneration = backend.connectionGeneration();
-                setNotice(referenceMode
-                        ? t("B включён: EQ обойдён, уровень снижен по расчётной верхней оценке.", "B is on: EQ bypassed and level reduced by the conservative gain estimate.")
-                        : t("A включён: обработанная EQ-цепочка восстановлена.", "A is on: the processed EQ chain is restored."), false);
+            CompletableFuture<PipeWireRouteManager.ApplyReport> apply = requestRouteApply(config, current, true, false);
+            if (apply == null) {
+                Platform.runLater(() -> {
+                    dspReferenceUpdateInProgress = false;
+                    dspReferenceMode = previous;
+                    setNotice(t("Граф уже обновляется; режим A/B не изменён.", "The graph is already updating; A/B mode was not changed."), true);
+                    showPage(currentPage);
+                });
+                return;
             }
-            showPage(currentPage);
-        }));
+            apply.whenComplete((report, error) -> Platform.runLater(() -> {
+                RouteApplyGate.Completion completion = finishRouteApply(error == null);
+                dspReferenceUpdateInProgress = false;
+                if (error != null) {
+                    dspReferenceMode = previous;
+                    routesRequested = true;
+                    System.err.println("Audio Matrix A/B route apply failed: " + rootMessage(error));
+                    setNotice(t("A/B не применён: ", "A/B was not applied: ") + rootMessage(error), true);
+                } else {
+                    routesRequested = routeManager.active();
+                    setNotice(referenceMode
+                            ? t("B включён: EQ обойдён, уровень снижен по расчётной верхней оценке.", "B is on: EQ bypassed and level reduced by the conservative gain estimate.")
+                            : t("A включён: обработанная EQ-цепочка восстановлена.", "A is on: the processed EQ chain is restored."), false);
+                }
+                retryPendingRouteApply(completion);
+                showPage(currentPage);
+            }));
+        });
     }
 
     private Map<String, Object> runtimeDspConfig(Map<String, Object> config, PipeWireBackend.Snapshot current) {
@@ -2903,8 +2955,8 @@ public final class AppShell extends BorderPane {
 
     private Map<String,Object> runtimeGraphConfig(Map<String,Object> config){String active=string(config.get("active_route"),"");if(active.isBlank())return config;Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->active.equals(item.get("id"))).findFirst().orElseThrow(()->new IllegalArgumentException("Active graph route is missing: "+active));return GraphPipeWireCompiler.compile(GraphCodec.fromMap(route),config);}
 
-    private String routeInputSignature(Map<String, Object> config, PipeWireBackend.Snapshot current) {
-        return RouteInputSignature.create(config, current, backend.connectionGeneration());
+    private String routeInputSignature(Map<String, Object> config, PipeWireBackend.Snapshot current, long generation) {
+        return RouteInputSignature.create(config, current, generation);
     }
 
     public synchronized CompletableFuture<Void> closeAsync() {
