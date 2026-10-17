@@ -75,7 +75,9 @@ restore_on_error() {
 trap restore_on_error EXIT HUP INT TERM
 mkdir "$tmp"
 install -m 0644 "$source_dir/metadata.json" "$tmp/metadata.json"
-install -m 0644 "$source_dir/extension.js" "$tmp/extension.js"
+for source_file in "$source_dir"/*.js; do
+    install -m 0644 "$source_file" "$tmp/$(basename "$source_file")"
+done
 if [ -n "$upgrade_backup" ]; then mv "$target" "$upgrade_backup"; fi
 mv "$tmp" "$target"
 if [ ! -r "$state_dir/previous-state" ]; then

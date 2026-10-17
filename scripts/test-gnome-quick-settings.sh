@@ -24,9 +24,10 @@ print(`Resolved app ID: ${app.get_id()}`);
 EOF
 
 XDG_DATA_HOME="$scratch/data" gjs -m "$scratch/check-desktop-app-info.mjs"
-extension_source="$repo_root/gnome/audio-matrix-quick-settings/extension.js"
-rg -q "import GioUnix from 'gi://GioUnix';" "$extension_source"
-rg -q 'GioUnix\.DesktopAppInfo\.new' "$extension_source"
+extension_source="$repo_root/gnome/audio-matrix-quick-settings"
+main_source="$extension_source/extension.js"
+rg -q "import GioUnix from 'gi://GioUnix';" "$main_source"
+rg -q 'GioUnix\.DesktopAppInfo\.new' "$main_source"
 if rg -q 'addExternalIndicator|QuickMenuToggle|SystemIndicator' "$extension_source"; then
     echo 'Audio Matrix must extend the standard volume menu without creating a separate tile' >&2
     exit 1
@@ -41,13 +42,21 @@ rg -q '_renderPending' "$extension_source"
 rg -q 'quickControls' "$extension_source"
 rg -q "set_quick_control" "$extension_source"
 rg -q "set_quick_control_choice" "$extension_source"
-rg -q '_addGraphLinks' "$extension_source"
+rg -q 'addGraphLinks' "$extension_source"
 rg -Fq "new GLib.Variant('(usss)'" "$extension_source"
 rg -q "'Result'" "$extension_source"
-node --check "$extension_source"
-gnome-extensions pack "$repo_root/gnome/audio-matrix-quick-settings" --force --out-dir "$scratch"
+for source_file in "$extension_source"/*.js; do node --check "$source_file"; done
+gnome-extensions pack "$extension_source" --force --out-dir "$scratch" \
+    --extra-source=menu-text.js \
+    --extra-source=state-client.js \
+    --extra-source=menu-rows.js \
+    --extra-source=menu-renderer.js \
+    --extra-source=volume-menu-adapter.js
 unzip -t "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip"
 unzip -p "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" metadata.json | rg '"version": 7'
+for module in menu-text.js state-client.js menu-rows.js menu-renderer.js volume-menu-adapter.js; do
+    unzip -Z1 "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" | grep -Fxq "$module"
+done
 
 fake_bin="$scratch/fake-bin"
 user_data="$scratch/user-data"
@@ -73,7 +82,7 @@ printf '%s\n' 'old extension files' > "$target/extension.js"
 env PATH="$fake_bin:$PATH" XDG_DATA_HOME="$user_data" XDG_STATE_HOME="$user_state" FAKE_GNOME_ENABLED="$enabled" \
     AUDIO_MATRIX_GNOME_EXTENSION_SOURCE="$repo_root/gnome/audio-matrix-quick-settings" \
     bash "$repo_root/scripts/install-gnome-quick-settings.sh"
-cmp "$repo_root/gnome/audio-matrix-quick-settings/extension.js" "$target/extension.js"
+for source_file in "$extension_source"/*.js; do cmp "$source_file" "$target/$(basename "$source_file")"; done
 test -r "$target.pre-audiomatrix/extension.js"
 env PATH="$fake_bin:$PATH" XDG_DATA_HOME="$user_data" XDG_STATE_HOME="$user_state" FAKE_GNOME_ENABLED="$enabled" \
     bash "$repo_root/scripts/uninstall-gnome-quick-settings.sh"
@@ -92,7 +101,7 @@ printf '%s\n' enabled > "$user_state/audio-matrix/gnome-extension/previous-enabl
 env PATH="$fake_bin:$PATH" XDG_DATA_HOME="$user_data" XDG_STATE_HOME="$user_state" FAKE_GNOME_ENABLED="$enabled" \
     AUDIO_MATRIX_GNOME_EXTENSION_SOURCE="$repo_root/gnome/audio-matrix-quick-settings" \
     bash "$repo_root/scripts/install-gnome-quick-settings.sh"
-cmp "$repo_root/gnome/audio-matrix-quick-settings/extension.js" "$target/extension.js"
+for source_file in "$extension_source"/*.js; do cmp "$source_file" "$target/$(basename "$source_file")"; done
 upgrade_backup="$(find "$user_data/gnome-shell/extensions" -maxdepth 1 -type d -name "$uuid.audiomatrix-replaced-6-*" -print -quit)"
 test -n "$upgrade_backup"
 grep -Fq 'Audio Matrix version 6' "$upgrade_backup/extension.js"
