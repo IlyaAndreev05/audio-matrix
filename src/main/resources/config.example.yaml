@@ -1,6 +1,6 @@
 # Иллюстративный профиль. Замените selector и выходы на свои устройства.
 # Значения EQ и калибровки здесь не являются измеренными или аппаратно проверенными.
-schema_version: 2
+schema_version: 3
 route_groups: []
 route_library: []
 saved_copies: []
@@ -146,6 +146,7 @@ profiles:
   - id: desk
     name: Рабочий стол
     mode: hybrid
+    selected_route_id: ""
     default_output: desk-dac
     active_buses: [music, effects]
     active_routes: [music-to-speakers, effects-to-desk]
@@ -153,6 +154,7 @@ profiles:
   - id: headphones
     name: Наушники
     mode: speaker
+    selected_route_id: ""
     default_output: system_default
     active_buses: [music]
     active_routes: []

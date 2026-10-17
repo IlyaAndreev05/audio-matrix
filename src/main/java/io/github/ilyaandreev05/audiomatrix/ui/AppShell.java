@@ -26,6 +26,7 @@ import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphConnection;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphPipeWireCompiler;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphProfileLibrary;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphRouteLibrary;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphSubgraph;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphSubgraphLibrary;
@@ -637,7 +638,8 @@ public final class AppShell extends BorderPane {
 
     private VBox graphPage() {
         Map<String,Object> config=store.snapshot();
-        List<Map<String,Object>> routes=maps(config.get("route_library"));
+        String profileId=GraphRouteLibrary.activeProfileId(config);
+        List<Map<String,Object>> routes=GraphRouteLibrary.routesForProfile(config,profileId);
         VBox page=page(t("Один активный маршрут содержит все одновременно работающие ветки. Изменения хранятся в config.json.",
                 "One active route contains all branches that run together. Changes are stored in config.json."));
         HBox selector=new HBox(10);selector.setAlignment(Pos.CENTER_LEFT);
@@ -963,15 +965,15 @@ public final class AppShell extends BorderPane {
     }
 
     private VBox graphRouteGroupCard(AudioGraph graph,Map<String,Object> config){
-        VBox box=card(t("Группа маршрутов", "Route group"));List<Map<String,Object>> groups=maps(config.get("route_groups"));String groupId=string(maps(config.get("route_library")).stream().filter(route->graph.id().equals(route.get("id"))).findFirst().orElse(Map.of()).get("group_id"),"");
+        VBox box=card(t("Группа маршрутов", "Route group"));Map<String,Object> routeInfo=maps(config.get("route_library")).stream().filter(item->graph.id().equals(item.get("id"))).findFirst().orElse(Map.of());String profileId=string(routeInfo.get("profile_id"),GraphRouteLibrary.activeProfileId(config));List<Map<String,Object>> groups=GraphRouteLibrary.groupsForProfile(config,profileId);String groupId=string(routeInfo.get("group_id"),"");
         ComboBox<Map<String,Object>> picker=new ComboBox<>();picker.getItems().setAll(groups);picker.setConverter(new StringConverter<>(){@Override public String toString(Map<String,Object> group){return group==null?t("Без группы","No group"):string(group.get("name"),"");}@Override public Map<String,Object> fromString(String value){return null;}});if(!groupId.isBlank())groups.stream().filter(group->groupId.equals(group.get("id"))).findFirst().ifPresent(picker.getSelectionModel()::select);
-        picker.setOnAction(event->{Map<String,Object> group=picker.getValue();updateRouteConfig(t("Переместить маршрут в группу","Move route to group"),candidate->maps(candidate.get("route_library")).stream().filter(route->graph.id().equals(route.get("id"))).findFirst().ifPresent(route->route.put("group_id",group==null?"":group.get("id"))));});
+        picker.setOnAction(event->{Map<String,Object> group=picker.getValue();updateRouteConfig(t("Переместить маршрут в группу","Move route to group"),candidate->maps(candidate.get("route_library")).stream().filter(item->graph.id().equals(item.get("id"))).findFirst().ifPresent(item->item.put("group_id",group==null?"":group.get("id"))));});
         box.getChildren().addAll(picker,actionButton(t("Создать группу","New group"),()->createGraphGroup()),actionButton(t("Переименовать группу","Rename group"),()->renameGraphGroup(groupId)),actionButton(t("Дублировать группу","Duplicate group"),()->duplicateSelectedGraphGroup(groupId)),actionButton(t("Удалить текущую группу","Delete current group"),()->deleteGraphGroup(groupId)));
         return box;
     }
 
     private VBox graphSavedCopiesCard(Map<String,Object> config){
-        VBox box=card(t("Сохранённые копии (не применяются)","Saved snapshots (inactive)"));List<Map<String,Object>> copies=maps(config.get("saved_copies"));
+        VBox box=card(t("Сохранённые копии (не применяются)","Saved snapshots (inactive)"));String profileId=GraphRouteLibrary.activeProfileId(config);List<Map<String,Object>> copies=maps(config.get("saved_copies")).stream().filter(copy->!copy.containsKey("profile_id")||profileId.equals(copy.get("profile_id"))).toList();
         if(copies.isEmpty())box.getChildren().add(label(t("Копий ещё нет.","No snapshots yet."),"muted"));
         for(Map<String,Object> copy:copies){String id=string(copy.get("id"),"");HBox row=new HBox(10);row.setAlignment(Pos.CENTER_LEFT);row.getChildren().addAll(label(string(copy.get("name"),id)+" · "+t("неактивна","inactive"),""),actionButton(t("Восстановить как маршрут","Restore as route"),()->restoreGraphCopy(id)),actionButton(t("Удалить копию","Delete snapshot"),()->updateRouteConfig(t("Удалить копию","Delete snapshot"),candidate->GraphRouteLibrary.deleteSavedCopy(candidate,id))));box.getChildren().add(row);}
         return box;
@@ -2608,24 +2610,27 @@ public final class AppShell extends BorderPane {
 
     private VBox profilesPage() {
         VBox page = page(t("Профиль сохраняет режим, выход, активные шины и маршруты.", "A profile stores mode, output, active buses, and routes."));
-        List<Map<String, Object>> profiles = maps(store.snapshot().get("profiles"));
+        Map<String,Object> config=store.snapshot();
+        List<Map<String, Object>> profiles = maps(config.get("profiles"));
         VBox list = card(t("Профили", "Profiles"));
-        String active = string(store.snapshot().get("active_profile"), "desk");
-        List<Map<String, Object>> visibleProfiles = profiles.stream().filter(profile -> matchesSearch(string(profile.get("name"), "") + " " + string(profile.get("id"), "") + " " + string(profile.get("mode"), "") + " " + outputReferenceName(store.snapshot(),string(profile.get("default_output"),"system_default")), search.getText())).toList();
+        String active = string(config.get("active_profile"), "desk");
+        List<Map<String, Object>> visibleProfiles = profiles.stream().filter(profile -> matchesSearch(string(profile.get("name"), "") + " " + string(profile.get("id"), "") + " " + string(profile.get("mode"), "") + " " + outputReferenceName(config,string(profile.get("default_output"),"system_default")), search.getText())).toList();
         if (visibleProfiles.isEmpty()) list.getChildren().add(label(t("Профили не найдены.", "No profiles found."), "muted"));
         for (Map<String, Object> profile : visibleProfiles) {
             String id = string(profile.get("id"), "");
             HBox row = new HBox(12); row.setAlignment(Pos.CENTER_LEFT); row.getStyleClass().add("node-card");
-            VBox info = new VBox(4, label(string(profile.get("name"), id), "card-title"), label(id + " · " + string(profile.get("mode"), "hybrid") + " · " + outputReferenceName(store.snapshot(),string(profile.get("default_output"),"system_default")), "muted"));
+            int graphCount=GraphRouteLibrary.routesForProfile(config,id).size();
+            VBox info = new VBox(4, label(string(profile.get("name"), id), "card-title"), label(id + " · " + string(profile.get("mode"), "hybrid") + " · " + outputReferenceName(config,string(profile.get("default_output"),"system_default")) + " · " + graphCount + t(" графов"," graphs"), "muted"));
             Region spacer = new Region(); HBox.setHgrow(spacer, Priority.ALWAYS);
             row.getChildren().addAll(info, spacer);
             if (id.equals(active)) row.getChildren().add(label(t("Активен", "Active"), "accent"));
             else row.getChildren().add(actionButton(t("Активировать", "Activate"), () -> activateProfile(id)));
             row.getChildren().add(actionButton(t("Переименовать", "Rename"), () -> renameProfile(id)));
+            row.getChildren().add(actionButton(t("Дублировать профиль и графы", "Duplicate profile and graphs"), () -> copyProfile(id)));
             if (profiles.size() > 1) row.getChildren().add(actionButton(t("Удалить", "Delete"), () -> deleteProfile(id)));
             list.getChildren().add(row);
         }
-        list.getChildren().add(actionButton(t("Создать копию активного профиля", "Copy active profile"), this::copyProfile));
+        list.getChildren().add(actionButton(t("Новый профиль", "New profile"), this::createProfile));
         page.getChildren().add(list);
         VBox presets = card(t("Режимы выхода", "Output modes"));
         presets.getChildren().addAll(label(t("Haptic · Subwoofer · Speaker · Hybrid · Multi-output · Off", "Haptic · Subwoofer · Speaker · Hybrid · Multi-output · Off"), "card-title"),
@@ -2634,8 +2639,9 @@ public final class AppShell extends BorderPane {
         ComboBox<String> mode = new ComboBox<>(); mode.getItems().addAll("haptic", "subwoofer", "speaker", "hybrid", "multi-output", "off");
         mode.setValue(activeProfile().getOrDefault("mode", "hybrid").toString()); mode.setAccessibleText(t("Режим профиля", "Profile mode"));
         mode.setOnAction(e -> updateRouteConfig(t("Изменён режим выхода профиля", "Profile output mode changed"),
-                config -> activeProfile(config).put("mode", mode.getValue()))); presets.getChildren().add(mode);
+                updated -> activeProfile(updated).put("mode", mode.getValue()))); presets.getChildren().add(mode);
         page.getChildren().add(presets);
+        page.getChildren().add(routeHistoryCard());
         VBox importExport = card(t("Резервная копия и перенос", "Backup and transfer"));
         importExport.getChildren().addAll(label(t("ZIP включает JSON-профили, связи, маршруты и все указанные файлы измерений; перед импортом проверяются manifest и контрольные суммы.", "ZIP includes JSON profiles, links, routes, and referenced measurement files; the manifest and checksums are validated before import."), "muted"),
                 actionButton(t("Экспортировать ZIP…", "Export ZIP…"), this::exportArchive),
@@ -3891,16 +3897,26 @@ public final class AppShell extends BorderPane {
     private void activateProfile(String id) {
         Map<String,Object> config=store.snapshot();Map<String, Object> profile = maps(config.get("profiles")).stream().filter(p -> id.equals(p.get("id"))).findFirst().orElse(null);
         if (profile == null) return;
-        updateConfig(updated -> updated.put("active_profile", id));
+        updateRouteConfig(t("Активировать профиль и его маршрут", "Activate profile and its route"),updated -> selectedGraphRouteId=GraphProfileLibrary.activateProfile(updated,id));
         AudioNode output=DeviceSelectorMatcher.resolve(physicalSinks(),string(profile.get("default_output"),"system_default"),maps(config.get("devices")));
         if(output!=null)selectedSink=output;
     }
-    private void copyProfile() {
-        updateConfig(config -> {
-            Map<String, Object> source = activeProfile(config); Map<String, Object> copy = copyMap(source);
-            String id = "profile-" + UUID.randomUUID().toString().substring(0, 8); copy.put("id", id); copy.put("name", string(source.get("name"), "Profile") + " copy");
-            maps(config.get("profiles")).add(copy);
-        });
+    private void copyProfile(String sourceId) {
+        Map<String,Object> source=maps(store.snapshot().get("profiles")).stream().filter(profile->sourceId.equals(profile.get("id"))).findFirst().orElse(null);
+        if(source==null)return;
+        TextInputDialog dialog=new TextInputDialog(string(source.get("name"),"Profile")+" (копия)");
+        dialog.setTitle(t("Дублировать профиль", "Duplicate profile"));
+        dialog.setHeaderText(t("Создать отдельные копии его групп и графов", "Create separate copies of its groups and graphs"));
+        dialog.setContentText(t("Название", "Name"));styleDialog(dialog);
+        dialog.showAndWait().map(String::trim).filter(name->!name.isBlank()).ifPresent(name->updateRouteConfig(t("Дублировать профиль и графы", "Duplicate profile and graphs"),config->GraphProfileLibrary.duplicateProfile(config,sourceId,name)));
+    }
+    private void createProfile() {
+        TextInputDialog dialog=new TextInputDialog(t("Новый профиль","New profile"));
+        dialog.setTitle(t("Создать пустой профиль","Create empty profile"));
+        dialog.setHeaderText(t("Параметры выхода скопируются из активного профиля, графов в новом профиле не будет.","Output preferences are copied from the active profile; the new profile starts without graphs."));
+        dialog.setContentText(t("Название","Name"));styleDialog(dialog);
+        String template=string(store.snapshot().get("active_profile"),"desk");
+        dialog.showAndWait().map(String::trim).filter(name->!name.isBlank()).ifPresent(name->updateRouteConfig(t("Создать профиль","Create profile"),config->GraphProfileLibrary.createProfile(config,template,name)));
     }
     private void renameProfile(String id) {
         Map<String, Object> profile = maps(store.snapshot().get("profiles")).stream().filter(p -> id.equals(p.get("id"))).findFirst().orElse(null);
@@ -3915,22 +3931,52 @@ public final class AppShell extends BorderPane {
         Map<String, Object> current = store.snapshot(); List<Map<String, Object>> profiles = maps(current.get("profiles"));
         if (profiles.size() <= 1) { setNotice(t("Нельзя удалить последний профиль.", "The last profile cannot be deleted."), true); return; }
         Map<String, Object> selected = profiles.stream().filter(p -> id.equals(p.get("id"))).findFirst().orElse(null); if (selected == null) return;
-        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION, t("Удалить профиль «", "Delete profile ") + string(selected.get("name"), id) + "?", javafx.scene.control.ButtonType.OK, javafx.scene.control.ButtonType.CANCEL);
-        confirm.initOwner(getScene().getWindow()); confirm.setHeaderText(null);
-        confirm.showAndWait().filter(button -> button == javafx.scene.control.ButtonType.OK).ifPresent(button -> {
-            Map<String, Object> config = store.snapshot(); String replacement = id.equals(config.get("active_profile")) ? profiles.stream().filter(p -> !id.equals(p.get("id"))).map(p -> string(p.get("id"), "")).findFirst().orElse("") : null;
-            maps(config.get("profiles")).removeIf(p -> id.equals(p.get("id")));
-            if (replacement != null) config.put("active_profile", replacement);
-            store.saveAsync(config).whenComplete((ignored, error) -> Platform.runLater(() -> {
-                if (error != null) { setNotice(t("Конфигурация не сохранена: ", "Configuration was not saved: ") + rootMessage(error), true); return; }
-                setNotice(t("Профиль удалён.", "Profile deleted."), false);
-                if (replacement != null) {
-                    String output = maps(config.get("profiles")).stream().filter(p -> replacement.equals(p.get("id"))).map(p -> string(p.get("default_output"), "system_default")).findFirst().orElse("system_default");
-                    AudioNode target=DeviceSelectorMatcher.resolve(physicalSinks(),output,maps(config.get("devices")));
-                    if(target!=null)selectedSink=target;
-                }
-                showPage(Page.PROFILES);
-            }));
+        boolean deletingActive=id.equals(current.get("active_profile"));
+        if(!deletingActive){
+            Alert confirm=new Alert(Alert.AlertType.CONFIRMATION,t("Удалить профиль «","Delete profile ")+string(selected.get("name"),id)+"? Его группы и графы также будут удалены.",ButtonType.OK,ButtonType.CANCEL);
+            confirm.initOwner(getScene().getWindow());confirm.setHeaderText(null);
+            confirm.showAndWait().filter(button->button==ButtonType.OK).ifPresent(button->updateRouteConfig(t("Удалить профиль","Delete profile"),config->GraphProfileLibrary.deleteProfile(config,id,null,null,false)));
+            return;
+        }
+        Dialog<ButtonType> dialog=new Dialog<>();if(getScene()!=null)dialog.initOwner(getScene().getWindow());
+        dialog.setTitle(t("Удалить активный профиль","Delete active profile"));
+        dialog.setHeaderText(t("Выбери профиль и маршрут, которые станут активными. Удалятся все графы и группы удаляемого профиля.","Choose the profile and route to activate. All graphs and groups in the deleted profile will be removed."));
+        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK,ButtonType.CANCEL);
+        List<Map<String,Object>> replacements=profiles.stream().filter(profile->!id.equals(profile.get("id"))).toList();
+        ComboBox<Map<String,Object>> replacementPicker=new ComboBox<>();replacementPicker.getItems().setAll(replacements);replacementPicker.setConverter(new StringConverter<>(){
+            @Override public String toString(Map<String,Object> profile){return profile==null?"":string(profile.get("name"),string(profile.get("id"),""));}
+            @Override public Map<String,Object> fromString(String value){return null;}
+        });replacementPicker.getSelectionModel().selectFirst();
+        ComboBox<Map<String,Object>> routePicker=new ComboBox<>();routePicker.setConverter(new StringConverter<>(){
+            @Override public String toString(Map<String,Object> route){return route==null?t("Нет маршрута","No route"):string(route.get("name"),string(route.get("id"),""));}
+            @Override public Map<String,Object> fromString(String value){return null;}
+        });
+        CheckBox stopGraph=new CheckBox(t("Остановить граф при удалении","Stop the graph when deleting"));
+        Runnable refreshRoutes=()->{
+            Map<String,Object> replacement=replacementPicker.getValue();
+            List<Map<String,Object>> routes=replacement==null?List.of():GraphRouteLibrary.routesForProfile(current,string(replacement.get("id"),""));
+            routePicker.getItems().setAll(routes);
+            String remembered=replacement==null?"":string(replacement.get("selected_route_id"),"");
+            routes.stream().filter(route->remembered.equals(route.get("id"))).findFirst().or(()->routes.stream().findFirst()).ifPresent(routePicker.getSelectionModel()::select);
+            if(routes.isEmpty())routePicker.getSelectionModel().clearSelection();
+        };
+        replacementPicker.setOnAction(event->refreshRoutes.run());refreshRoutes.run();
+        routePicker.disableProperty().bind(stopGraph.selectedProperty());
+        VBox content=new VBox(9,label(t("Новый профиль","Replacement profile"),"muted"),replacementPicker,
+                label(t("Маршрут для активации","Route to activate"),"muted"),routePicker,stopGraph);
+        dialog.getDialogPane().setContent(content);styleDialog(dialog);
+        Button confirm=(Button)dialog.getDialogPane().lookupButton(ButtonType.OK);
+        confirm.addEventFilter(javafx.event.ActionEvent.ACTION,event->{
+            if(replacementPicker.getValue()==null||(!stopGraph.isSelected()&&routePicker.getValue()==null)){
+                event.consume();setNotice(t("Выбери маршрут или явно отметь остановку графа.","Choose a route or explicitly select Stop graph."),true);
+            }
+        });
+        dialog.showAndWait().filter(button->button==ButtonType.OK).ifPresent(button->{
+            Map<String,Object> replacement=replacementPicker.getValue();String replacementId=string(replacement.get("id"),"");
+            String routeId=routePicker.getValue()==null?"":string(routePicker.getValue().get("id"),"");
+            String output=string(replacement.get("default_output"),"system_default");
+            AudioNode target=DeviceSelectorMatcher.resolve(physicalSinks(),output,maps(current.get("devices")));if(target!=null)selectedSink=target;
+            updateRouteConfig(t("Удалить активный профиль","Delete active profile"),config->{GraphProfileLibrary.deleteProfile(config,id,replacementId,routeId,stopGraph.isSelected());selectedGraphRouteId=stopGraph.isSelected()?"":routeId;});
         });
     }
     private void updateActiveProfile(String key, Object value) { updateConfig(config -> activeProfile(config).put(key, value)); }

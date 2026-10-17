@@ -1,5 +1,5 @@
 {
-  "schema_version" : 2,
+  "schema_version" : 3,
   "route_groups" : [ ],
   "route_library" : [ ],
   "saved_copies" : [ ],
@@ -94,6 +94,7 @@
     "id" : "desk",
     "name" : "Рабочий стол",
     "mode" : "hybrid",
+    "selected_route_id" : "",
     "default_output" : "system_default",
     "active_buses" : [ "main", "music", "effects" ],
     "active_routes" : [ ],

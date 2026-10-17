@@ -17,7 +17,7 @@ public final class ConfigValidator {
 
     public static List<String> validate(Map<String, Object> config) {
         List<String> errors = new ArrayList<>();
-        if (number(config.get("schema_version"), -1) != 2) errors.add("schema_version must be 2");
+        if (number(config.get("schema_version"), -1) != 3) errors.add("schema_version must be 3");
         if (!"audio-matrix".equals(config.get("app"))) errors.add("app must be audio-matrix");
         required(config, "active_profile", String.class, errors);
         Map<String, Object> ui = object(config.get("ui"), "ui", errors);
@@ -264,16 +264,43 @@ public final class ConfigValidator {
         List<Map<String,Object>> copies=optionalList(config.get("saved_copies"),"saved_copies",errors);
         List<Map<String,Object>> controls=optionalList(config.get("quick_controls"),"quick_controls",errors);
         checkUniqueIds(groups,"route_groups",errors);checkUniqueIds(routes,"route_library",errors);checkUniqueIds(copies,"saved_copies",errors);checkUniqueIds(controls,"quick_controls",errors);
-        Set<String> groupIds=ids(groups),routeIds=ids(routes);String active=String.valueOf(config.getOrDefault("active_route",""));
+        Set<String> groupIds=ids(groups),routeIds=ids(routes),profileIds=ids(optionalList(config.get("profiles"),"profiles",errors));
+        String active=String.valueOf(config.getOrDefault("active_route",""));
+        String activeProfile=String.valueOf(config.getOrDefault("active_profile",""));
         if(!active.isBlank()&&!routeIds.contains(active))errors.add("active_route does not reference a saved route");
+        for(int i=0;i<groups.size();i++){
+            String profileId=String.valueOf(groups.get(i).getOrDefault("profile_id",""));
+            if(!profileIds.contains(profileId))errors.add("route_groups["+i+"].profile_id must reference a profile");
+        }
         Map<String,AudioGraph> graphs=new java.util.LinkedHashMap<>();
         for(int i=0;i<routes.size();i++){
             Map<String,Object> route=routes.get(i);if(!(route.get("name") instanceof String name)||name.isBlank())errors.add("route_library["+i+"].name must not be blank");
-            Object group=route.get("group_id");if(group!=null&&!String.valueOf(group).isBlank()&&!groupIds.contains(String.valueOf(group)))errors.add("route_library["+i+"].group_id must reference a route group");
+            String profileId=String.valueOf(route.getOrDefault("profile_id",""));
+            if(!profileIds.contains(profileId))errors.add("route_library["+i+"].profile_id must reference a profile");
+            Object group=route.get("group_id");if(group!=null&&!String.valueOf(group).isBlank()){
+                if(!groupIds.contains(String.valueOf(group)))errors.add("route_library["+i+"].group_id must reference a route group");
+                else {
+                    Map<String,Object> owner=groups.stream().filter(item->String.valueOf(group).equals(item.get("id"))).findFirst().orElse(null);
+                    if(owner!=null&&!profileId.equals(owner.get("profile_id")))errors.add("route_library["+i+"].group_id must reference a group in the same profile");
+                }
+            }
             try{AudioGraph graph=GraphCodec.fromMap(route);for(String problem:GraphValidator.validate(graph))errors.add("route_library["+i+"]: "+problem);graphs.put(graph.id(),graph);}
             catch(RuntimeException invalid){errors.add("route_library["+i+"] is invalid: "+invalid.getMessage());}
         }
         for(int i=0;i<groups.size();i++)if(!(groups.get(i).get("name") instanceof String name)||name.isBlank())errors.add("route_groups["+i+"].name must not be blank");
+        if(!active.isBlank()){
+            Map<String,Object> activeGraph=routes.stream().filter(route->active.equals(route.get("id"))).findFirst().orElse(null);
+            if(activeGraph!=null&&!activeProfile.equals(activeGraph.get("profile_id")))errors.add("active_route must belong to active_profile");
+        }
+        List<Map<String,Object>> profiles=optionalList(config.get("profiles"),"profiles",errors);
+        for(int i=0;i<profiles.size();i++){
+            Object selected=profiles.get(i).get("selected_route_id");
+            if(selected==null||String.valueOf(selected).isBlank())continue;
+            String selectedId=String.valueOf(selected),profileId=String.valueOf(profiles.get(i).get("id"));
+            Map<String,Object> selectedRoute=routes.stream().filter(route->selectedId.equals(route.get("id"))).findFirst().orElse(null);
+            if(selectedRoute==null)errors.add("profiles["+i+"].selected_route_id must reference a saved route");
+            else if(!profileId.equals(selectedRoute.get("profile_id")))errors.add("profiles["+i+"].selected_route_id must reference a route in the same profile");
+        }
         for(int i=0;i<copies.size();i++){
             Map<String,Object> copy=copies.get(i);if(!Boolean.FALSE.equals(copy.get("active")))errors.add("saved_copies["+i+"] must remain inactive");
             if(!(copy.get("route") instanceof Map<?,?> raw)){errors.add("saved_copies["+i+"].route must contain a route snapshot");continue;}

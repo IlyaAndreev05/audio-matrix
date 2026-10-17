@@ -10,7 +10,7 @@ public final class DefaultConfig {
 
     public static Map<String, Object> create() {
         Map<String, Object> root = map();
-        root.put("schema_version", 2);
+        root.put("schema_version", 3);
         root.put("route_groups", new ArrayList<>());
         root.put("route_library", new ArrayList<>());
         root.put("saved_copies", new ArrayList<>());
@@ -41,7 +41,7 @@ public final class DefaultConfig {
                 "global_eq", map("enabled", false, "filters", new ArrayList<>()),
                 "devices", map(), "route_chains", map(),
                 "limiter", map("enabled", true, "ceiling_db", -1.0, "lookahead_ms", 5.0, "release_ms", 50.0)));
-        root.put("profiles", List.of(map("id", "desk", "name", "Рабочий стол", "mode", "hybrid",
+        root.put("profiles", List.of(map("id", "desk", "name", "Рабочий стол", "mode", "hybrid", "selected_route_id", "",
                 "default_output", "system_default", "active_buses", List.of("main", "music", "effects"),
                 "active_routes", List.of(), "device_overrides", map())));
         root.put("calibrations", new ArrayList<>());
