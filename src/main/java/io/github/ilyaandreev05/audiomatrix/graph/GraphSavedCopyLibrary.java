@@ -1,5 +1,7 @@
 package io.github.ilyaandreev05.audiomatrix.graph;
 
+import io.github.ilyaandreev05.audiomatrix.config.QuickSettingsConfig;
+
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -20,6 +22,7 @@ final class GraphSavedCopyLibrary {
         copyUiState(config, routeId, copy);
         copySubgraphs(config, routeId, copy);
         copyControls(config, routeId, copy);
+        copy.put("quick_pins", QuickSettingsConfig.copyPinsForRoute(config, routeId));
         GraphRouteLibrary.mutableList(config, "saved_copies").add(copy);
         return String.valueOf(copy.get("id"));
     }
@@ -57,12 +60,14 @@ final class GraphSavedCopyLibrary {
         Map<String, Object> subgraphs = GraphRouteLibrary.mutableMap(config, "graph_ui_subgraphs");
         List<Map<String, Object>> controls = GraphRouteLibrary.mutableList(config, "quick_controls");
         restoreUi(copy, temporaryId, layouts, scales, subgraphs);
-        restoreControls(copy, temporaryId, controls);
+        Map<String, String> controlIds = restoreControls(copy, temporaryId, controls);
+        QuickSettingsConfig.restorePinsFromCopy(config, copy.get("quick_pins"), temporaryId, controlIds);
         try {
             String name = newName == null || newName.isBlank() ? graph.name() + " (копия)" : newName;
             return GraphRouteLibrary.duplicateRoute(config, temporaryId, name, profileId, groupId);
         } finally {
             cleanupTemporary(config, temporaryId, routes, layouts, scales, subgraphs, controls);
+            QuickSettingsConfig.removeRoute(config, temporaryId);
         }
     }
 
@@ -105,17 +110,22 @@ final class GraphSavedCopyLibrary {
         if (copy.get("ui_subgraphs") instanceof List<?> list) subgraphs.put(id, GraphRouteLibrary.deepValue(list));
     }
 
-    private static void restoreControls(Map<String, Object> copy, String routeId,
-                                        List<Map<String, Object>> controls) {
-        if (!(copy.get("quick_controls") instanceof List<?> savedControls)) return;
+    private static Map<String, String> restoreControls(Map<String, Object> copy, String routeId,
+                                                       List<Map<String, Object>> controls) {
+        Map<String, String> ids = new LinkedHashMap<>();
+        if (!(copy.get("quick_controls") instanceof List<?> savedControls)) return ids;
         for (Object item : savedControls) {
             if (!(item instanceof Map<?, ?> raw)) continue;
             Map<String, Object> control = new LinkedHashMap<>();
             raw.forEach((key, value) -> control.put(String.valueOf(key), GraphRouteLibrary.deepValue(value)));
-            control.put("id", id("quick"));
+            String oldId = String.valueOf(control.getOrDefault("id", ""));
+            String newId = id("quick");
+            ids.put(oldId, newId);
+            control.put("id", newId);
             control.put("route_id", routeId);
             controls.add(control);
         }
+        return ids;
     }
 
     private static void cleanupTemporary(Map<String, Object> config, String id,

@@ -1,5 +1,7 @@
 package io.github.ilyaandreev05.audiomatrix.graph;
 
+import io.github.ilyaandreev05.audiomatrix.config.QuickSettingsConfig;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -93,7 +95,7 @@ public final class GraphRouteLibrary {
             find(maps(config.get("profiles")),profileId).put("selected_route_id",replacementRouteId);
         }
         routes.removeIf(route -> routeId.equals(route.get("id")));
-        mutableList(config,"quick_controls").removeIf(control->routeId.equals(control.get("route_id")));
+        QuickSettingsConfig.removeRoute(config, routeId);
         mutableMap(config,"graph_ui_layout").remove(routeId);
         mutableMap(config,"graph_ui_scale").remove(routeId);
         mutableMap(config,"graph_ui_subgraphs").remove(routeId);
