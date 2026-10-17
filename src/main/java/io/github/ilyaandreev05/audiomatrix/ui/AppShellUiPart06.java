@@ -78,18 +78,26 @@ abstract class AppShellUiPart06 extends AppShellUiPart05 {
             else if(node instanceof FilterNode filter){CheckBox bypass=new CheckBox(filter.processor()+t(" · включён"," · enabled"));bypass.setSelected(filter.enabled());bypass.setOnAction(e->updateGraphNodeParameters(graph.id(),node.id(),parameters->parameters.put("enabled",bypass.isSelected())));row.getChildren().add(bypass);}
             else if(node instanceof RouterNode router){
                 List<String> active=router.activeLinks();
-                GridPane table=new GridPane();table.setHgap(8);table.setVgap(4);
-                table.add(label(t("Вход ↓ / выход →","Input ↓ / output →"),"muted"),0,0);
-                for(int col=0;col<router.outputs().size();col++)table.add(label(router.outputs().get(col).id(),"muted"),col+1,0);
-                for(int r=0;r<router.inputs().size();r++){
-                    AudioPort input=router.inputs().get(r);table.add(label(input.id(),"muted"),0,r+1);
-                    for(int c=0;c<router.outputs().size();c++){
-                        AudioPort output=router.outputs().get(c);String link=input.id()+"->"+output.id();
-                        CheckBox cell=new CheckBox();cell.setSelected(active.contains(link));cell.setAccessibleText(node.name()+" "+input.id()+" → "+output.id());
-                        cell.setOnAction(event->setRouterLink(graph.id(),node.id(),link,cell.isSelected()));table.add(cell,c+1,r+1);
+                VBox routerControls=new VBox(5);
+                if(node instanceof MatrixNode matrix){
+                    routerControls.getChildren().add(GraphMatrixViews.create(matrix,
+                            t("Матрица","Matrix"),t("Стрелки","Arrows"),t("Вход ↓ / выход →","Input ↓ / output →"),
+                            (link,enabled)->setRouterLink(graph.id(),node.id(),link,enabled)));
+                }else{
+                    GridPane table=new GridPane();table.setHgap(8);table.setVgap(4);
+                    table.add(label(t("Вход ↓ / выход →","Input ↓ / output →"),"muted"),0,0);
+                    for(int col=0;col<router.outputs().size();col++)table.add(label(router.outputs().get(col).id(),"muted"),col+1,0);
+                    for(int r=0;r<router.inputs().size();r++){
+                        AudioPort input=router.inputs().get(r);table.add(label(input.id(),"muted"),0,r+1);
+                        for(int c=0;c<router.outputs().size();c++){
+                            AudioPort output=router.outputs().get(c);String link=input.id()+"->"+output.id();
+                            CheckBox cell=new CheckBox();cell.setSelected(active.contains(link));cell.setAccessibleText(node.name()+" "+input.id()+" → "+output.id());
+                            cell.setOnAction(event->setRouterLink(graph.id(),node.id(),link,cell.isSelected()));table.add(cell,c+1,r+1);
+                        }
                     }
+                    routerControls.getChildren().add(table);
                 }
-                VBox routerControls=new VBox(5,table,label(active.size()+t(" активных связей"," active links"),"muted"));
+                routerControls.getChildren().add(label(active.size()+t(" активных связей"," active links"),"muted"));
                 if(node instanceof MatrixNode||node instanceof SelectorNode||node instanceof MultiSelectorNode)routerControls.getChildren().add(actionButton(t("Добавить вход","Add input"),()->addRouterPort(graph.id(),node,"input")));
                 if(node instanceof MatrixNode||node instanceof SwitchNode||node instanceof MultiSwitchNode)routerControls.getChildren().add(actionButton(t("Добавить выход","Add output"),()->addRouterPort(graph.id(),node,"output")));
                 row.getChildren().add(routerControls);
