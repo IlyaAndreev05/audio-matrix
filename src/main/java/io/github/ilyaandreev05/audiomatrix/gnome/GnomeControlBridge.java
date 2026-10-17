@@ -31,10 +31,11 @@ import java.util.function.Function;
 public final class GnomeControlBridge implements AutoCloseable {
     public static final String OBJECT_PATH="/org/ilya/AudioMatrix";
     public static final String INTERFACE="org.ilya.AudioMatrix";
-    public static final int API_VERSION=2;
+    public static final int API_VERSION=3;
     private static final java.util.Set<String> SUPPORTED_COMMANDS=java.util.Set.of("open","select_output","toggle_mute",
             "set_output_volume","toggle_output_mute","set_app_volume","toggle_app_mute","set_stream_volume",
-            "toggle_stream_mute","set_quick_control","toggle_quick_control","set_quick_control_choice","set_mode","set_channel_map");
+            "toggle_stream_mute","set_quick_control","toggle_quick_control","set_quick_control_choice",
+            "set_quick_group_collapsed","select_route","set_mode","set_channel_map");
     private final PipeWireBackend backend;
     private final Function<Command,CompletableFuture<Void>> commands;
     private final ObjectMapper json=new ObjectMapper();
@@ -45,12 +46,12 @@ public final class GnomeControlBridge implements AutoCloseable {
     private volatile String lastState="";
     public GnomeControlBridge(PipeWireBackend backend,Function<Command,CompletableFuture<Void>> commands){this.backend=backend;this.commands=commands==null?ignored->CompletableFuture.completedFuture(null):commands;}
     public void start(){if(!started.compareAndSet(false,true))return;Thread.ofVirtual().name("audio-matrix-dbus-monitor").start(this::monitorLoop);emitter.scheduleAtFixedRate(this::reemitLatestState,4,4,TimeUnit.SECONDS);}
-    public void publishState(PipeWireBackend.Snapshot snapshot,Map<String,Object> config){
+    public void publishState(PipeWireBackend.Snapshot snapshot,Map<String,Object> config,long configRevision){
         Map<String,Object> profile=activeProfile(config);String configured=String.valueOf(profile.getOrDefault("default_output","system_default"));
-        int defaultId=snapshot.defaultSinkId();List<Map<String,Object>> outputs=outputDevices(snapshot);
-        List<Map<String,Object>> devices=maps(config.get("devices"));
+        int defaultId=snapshot.defaultSinkId();List<Map<String,Object>> devices=maps(config.get("devices"));
+        List<Map<String,Object>> outputs=GnomeOutputState.devices(snapshot,devices);
         AudioNode active=DeviceSelectorMatcher.resolve(snapshot.sinks(),configured,devices);if(active!=null&&active.name().startsWith("audiomatrix_"))active=null;if(active==null)active=snapshot.sinks().stream().filter(n->n.id()==defaultId&&!n.name().startsWith("audiomatrix_")).findFirst().orElse(null);
-        Map<String,Object> state=new LinkedHashMap<>();state.put("apiVersion",API_VERSION);state.put("connected",snapshot.connected());state.put("language",language(config));state.put("outputs",outputs);state.put("selectedOutput",active==null?"system_default":active.name());state.put("muted",active!=null&&active.muted());state.put("mode",profile.getOrDefault("mode","off"));state.put("profile",profile.getOrDefault("name",""));state.put("activeRoute",activeRouteName(config));state.put("quickControls",quickControls(config));state.put("channelRoutes",channelRoutes(snapshot,config,profile,active,defaultId,devices));
+        Map<String,Object> state=new LinkedHashMap<>();state.put("apiVersion",API_VERSION);state.put("revision",Long.toString(configRevision));state.put("connected",snapshot.connected());state.put("language",language(config));state.put("outputs",outputs);state.put("selectedOutput",active==null?"system_default":active.name());state.put("muted",active!=null&&active.muted());state.put("mode",profile.getOrDefault("mode","off"));state.put("profile",profile.getOrDefault("name",""));state.put("activeRoute",activeRouteName(config));state.put("activeRouteId",config.getOrDefault("active_route",""));state.put("routes",GnomeQuickSettingsState.routes(config));state.put("quickGroups",GnomeQuickSettingsState.groups(config));state.put("quickControls",quickControls(config));state.put("channelRoutes",channelRoutes(snapshot,config,profile,active,defaultId,devices));
         Map<String,Map<String,Object>> groups=new LinkedHashMap<>();
         for(AudioNode stream:snapshot.streams()){
             String appId=stream.applicationId()==null?"":stream.applicationId();String process=stream.processName()==null?"":stream.processName();
@@ -62,12 +63,7 @@ public final class GnomeControlBridge implements AutoCloseable {
         try{String payload=json.writeValueAsString(state);if(payload.equals(lastState))return;lastState=payload;emitter.execute(()->emit("State",payload));}catch(Exception ignored){}
     }
     static List<Map<String,Object>> outputDevices(PipeWireBackend.Snapshot snapshot){
-        List<Map<String,Object>> outputs=new ArrayList<>();int defaultId=snapshot.defaultSinkId();
-        for(AudioNode sink:snapshot.sinks()){
-            if(sink.name().startsWith("audiomatrix_")) continue;
-            Map<String,Object> output=new LinkedHashMap<>();output.put("name",sink.name());output.put("description",sink.description());output.put("channels",sink.channels());output.put("default",sink.id()==defaultId);output.put("muted",sink.muted());output.put("volume",Double.isFinite(sink.volume())?Math.max(0,Math.min(1,sink.volume())):0);outputs.add(output);
-        }
-        return List.copyOf(outputs);
+        return GnomeOutputState.devices(snapshot,List.of());
     }
     private static String activeRouteName(Map<String,Object> config){String id=String.valueOf(config.getOrDefault("active_route",""));if(id.isBlank())return "";for(Map<String,Object> route:maps(config.get("route_library")))if(id.equals(route.get("id")))return String.valueOf(route.getOrDefault("name",id));return id;}
     static List<Map<String,Object>> quickControls(Map<String,Object> config){
@@ -79,6 +75,8 @@ public final class GnomeControlBridge implements AutoCloseable {
             String nodeId=String.valueOf(control.getOrDefault("node_id","")),parameter=String.valueOf(control.getOrDefault("parameter_id",""));GraphNode node=graph.nodes().stream().filter(candidate->candidate.id().equals(nodeId)).findFirst().orElse(null);if(node==null)continue;
             String kind=controlKind(node.type(),parameter);if(kind.isBlank())continue;Object value=node.parameters().get(parameter);if(value==null)continue;
             Map<String,Object> item=new LinkedHashMap<>();item.put("id",control.get("id"));item.put("nodeId",nodeId);item.put("parameterId",parameter);item.put("label",control.getOrDefault("label",node.name()));item.put("section",control.getOrDefault("section","Audio Matrix"));item.put("order",control.getOrDefault("order",0));item.put("kind",kind);item.put("value",value);
+            item.put("groupId",control.getOrDefault("group_id",control.getOrDefault("section","routing")));
+            if("gain".equals(node.type())&&"gain".equals(parameter))item.put("muted",Boolean.TRUE.equals(node.parameters().get("muted")));
             if("links".equals(kind)&&node instanceof RouterNode router){
                 List<String> wiredInputs=graph.connections().stream().filter(edge->edge.enabled()&&edge.toNode().equals(router.id())).map(edge->edge.toPort()).distinct().toList();
                 List<String> wiredOutputs=graph.connections().stream().filter(edge->edge.enabled()&&edge.fromNode().equals(router.id())).map(edge->edge.fromPort()).distinct().toList();
@@ -117,7 +115,7 @@ public final class GnomeControlBridge implements AutoCloseable {
                 java.util.regex.Matcher number=java.util.regex.Pattern.compile("(?:uint32\\s+)?(\\d+)").matcher(line);
                 if(arguments.isEmpty()&&number.find())arguments.add(number.group(1));
                 java.util.regex.Matcher string=java.util.regex.Pattern.compile("'((?:\\\\.|[^'])*)'").matcher(line);
-                while(string.find()&&arguments.size()<4)arguments.add(unescapeGVariantString(string.group(1)));
+                while(string.find()&&arguments.size()<5)arguments.add(unescapeGVariantString(string.group(1)));
                 Command split=parseCommandArguments(arguments);if(split!=null){dispatch(split);arguments=null;}
             }}
             if(!closed.get())Thread.sleep(1200);
@@ -125,7 +123,9 @@ public final class GnomeControlBridge implements AutoCloseable {
     }}
     static Command parseCommandArguments(List<String> arguments){
         if(arguments==null||arguments.size()<4)return null;
-        try{return new Command(Integer.parseInt(arguments.get(0)),arguments.get(1),arguments.get(2),arguments.get(3));}
+        try{return arguments.size()>=5
+                ? new Command(Integer.parseInt(arguments.get(0)),arguments.get(1),arguments.get(2),arguments.get(3),arguments.get(4))
+                : new Command(Integer.parseInt(arguments.get(0)),arguments.get(1),"",arguments.get(2),arguments.get(3));}
         catch(NumberFormatException invalid){return null;}
     }
     void dispatch(Command command){
@@ -141,8 +141,10 @@ public final class GnomeControlBridge implements AutoCloseable {
         }catch(RuntimeException error){return CompletableFuture.completedFuture(new CommandResult("error",safeMessage(error)));}
     }
     static Command parseCommandLine(String line){
+        java.util.regex.Matcher v3=java.util.regex.Pattern.compile("\\((?:uint32\\s+)?(\\d+),\\s*'((?:\\\\.|[^'])*)',\\s*'((?:\\\\.|[^'])*)',\\s*'((?:\\\\.|[^'])*)',\\s*'((?:\\\\.|[^'])*)'\\)").matcher(line.trim());
+        if(v3.find())return new Command(Integer.parseInt(v3.group(1)),unescapeGVariantString(v3.group(2)),unescapeGVariantString(v3.group(3)),unescapeGVariantString(v3.group(4)),unescapeGVariantString(v3.group(5)));
         java.util.regex.Matcher v2=java.util.regex.Pattern.compile("\\((?:uint32\\s+)?(\\d+),\\s*'((?:\\\\.|[^'])*)',\\s*'((?:\\\\.|[^'])*)',\\s*'((?:\\\\.|[^'])*)'\\)").matcher(line.trim());
-        if(v2.find())return new Command(Integer.parseInt(v2.group(1)),unescapeGVariantString(v2.group(2)),unescapeGVariantString(v2.group(3)),unescapeGVariantString(v2.group(4)));
+        if(v2.find())return new Command(Integer.parseInt(v2.group(1)),unescapeGVariantString(v2.group(2)),"",unescapeGVariantString(v2.group(3)),unescapeGVariantString(v2.group(4)));
         java.util.regex.Matcher legacy=java.util.regex.Pattern.compile("\\('((?:\\\\.|[^'])*)'(?:,\\s*'((?:\\\\.|[^'])*)')?\\)").matcher(line.trim());
         if(!legacy.find())return null;return new Command(1,"",unescapeGVariantString(legacy.group(1)),legacy.group(2)==null?"":unescapeGVariantString(legacy.group(2)));
     }
@@ -153,6 +155,9 @@ public final class GnomeControlBridge implements AutoCloseable {
     private static String run(List<String>command,Duration timeout)throws Exception{Path out=Files.createTempFile("audio-matrix-dbus-",".out");try{Process p=new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(out.toFile()).start();if(!p.waitFor(timeout.toMillis(),java.util.concurrent.TimeUnit.MILLISECONDS)){p.destroyForcibly();throw new IOException("gdbus timed out");}if(p.exitValue()!=0)throw new IOException(Files.readString(out));return Files.readString(out);}finally{Files.deleteIfExists(out);}}
     private static Map<String,Object> activeProfile(Map<String,Object> config){String id=String.valueOf(config.get("active_profile"));Object list=config.get("profiles");if(list instanceof List<?> profiles)for(Object item:profiles)if(item instanceof Map<?,?> map&&id.equals(map.get("id"))){Map<String,Object>copy=new LinkedHashMap<>();map.forEach((k,v)->copy.put(String.valueOf(k),v));return copy;}return Map.of();}
     @Override public void close(){closed.set(true);if(monitor!=null)monitor.destroyForcibly();emitter.shutdownNow();}
-    public record Command(int apiVersion,String requestId,String name,String value){public Command(String name,String value){this(1,"",name,value);}}
+    public record Command(int apiVersion,String requestId,String revision,String name,String value){
+        public Command(int apiVersion,String requestId,String name,String value){this(apiVersion,requestId,"",name,value);}
+        public Command(String name,String value){this(1,"","",name,value);}
+    }
     record CommandResult(String status,String message){}
 }

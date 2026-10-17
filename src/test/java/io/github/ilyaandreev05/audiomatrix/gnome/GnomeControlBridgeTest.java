@@ -3,6 +3,7 @@ package io.github.ilyaandreev05.audiomatrix.gnome;
 import io.github.ilyaandreev05.audiomatrix.audio.AudioNode;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.config.DefaultConfig;
+import io.github.ilyaandreev05.audiomatrix.config.QuickSettingsConfig;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
 import io.github.ilyaandreev05.audiomatrix.graph.GainNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphConnection;
@@ -19,6 +20,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GnomeControlBridgeTest {
     private final AudioNode selected = new AudioNode(12, "alsa_output.usb-test", "USB test output", "Audio/Sink",
@@ -62,6 +64,19 @@ class GnomeControlBridgeTest {
         assertEquals(false, outputs.getFirst().get("default"));
     }
 
+    @Test void mixerOutputCommandsUseConfiguredDeviceIdsAndResolveAfterReconnect() {
+        PipeWireBackend.Snapshot snapshot = new PipeWireBackend.Snapshot(true, "", List.of(selected),
+                List.of(), List.of(), List.of(), Map.of(), selected.id(), 0);
+        List<Map<String, Object>> devices = List.of(Map.of("id", "monitor-benq", "selector",
+                Map.of("kind", "name_equals", "value", selected.name())));
+
+        Map<String, Object> output = GnomeOutputState.devices(snapshot, devices).getFirst();
+
+        assertEquals("device:monitor-benq", output.get("id"));
+        assertEquals(selected, GnomeOutputState.resolve(List.of(selected), "device:monitor-benq", devices));
+        assertEquals(selected, GnomeOutputState.resolve(List.of(selected), "name:" + selected.name(), List.of()));
+    }
+
     @Test void decodesEscapedTabFromGdbusCommandSignal() {
         GnomeControlBridge.Command command = GnomeControlBridge.parseCommandLine(
                 "/org/ilya/AudioMatrix: org.ilya.AudioMatrix.Command ('set_channel_map', 'test-route\\tmono_sum')");
@@ -71,21 +86,32 @@ class GnomeControlBridgeTest {
 
     @Test void parsesVersionedCommandAndRequestIdFromGdbusSignal() {
         GnomeControlBridge.Command command = GnomeControlBridge.parseCommandLine(
-                "/org/ilya/AudioMatrix: org.ilya.AudioMatrix.Command (uint32 2, 'request-17', 'set_output_volume', 'speaker\\t0.35')");
+                "/org/ilya/AudioMatrix: org.ilya.AudioMatrix.Command (uint32 3, 'request-17', 'set_output_volume', 'speaker\\t0.35')");
 
-        assertEquals(new GnomeControlBridge.Command(2,"request-17","set_output_volume","speaker\t0.35"),command);
+        assertEquals(new GnomeControlBridge.Command(3,"request-17","set_output_volume","speaker\t0.35"),command);
     }
 
     @Test void parsesMultilineGdbusCommandArguments(){
-        assertEquals(new GnomeControlBridge.Command(2,"request-22","open",""),
-                GnomeControlBridge.parseCommandArguments(List.of("2","request-22","open","")));
-        assertEquals(null,GnomeControlBridge.parseCommandArguments(List.of("2","request-22","open")));
+        assertEquals(new GnomeControlBridge.Command(3,"request-22","open",""),
+                GnomeControlBridge.parseCommandArguments(List.of("3","request-22","open","")));
+        assertEquals(null,GnomeControlBridge.parseCommandArguments(List.of("3","request-22","open")));
+        assertEquals(new GnomeControlBridge.Command(3,"request-23","41","select_route","route-9"),
+                GnomeControlBridge.parseCommandArguments(List.of("3","request-23","41","select_route","route-9")));
+    }
+
+    @Test void revisionedGraphEditsRejectStaleSnapshots() {
+        GnomeControlBridge.Command command = GnomeControlBridge.parseCommandLine(
+                "AudioMatrix.Command (uint32 3, 'request-24', '41', 'select_route', 'route-9')");
+
+        assertEquals(new GnomeControlBridge.Command(3, "request-24", "41", "select_route", "route-9"), command);
+        assertTrue(GnomeCommandRevision.isStale(command, 42));
+        assertFalse(GnomeCommandRevision.isStale(command, 41));
     }
 
     @Test void versionedCommandAcknowledgesOnlyAfterItsHandlerCompletes(){
         CompletableFuture<Void> operation=new CompletableFuture<>();
         CompletableFuture<GnomeControlBridge.CommandResult> result=GnomeControlBridge.execute(
-                new GnomeControlBridge.Command(2,"request-18","set_output_volume","speaker\t0.35"),ignored->operation);
+                new GnomeControlBridge.Command(3,"request-18","set_output_volume","speaker\t0.35"),ignored->operation);
 
         assertFalse(result.isDone());
         operation.complete(null);
@@ -94,13 +120,13 @@ class GnomeControlBridgeTest {
 
     @Test void versionedCommandReturnsActionFailuresAndRejectsOldOrUnknownCommands(){
         GnomeControlBridge.CommandResult failed=GnomeControlBridge.execute(
-                new GnomeControlBridge.Command(2,"request-19","set_output_volume","speaker\t0.35"),
+                new GnomeControlBridge.Command(3,"request-19","set_output_volume","speaker\t0.35"),
                 ignored->CompletableFuture.failedFuture(new IllegalStateException("output disconnected"))).join();
         AtomicBoolean called=new AtomicBoolean();
         GnomeControlBridge.CommandResult oldApi=GnomeControlBridge.execute(
                 new GnomeControlBridge.Command(1,"request-20","open",""),ignored->{called.set(true);return CompletableFuture.completedFuture(null);}).join();
         GnomeControlBridge.CommandResult unknown=GnomeControlBridge.execute(
-                new GnomeControlBridge.Command(2,"request-21","delete_everything",""),ignored->{called.set(true);return CompletableFuture.completedFuture(null);}).join();
+                new GnomeControlBridge.Command(3,"request-21","delete_everything",""),ignored->{called.set(true);return CompletableFuture.completedFuture(null);}).join();
 
         assertEquals(new GnomeControlBridge.CommandResult("error","output disconnected"),failed);
         assertEquals("error",oldApi.status());
@@ -119,7 +145,19 @@ class GnomeControlBridgeTest {
 
         List<Map<String,Object>> controls=GnomeControlBridge.quickControls(config);
 
-        assertEquals(1,controls.size());assertEquals("bass-level",controls.getFirst().get("id"));assertEquals("slider",controls.getFirst().get("kind"));assertEquals(.42,controls.getFirst().get("value"));assertEquals("Bass / events",controls.getFirst().get("section"));assertEquals(4,controls.getFirst().get("order"));
+        assertEquals(1,controls.size());assertEquals("bass-level",controls.getFirst().get("id"));assertEquals("slider",controls.getFirst().get("kind"));assertEquals(.42,controls.getFirst().get("value"));assertEquals("Bass / events",controls.getFirst().get("section"));assertEquals("Bass / events",controls.getFirst().get("groupId"));assertEquals(4,controls.getFirst().get("order"));
+    }
+
+    @Test void publishesOrderedGroupsAndRoutesForTheActiveProfile() {
+        Map<String, Object> config = DefaultConfig.create();
+        List<Map<String, Object>> groups = QuickSettingsConfig.groups(config);
+        groups.getFirst().put("order", 2);
+        groups.getLast().put("order", 0);
+        AudioGraph route = new AudioGraph("desk-route", "Desk route", List.of(), List.of());
+        GraphRouteLibrary.saveRoute(config, route, "");
+
+        assertEquals("effects", GnomeQuickSettingsState.groups(config).getFirst().get("id"));
+        assertEquals(List.of(Map.of("id", "desk-route", "name", "Desk route")), GnomeQuickSettingsState.routes(config));
     }
 
     @Test void publishesRouterChoicesForPinnedMatrixParameters(){
