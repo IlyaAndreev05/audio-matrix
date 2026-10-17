@@ -41,6 +41,8 @@ public final class PipeWireRouteManager implements AutoCloseable {
     private final Map<String, ManagedProcess> filterChainProcesses = new LinkedHashMap<>();
     private final Map<String, List<Link>> originalStreamLinks = new LinkedHashMap<>();
     private final Set<Link> ownedLinks = new LinkedHashSet<>();
+    private final Set<Link> observedLinks = new HashSet<>();
+    private int skippedStreamCount;
     private volatile boolean active;
     private volatile boolean closed;
     private volatile String status = "Routes are not applied";
@@ -256,6 +258,7 @@ public final class PipeWireRouteManager implements AutoCloseable {
         int transitionMs = transitionMillis(config);
         int fadeOutMs = active && appliedPlan != null ? transitionMs / 2 : 0;
         int fadeInMs = active && appliedPlan != null ? transitionMs - fadeOutMs : transitionMs;
+        skippedStreamCount = 0;
 
         Map<String, List<Link>> originalBeforeApply = deepLinks(originalStreamLinks);
         try {
@@ -308,6 +311,8 @@ public final class PipeWireRouteManager implements AutoCloseable {
 
             Map<String, List<String>> inputs = ports("-i");
             Map<String, List<String>> outputs = ports("-o");
+            observedLinks.clear();
+            observedLinks.addAll(PipeWireLinkOperations.allLinks(run(List.of("pw-link", "-l"), COMMAND_TIMEOUT)));
             Map<String, List<RoutePlan>> routesByBus = new LinkedHashMap<>();
             for (RoutePlan route : plan.routes()) routesByBus.computeIfAbsent(route.fromBusId(), ignored -> new ArrayList<>()).add(route);
             for (RoutePlan route : plan.routes()) {
@@ -371,22 +376,24 @@ public final class PipeWireRouteManager implements AutoCloseable {
             for (StreamPlan stream : plan.streams()) {
                 BusPlan targetBus = plan.buses().get(stream.busId());
                 List<Link> previous = originalStreamLinks.getOrDefault(stream.node().name(), List.of());
-                disconnectAll(previous);
                 String firstTarget = stream.filters().isEmpty() ? targetBus.nodeName() : stream.filterInputNodeName();
                 List<Link> intoBus = channelLinks(
                         outputs.getOrDefault(stream.node().name(), List.of()),
                         inputs.getOrDefault(firstTarget, List.of()),
                         stream.filters().isEmpty() ? targetBus.channelLayout() : "stereo", true);
-                if (intoBus.isEmpty()) throw new IOException("No compatible PipeWire ports between stream " + stream.node().name() + " and bus " + stream.busId());
-                connectAll(intoBus);
-                if (!stream.filters().isEmpty()) {
-                    List<Link> fromFilter = channelLinks(
-                            outputs.getOrDefault(stream.filterOutputNodeName(), List.of()),
-                            inputs.getOrDefault(targetBus.nodeName(), List.of()),
-                            targetBus.channelLayout(), true);
-                    if (fromFilter.isEmpty()) throw new IOException("No compatible PipeWire ports between application EQ and bus " + stream.busId());
-                    connectAll(fromFilter);
+                List<Link> fromFilter = stream.filters().isEmpty() ? List.of() : channelLinks(
+                        outputs.getOrDefault(stream.filterOutputNodeName(), List.of()),
+                        inputs.getOrDefault(targetBus.nodeName(), List.of()), targetBus.channelLayout(), true);
+                if (intoBus.isEmpty() || (!stream.filters().isEmpty() && fromFilter.isEmpty())) {
+                    skippedStreamCount++;
+                    transitionWarnings.add("Skipped stream " + stream.node().name()
+                            + " because its PipeWire ports do not match bus " + stream.busId());
+                    continue;
                 }
+                disconnectAll(previous);
+                connectAll(intoBus);
+                if (!stream.filters().isEmpty())
+                    connectAll(fromFilter);
             }
 
             Set<String> activeStreamNames = new HashSet<>();
@@ -408,6 +415,8 @@ public final class PipeWireRouteManager implements AutoCloseable {
             originalStreamLinks.clear();
             originalStreamLinks.putAll(originalBeforeApply);
             restoreAllOriginal();
+            observedLinks.clear();
+            skippedStreamCount = 0;
             active = false;
             appliedSignature = "";
             appliedPlan = null;
@@ -420,7 +429,8 @@ public final class PipeWireRouteManager implements AutoCloseable {
         List<String> reportedWarnings = new ArrayList<>(plan.warnings());
         reportedWarnings.addAll(transitionWarnings);
         transitionWarnings.clear();
-        lastReport = new ApplyReport(plan.buses().size(), plan.routes().size(), plan.streams().size(), reportedWarnings);
+        lastReport = new ApplyReport(plan.buses().size(), plan.routes().size(),
+                Math.max(0, plan.streams().size() - skippedStreamCount), reportedWarnings);
         int filterCount = plan.routes().stream().mapToInt(route -> route.filters().size()).sum()
                 + plan.outputs().values().stream().mapToInt(output -> output.filters().size() + output.limiterFilters().size()).sum()
                 + plan.streams().stream().mapToInt(stream -> stream.filters().size()).sum();
@@ -608,7 +618,7 @@ public final class PipeWireRouteManager implements AutoCloseable {
         List<StreamPlan> streams = new ArrayList<>();
         if (!profileOff && !routes.isEmpty()) {
             for (AudioNode stream : snapshot.streams()) {
-                boolean eventStream = EVENT_SOUND_STUDIO_APPLICATION_ID.equals(stream.applicationId());
+                boolean eventStream = isEventSoundStudioStream(stream);
                 Map<String, Object> rule = eventStream
                         ? explicitEventApplicationRule(maps(config.get("applications")))
                         : ApplicationRuleMatcher.find(maps(config.get("applications")), stream);
@@ -630,6 +640,12 @@ public final class PipeWireRouteManager implements AutoCloseable {
             }
         }
         return new Plan(buses, routes, streams, outputPlans, warnings, profileOff, masterVolume, masterMuted);
+    }
+
+    static boolean isEventSoundStudioStream(AudioNode stream) {
+        // EES preview and generator playback may use Java Sound from the same process.
+        // Only the dedicated pw-cat event stream carries this stable application ID.
+        return EVENT_SOUND_STUDIO_APPLICATION_ID.equals(stream.applicationId());
     }
 
     static double effectiveRoutePlaybackVolume(Plan plan, RoutePlan route) {
@@ -1049,14 +1065,36 @@ public final class PipeWireRouteManager implements AutoCloseable {
     private void connectAll(List<Link> links) throws Exception {
         if (links.isEmpty()) throw new IOException("No compatible PipeWire channel ports were found");
         for (Link link : links) {
-            run(List.of("pw-link", "--wait", link.output(), link.input()), Duration.ofSeconds(3));
-            ownedLinks.add(link);
+            if (observedLinks.contains(link)) {
+                if (isAudioMatrixGraphLink(link))
+                    ownedLinks.add(link);
+                continue;
+            }
+            try {
+                run(List.of("pw-link", "--wait", link.output(), link.input()), COMMAND_TIMEOUT);
+                observedLinks.add(link);
+                ownedLinks.add(link);
+            } catch (Exception error) {
+                List<Link> live = PipeWireLinkOperations.allLinks(run(List.of("pw-link", "-l"), COMMAND_TIMEOUT));
+                if (!live.contains(link)) throw error;
+                observedLinks.add(link);
+                ownedLinks.add(link);
+            }
         }
     }
 
+    private static boolean isAudioMatrixGraphLink(Link link) {
+        String outputNode = link.output().substring(0, link.output().indexOf(':'));
+        String inputNode = link.input().substring(0, link.input().indexOf(':'));
+        return outputNode.startsWith("audiomatrix_") || inputNode.startsWith("audiomatrix_");
+    }
+
     private void disconnectAll(List<Link> links) {
-        for (Link link : links) try { run(List.of("pw-link", "-d", link.output(), link.input()), COMMAND_TIMEOUT); }
-        catch (Exception ignored) {}
+        for (Link link : links) try {
+            run(List.of("pw-link", "-d", link.output(), link.input()), COMMAND_TIMEOUT);
+            observedLinks.remove(link);
+            ownedLinks.remove(link);
+        } catch (Exception ignored) {}
     }
 
     private void disconnectOwnedLinks() {
@@ -1118,7 +1156,8 @@ public final class PipeWireRouteManager implements AutoCloseable {
         disconnectOwnedLinks();
         stopOwnedProcesses();
         if (restoreStreams) restoreAllOriginal();
-        originalStreamLinks.clear(); active = false; appliedSignature = ""; appliedPlan = null;
+        originalStreamLinks.clear(); observedLinks.clear(); skippedStreamCount = 0;
+        active = false; appliedSignature = ""; appliedPlan = null;
         status = transitionWarnings.isEmpty() ? "Routes are not applied"
                 : "Routes are not applied · " + String.join("; ", transitionWarnings);
         transitionWarnings.clear();

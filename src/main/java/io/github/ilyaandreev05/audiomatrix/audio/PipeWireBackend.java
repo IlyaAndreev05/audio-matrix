@@ -279,6 +279,7 @@ public final class PipeWireBackend implements AutoCloseable {
         Map<Integer, LevelState> levels = levelStates(controlStatus);
         JsonNode root = json.readTree(output);
         if (!root.isArray()) throw new IOException("pw-dump returned an unexpected document");
+        Map<Integer, JsonNode> clients = clientProperties(root);
         List<AudioNode> sinks = new ArrayList<>(), sources = new ArrayList<>(), streams = new ArrayList<>();
         for (JsonNode object : root) {
             JsonNode info = object.path("info");
@@ -289,9 +290,10 @@ public final class PipeWireBackend implements AutoCloseable {
             int id = object.path("id").asInt(-1);
             String description = props.path("node.description").asText(name);
             String state = info.path("state").asText("unknown").toLowerCase();
-            String app = props.path("application.name").asText("");
-            String process = props.path("application.process.binary").asText("");
-            String appId = props.path("application.id").asText("");
+            ApplicationIdentity identity = applicationIdentity(props, clients);
+            String app = identity.applicationName();
+            String process = identity.processName();
+            String appId = identity.applicationId();
             int channels = props.path("audio.channels").asInt(2);
             List<Integer> rates = sampleRates(info.path("params").path("EnumFormat"));
             Integer pulseId = props.path("pulse.id").isInt() ? props.path("pulse.id").asInt() : null;
@@ -317,6 +319,35 @@ public final class PipeWireBackend implements AutoCloseable {
         return new Snapshot(true, "", List.copyOf(sinks), List.copyOf(sources), List.copyOf(streams),
                 List.copyOf(recent.values()), Collections.unmodifiableMap(seen), defaultSinkId, System.currentTimeMillis());
     }
+
+    static Map<Integer, JsonNode> clientProperties(JsonNode root) {
+        Map<Integer, JsonNode> result = new HashMap<>();
+        if (root == null || !root.isArray()) return result;
+        for (JsonNode object : root) {
+            if (!"PipeWire:Interface:Client".equals(object.path("type").asText())) continue;
+            int id = object.path("id").asInt(-1);
+            JsonNode properties = object.path("info").path("props");
+            if (id >= 0 && properties.isObject()) result.put(id, properties);
+        }
+        return result;
+    }
+
+    static ApplicationIdentity applicationIdentity(JsonNode nodeProperties, Map<Integer, JsonNode> clients) {
+        int clientId = nodeProperties.path("client.id").asInt(-1);
+        JsonNode clientProperties = clients.get(clientId);
+        return new ApplicationIdentity(
+                property(nodeProperties, clientProperties, "application.name"),
+                property(nodeProperties, clientProperties, "application.process.binary"),
+                property(nodeProperties, clientProperties, "application.id"));
+    }
+
+    private static String property(JsonNode nodeProperties, JsonNode clientProperties, String name) {
+        String value = nodeProperties.path(name).asText("");
+        if (!value.isBlank()) return value;
+        return clientProperties == null ? "" : clientProperties.path(name).asText("");
+    }
+
+    record ApplicationIdentity(String applicationName, String processName, String applicationId) {}
 
     static boolean isSnapshotAudioNode(String mediaClass, String name) {
         if (mediaClass == null || name == null || name.isBlank()) return false;

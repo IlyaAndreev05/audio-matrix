@@ -408,6 +408,16 @@ class PipeWireRouteManagerTest {
         assertTrue(isolated.streams().isEmpty(), "an unmatched event stream must remain on its isolated virtual sink");
         assertEquals(List.of("main-out"), isolated.routes().stream().map(PipeWireRouteManager.RoutePlan::id).toList());
 
+        AudioNode previewStream = new AudioNode(72, "preview-stream", "Event Sound Studio preview",
+                "Stream/Output/Audio", "running", "Event Sound Studio", "EventSoundStudio", "",
+                2, List.of(48000), 1.0, false, null);
+        assertFalse(PipeWireRouteManager.isEventSoundStudioStream(previewStream),
+                "ordinary Java Sound preview must not be mistaken for the dedicated event stream");
+        PipeWireRouteManager.Plan previewPlan = manager.plan(config,
+                snapshotWithStreams(List.of(sink), List.of(previewStream), sink.id()));
+        assertEquals(List.of("preview-stream"), previewPlan.routedStreamNames(),
+                "preview playback continues through the normal application catch-all");
+
         @SuppressWarnings("unchecked") List<Map<String,Object>> applications = (List<Map<String,Object>>) config.get("applications");
         applications.add(DefaultConfig.map("id", "event-effects", "name", "Event effects", "match",
                 DefaultConfig.map("app_id", PipeWireRouteManager.EVENT_SOUND_STUDIO_APPLICATION_ID), "bus", "main",

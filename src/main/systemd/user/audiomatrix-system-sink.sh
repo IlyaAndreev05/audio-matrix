@@ -42,20 +42,15 @@ terminate() {
 read_state
 trap terminate HUP INT TERM
 trap cleanup EXIT
-while ! sink_exists "$sink_name"; do
-    sleep 1 &
-    sleep_pid=$!
-    wait "$sleep_pid" || true
-    sleep_pid=
-done
-audiomatrix_set_default_sink "$sink_name"
 while :; do
-    sleep 1 &
+    sink_rows=$(audiomatrix_sink_rows)
+    current_sink=$(printf '%s\n' "$sink_rows" | awk -F '\t' '$3 == "1" { print $2; exit }')
+    available_sink_id=$(printf '%s\n' "$sink_rows" | awk -F '\t' -v wanted="$sink_name" '$2 == wanted { print $1; exit }')
+    if [ -n "$available_sink_id" ] && [ "$current_sink" != "$sink_name" ]; then
+        wpctl set-default "$available_sink_id"
+    fi
+    sleep 3 &
     sleep_pid=$!
     wait "$sleep_pid" || true
     sleep_pid=
-    if sink_exists "$sink_name"; then
-        current_sink=$(audiomatrix_default_sink)
-        if [ "$current_sink" != "$sink_name" ]; then audiomatrix_set_default_sink "$sink_name"; fi
-    fi
 done

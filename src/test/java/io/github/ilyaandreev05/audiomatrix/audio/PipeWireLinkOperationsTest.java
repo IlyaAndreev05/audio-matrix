@@ -31,4 +31,20 @@ class PipeWireLinkOperationsTest {
                 new PipeWireRouteManager.Link("stream:out_FR", "new-sink:playback_FR")),
                 PipeWireLinkOperations.linksFromNode(listing, "stream"));
     }
+
+    @Test
+    void readsExistingLinksOnceAcrossBothListingOrientations() {
+        String listing = """
+                stream:out_FL
+                  |-> bus:input_FL
+                bus:input_FL
+                  |<- stream:out_FL
+                route:output_FR
+                  |-> sink:playback_FR
+                """;
+        assertEquals(List.of(
+                new PipeWireRouteManager.Link("stream:out_FL", "bus:input_FL"),
+                new PipeWireRouteManager.Link("route:output_FR", "sink:playback_FR")),
+                PipeWireLinkOperations.allLinks(listing));
+    }
 }

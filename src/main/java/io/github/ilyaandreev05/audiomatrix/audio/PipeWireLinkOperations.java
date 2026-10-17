@@ -36,4 +36,21 @@ final class PipeWireLinkOperations {
         }
         return List.copyOf(new LinkedHashSet<>(links));
     }
+
+    static List<PipeWireRouteManager.Link> allLinks(String listing) {
+        List<PipeWireRouteManager.Link> links = new ArrayList<>();
+        String current = "";
+        for (String line : listing.split("\\R")) {
+            if (!line.startsWith(" ") && !line.startsWith("\t") && line.contains(":")) {
+                current = line.trim();
+                continue;
+            }
+            String edge = line.trim();
+            if (edge.startsWith("|->") && current.contains(":"))
+                links.add(new PipeWireRouteManager.Link(current, edge.substring(3).trim()));
+            else if (edge.startsWith("|<-") && current.contains(":"))
+                links.add(new PipeWireRouteManager.Link(edge.substring(3).trim(), current));
+        }
+        return List.copyOf(new LinkedHashSet<>(links));
+    }
 }
