@@ -692,9 +692,13 @@ public final class AppShell extends BorderPane {
     private VBox graphCanvasCard(AudioGraph graph){
         VBox box=card(t("Схема маршрута","Route canvas"));
         box.getChildren().add(label(t("Перетаскивай ноды и соединяй порты. Внешние связи свёрнутой ноды проходят через её граничные порты. Масштаб и положение хранятся отдельно от аудиосхемы.","Drag nodes and connect ports. External links cross a collapsed subgraph through its boundary ports. Canvas layout is saved separately from the audio graph."),"muted"));
-        int tallestColumn=Math.max((int)graph.nodes().stream().filter(SourceNode.class::isInstance).count(),(int)graph.nodes().stream().filter(OutputNode.class::isInstance).count());
-        tallestColumn=Math.max(tallestColumn,(int)graph.nodes().stream().filter(node->!(node instanceof SourceNode)&&!(node instanceof OutputNode)).count());
-        double canvasHeight=Math.max(390,tallestColumn*112+55);
+        int sourceCount=(int)graph.nodes().stream().filter(SourceNode.class::isInstance).count();
+        int outputCount=(int)graph.nodes().stream().filter(OutputNode.class::isInstance).count();
+        double processHeight=graph.nodes().stream().filter(node->!(node instanceof SourceNode)&&!(node instanceof OutputNode))
+                .mapToDouble(this::graphCanvasNodeHeight).sum();
+        long processCount=graph.nodes().stream().filter(node->!(node instanceof SourceNode)&&!(node instanceof OutputNode)).count();
+        processHeight+=Math.max(0,processCount-1)*16;
+        double canvasHeight=Math.max(390,Math.max(Math.max(sourceCount,outputCount)*112+55,processHeight+55));
         double canvasWidth=1080;
         Map<String,Object> savedScales=map(store.snapshot().get("graph_ui_scale"));double initialScale=Math.max(.5,Math.min(2,number(savedScales.get(graph.id()),1.0)));
         HBox zoomRow=new HBox(8);zoomRow.setAlignment(Pos.CENTER_LEFT);
@@ -712,13 +716,13 @@ public final class AppShell extends BorderPane {
         Map<String,Object> routeLayout=map(allLayouts.get(graph.id()));
         Map<String,Node> views=new LinkedHashMap<>();Map<String,Line> lines=new LinkedHashMap<>();
         Map<String,GraphNode> nodes=new LinkedHashMap<>();graph.nodes().forEach(node->nodes.put(node.id(),node));
-        int sourceIndex=0,processIndex=0,outputIndex=0;
+        int sourceIndex=0,outputIndex=0;double processY=25;
         Map<String,double[]> initial=new LinkedHashMap<>();
         for(GraphNode node:graph.nodes()){
             double defaultX,defaultY;
             if(node instanceof SourceNode){defaultX=25;defaultY=25+sourceIndex++*112;}
             else if(node instanceof OutputNode){defaultX=810;defaultY=25+outputIndex++*112;}
-            else{defaultX=360;defaultY=25+processIndex++*95;}
+            else{defaultX=360;defaultY=processY;processY+=graphCanvasNodeHeight(node)+16;}
             Map<String,Object> saved=map(routeLayout.get(node.id()));double x=number(saved.get("x"),defaultX),y=number(saved.get("y"),defaultY);
             initial.put(node.id(),new double[]{x,y});
         }
@@ -738,14 +742,21 @@ public final class AppShell extends BorderPane {
         for(GraphNode node:graph.nodes()){
             if(collapsedForNode.containsKey(node.id()))continue;
             double[] position=initial.get(node.id());double x=position[0],y=position[1];
-            VBox card=new VBox(5);card.setPrefWidth(250);card.setMinHeight(82);card.setLayoutX(x);card.setLayoutY(y);card.setStyle("-fx-background-color: #292d35; -fx-border-color: #656b77; -fx-border-radius: 8; -fx-background-radius: 8; -fx-padding: 8;");
+            VBox card=new VBox(5);card.setPrefWidth(node instanceof RouterNode?360:250);card.setMinHeight(82);card.setLayoutX(x);card.setLayoutY(y);card.setStyle("-fx-background-color: #292d35; -fx-border-color: #656b77; -fx-border-radius: 8; -fx-background-radius: 8; -fx-padding: 8;");
             Label title=label(node.name(),"card-title");title.setWrapText(true);title.setMaxWidth(160);
             Label type=label(node.type(),"muted");
             VBox inputButtons=new VBox(2),outputButtons=new VBox(2);inputButtons.setAlignment(Pos.CENTER_LEFT);outputButtons.setAlignment(Pos.CENTER_RIGHT);
             for(AudioPort port:node.inputs()){Button button=graphPortButton("◉ "+port.id());button.setAccessibleText(t("Входной порт ","Input port ")+node.name()+" · "+port.id());button.setOnAction(event->selectGraphPort(graph.id(),node.id(),port));inputButtons.getChildren().add(button);}
             for(AudioPort port:node.outputs()){Button button=graphPortButton(port.id()+" ◉");button.setAccessibleText(t("Выходной порт ","Output port ")+node.name()+" · "+port.id());button.setOnAction(event->selectGraphPort(graph.id(),node.id(),port));outputButtons.getChildren().add(button);}
-            VBox description=new VBox(3,title,type);HBox portRow=new HBox(4,inputButtons,description,outputButtons);HBox.setHgrow(description,Priority.ALWAYS);
-            card.getChildren().add(portRow);views.put(node.id(),card);canvas.getChildren().add(card);
+            if(node instanceof RouterNode router){
+                title.setWrapText(false);title.setTextOverrun(javafx.scene.control.OverrunStyle.ELLIPSIS);title.setMaxWidth(185);
+                HBox header=new HBox(10,title,label(router.type()+" · "+router.activeLinks().size()+"/"+(router.inputs().size()*router.outputs().size()),"muted"));
+                card.getChildren().addAll(header,graphRouterCanvas(router,inputButtons,outputButtons));
+            }else{
+                VBox description=new VBox(3,title,type);HBox portRow=new HBox(4,inputButtons,description,outputButtons);HBox.setHgrow(description,Priority.ALWAYS);
+                card.getChildren().add(portRow);
+            }
+            views.put(node.id(),card);canvas.getChildren().add(card);
         }
         for(GraphConnection edge:graph.connections()){
             Line line=new Line();line.setStroke(edge.enabled()?javafx.scene.paint.Color.web("#37b5a5"):javafx.scene.paint.Color.web("#62666f"));line.setStrokeWidth(edge.enabled()?2.5:1.0);if(!edge.enabled())line.getStrokeDashArray().setAll(6.0,5.0);line.setMouseTransparent(true);lines.put(edge.id(),line);canvas.getChildren().add(0,line);
@@ -756,8 +767,8 @@ public final class AppShell extends BorderPane {
                 GraphSubgraph fromGroup=collapsedForNode.get(edge.fromNode()),toGroup=collapsedForNode.get(edge.toNode());
                 if(fromGroup!=null&&toGroup!=null&&fromGroup.id().equals(toGroup.id())){line.setVisible(false);continue;}line.setVisible(true);
                 GraphNode source=nodes.get(edge.fromNode()),target=nodes.get(edge.toNode());int fromPort=Math.max(0,source.outputs().stream().map(AudioPort::id).toList().indexOf(edge.fromPort()));int toPort=Math.max(0,target.inputs().stream().map(AudioPort::id).toList().indexOf(edge.toPort()));
-                double startY=fromGroup==null?from.getLayoutY()+28+fromPort*22:subgraphBoundaryY(graph,fromGroup,edge,GraphSubgraph.Direction.OUTPUT,from);
-                double endY=toGroup==null?to.getLayoutY()+28+toPort*22:subgraphBoundaryY(graph,toGroup,edge,GraphSubgraph.Direction.INPUT,to);
+                double startY=fromGroup==null?from.getLayoutY()+(source instanceof RouterNode?42:28)+fromPort*(source instanceof RouterNode?24:22):subgraphBoundaryY(graph,fromGroup,edge,GraphSubgraph.Direction.OUTPUT,from);
+                double endY=toGroup==null?to.getLayoutY()+(target instanceof RouterNode?42:28)+toPort*(target instanceof RouterNode?24:22):subgraphBoundaryY(graph,toGroup,edge,GraphSubgraph.Direction.INPUT,to);
                 line.setStartX(from.getLayoutX()+from.getBoundsInLocal().getWidth());line.setStartY(startY);line.setEndX(to.getLayoutX());line.setEndY(endY);
             }
         };
@@ -776,6 +787,44 @@ public final class AppShell extends BorderPane {
             view.setOnMouseReleased(event->{if(!isButtonTarget(event.getTarget(),view)&&moved[0])saveSubgraphPosition(graph.id(),group,view.getLayoutX()-start[0],view.getLayoutY()-start[1],initial);});
         }
         box.getChildren().add(viewport);return box;
+    }
+
+    private double graphCanvasNodeHeight(GraphNode node){
+        int ports=Math.max(node.inputs().size(),node.outputs().size());
+        return Math.max(82,40+ports*24);
+    }
+
+    private HBox graphRouterCanvas(RouterNode router,VBox inputButtons,VBox outputButtons){
+        int rows=Math.max(router.inputs().size(),router.outputs().size());
+        double rowHeight=24,diagramWidth=132,diagramHeight=Math.max(rowHeight,rows*rowHeight);
+        inputButtons.setSpacing(2);outputButtons.setSpacing(2);
+        inputButtons.setPrefWidth(72);outputButtons.setPrefWidth(88);
+        for(Node child:inputButtons.getChildren())if(child instanceof Button button){button.setPrefSize(72,22);button.setMinSize(72,22);button.setMaxSize(72,22);button.setTextOverrun(javafx.scene.control.OverrunStyle.ELLIPSIS);}
+        for(Node child:outputButtons.getChildren())if(child instanceof Button button){button.setPrefSize(88,22);button.setMinSize(88,22);button.setMaxSize(88,22);button.setTextOverrun(javafx.scene.control.OverrunStyle.ELLIPSIS);}
+
+        Pane diagram=new Pane();diagram.setPrefSize(diagramWidth,diagramHeight);diagram.setMinSize(diagramWidth,diagramHeight);diagram.setMaxSize(diagramWidth,diagramHeight);
+        diagram.setStyle("-fx-background-color: #171a20; -fx-border-color: #474e5a; -fx-border-width: 1; -fx-border-radius: 10; -fx-background-radius: 10;");
+        diagram.setAccessibleText(t("Активные связи матрицы: ","Active matrix connections: ")+String.join(", ",router.activeLinks()));
+        javafx.scene.paint.Color inputColor=javafx.scene.paint.Color.web("#16a394");
+        javafx.scene.paint.Color outputColor=javafx.scene.paint.Color.web("#3978ff");
+        javafx.scene.paint.Color linkColor=javafx.scene.paint.Color.web("#13998e");
+        for(String activeLink:router.activeLinks()){
+            String[] endpoints=activeLink.split("->",2);if(endpoints.length!=2)continue;
+            int inputIndex=-1,outputIndex=-1;
+            for(int i=0;i<router.inputs().size();i++)if(router.inputs().get(i).id().equals(endpoints[0]))inputIndex=i;
+            for(int i=0;i<router.outputs().size();i++)if(router.outputs().get(i).id().equals(endpoints[1]))outputIndex=i;
+            if(inputIndex<0||outputIndex<0)continue;
+            double startY=inputIndex*rowHeight+rowHeight/2,endY=outputIndex*rowHeight+rowHeight/2;
+            javafx.scene.shape.Path path=new javafx.scene.shape.Path(
+                    new javafx.scene.shape.MoveTo(7,startY),
+                    new javafx.scene.shape.CubicCurveTo(diagramWidth*.40,startY,diagramWidth*.60,endY,diagramWidth-7,endY));
+            path.setFill(javafx.scene.paint.Color.TRANSPARENT);path.setStroke(linkColor);path.setStrokeWidth(2.2);path.setMouseTransparent(true);
+            diagram.getChildren().add(path);
+        }
+        for(int i=0;i<router.inputs().size();i++)diagram.getChildren().add(new Circle(7,i*rowHeight+rowHeight/2,4.5,inputColor));
+        for(int i=0;i<router.outputs().size();i++)diagram.getChildren().add(new Circle(diagramWidth-7,i*rowHeight+rowHeight/2,4.5,outputColor));
+        HBox body=new HBox(4,inputButtons,diagram,outputButtons);body.setAlignment(Pos.CENTER_LEFT);body.setAccessibleText(router.name()+" · "+router.activeLinks().size()+t(" активных связей"," active connections"));
+        return body;
     }
 
     private double subgraphBoundaryY(AudioGraph graph,GraphSubgraph group,GraphConnection edge,GraphSubgraph.Direction direction,Node view){
