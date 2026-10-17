@@ -10,7 +10,7 @@ public final class DefaultConfig {
 
     public static Map<String, Object> create() {
         Map<String, Object> root = map();
-        root.put("schema_version", 3);
+        root.put("schema_version", 4);
         root.put("route_groups", new ArrayList<>());
         root.put("route_library", new ArrayList<>());
         root.put("saved_copies", new ArrayList<>());
@@ -24,8 +24,7 @@ public final class DefaultConfig {
         root.put("ui", map("language", "ru", "theme", "system", "start_minimized", false));
         root.put("mixer", map("global_volume", 0.8, "global_mute", false,
                 "global_eq", map("enabled", false, "filters", new ArrayList<>())));
-        root.put("quick_settings", map("enabled", true, "show_output", true, "show_mode", true,
-                "show_mute", true, "open_full_settings", true));
+        root.put("quick_settings", QuickSettingsConfig.defaults());
         root.put("engine", map("backend", "pipewire", "apply_on_start", false,
                 "restore_owned_nodes_on_exit", true, "device_loss_policy", "mute", "transition_ms", 120));
         root.put("devices", new ArrayList<>());

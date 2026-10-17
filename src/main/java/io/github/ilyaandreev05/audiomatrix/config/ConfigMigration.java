@@ -15,7 +15,7 @@ final class ConfigMigration {
     private static final TypeReference<LinkedHashMap<String, Object>> MAP_TYPE = new TypeReference<>() {};
 
     static void backupBeforeSchemaUpgrade(Path file) throws IOException {
-        String base=file.getFileName()+".before-schema-3";
+        String base=file.getFileName()+".before-schema-4";
         Path backup=file.resolveSibling(base);
         for(int suffix=1;Files.exists(backup);suffix++)backup=file.resolveSibling(base+"."+suffix);
         Files.copy(file,backup);
@@ -32,7 +32,7 @@ final class ConfigMigration {
             throw new ConfigStore.ConfigValidationException(List.of("Legacy YAML could not be read; it was left untouched: " + error.getMessage()));
         }
         int version = parsed.get("schema_version") instanceof Number number ? number.intValue() : -1;
-        if (version < 3) upgradeConfig(parsed);
+        if (version < 4) upgradeConfig(parsed);
         List<String> errors = ConfigValidator.validate(parsed);
         if (!errors.isEmpty()) throw new ConfigStore.ConfigValidationException(errors);
         Path backup = legacy.resolveSibling("config.yaml.before-json");
@@ -111,6 +111,10 @@ final class ConfigMigration {
                 }
             }
             config.put("schema_version", 3);
+        }
+        if (schema < 4) {
+            QuickSettingsConfig.migrate(config);
+            config.put("schema_version", 4);
         }
     }
 

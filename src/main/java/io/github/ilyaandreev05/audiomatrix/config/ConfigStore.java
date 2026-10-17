@@ -72,7 +72,7 @@ public final class ConfigStore implements AutoCloseable {
         return defaultPath().resolveSibling("config.yaml");
     }
     public Path path() { return file; }
-    public synchronized Map<String, Object> snapshot() {
+    public synchronized VersionedConfig snapshot() {
         return new VersionedConfig(deepCopy(current), revision);
     }
     public synchronized long revision() { return revision; }
@@ -81,7 +81,7 @@ public final class ConfigStore implements AutoCloseable {
     public void removeListener(Consumer<ConfigEvent> listener) { listeners.remove(listener); }
 
     public synchronized void save(Map<String, Object> next) throws IOException, ConfigConflictException, ConfigValidationException {
-        long expectedRevision = next instanceof VersionedConfig versioned ? versioned.revision : revision;
+        long expectedRevision = next instanceof VersionedConfig versioned ? versioned.revision() : revision;
         save(next, expectedRevision);
     }
 
@@ -188,7 +188,7 @@ public final class ConfigStore implements AutoCloseable {
             diagnostic = "Configuration could not be parsed: " + e.getMessage();
             throw new ConfigValidationException(List.of(diagnostic));
         }
-        boolean upgraded = parsed.get("schema_version") instanceof Number version && version.intValue() < 3;
+        boolean upgraded = parsed.get("schema_version") instanceof Number version && version.intValue() < 4;
         if (upgraded) upgradeConfig(parsed);
         List<String> errors = ConfigValidator.validate(parsed);
         if (!errors.isEmpty()) {
@@ -236,14 +236,6 @@ public final class ConfigStore implements AutoCloseable {
     private static String hash(byte[] bytes) { return ConfigFileIO.hash(bytes); }
     @SuppressWarnings("unchecked")
     private static Map<String, Object> deepCopy(Map<String, Object> source) { return ConfigFileIO.deepCopy(source); }
-    private static final class VersionedConfig extends LinkedHashMap<String, Object> {
-        private static final long serialVersionUID = 1L;
-        private final long revision;
-        private VersionedConfig(Map<String, Object> value, long revision) {
-            super(value);
-            this.revision = revision;
-        }
-    }
     private void publish(ConfigEvent event) { listeners.forEach(listener -> { try { listener.accept(event); } catch (RuntimeException ignored) { } }); }
     @Override public void close() { closed = true; watcherExecutor.shutdownNow(); storageExecutor.shutdownNow(); }
 

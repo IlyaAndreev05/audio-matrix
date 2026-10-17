@@ -107,7 +107,7 @@ public final class ConfigArchive {
             if (config == null) throw new ArchiveException("Configuration must be a JSON or YAML mapping");
             int sourceSchema=integer(config.get("schema_version"),-1);
             manifest = ArchiveManifestMigrator.migrate(manifest, sourceSchema);
-            if(sourceSchema<3){ConfigStore.upgradeConfig(config);manifest.put("config_schema_version",integer(config.get("schema_version"),-1));}
+            if(sourceSchema<4){ConfigStore.upgradeConfig(config);manifest.put("config_schema_version",integer(config.get("schema_version"),-1));}
             List<String> errors = ConfigValidator.validate(config); if (!errors.isEmpty()) throw new ArchiveException("Imported config is invalid: " + String.join("; ", errors));
             verifyReferences(config, hashes);
             return new PreparedImport(staging, copyMap(config), hashes, count(config, "profiles"), count(config, "routes"), (int) hashes.keySet().stream().filter(s -> s.startsWith("data/")).count());

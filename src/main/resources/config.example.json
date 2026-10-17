@@ -1,5 +1,5 @@
 {
-  "schema_version" : 3,
+  "schema_version" : 4,
   "route_groups" : [ ],
   "route_library" : [ ],
   "saved_copies" : [ ],
@@ -27,7 +27,28 @@
     "show_output" : true,
     "show_mode" : true,
     "show_mute" : true,
-    "open_full_settings" : true
+    "open_full_settings" : true,
+    "groups" : [ {
+      "id" : "sources",
+      "name" : "Источники",
+      "order" : 0,
+      "collapsed" : false
+    }, {
+      "id" : "outputs",
+      "name" : "Выходные устройства",
+      "order" : 1,
+      "collapsed" : false
+    }, {
+      "id" : "routing",
+      "name" : "Коммутация и управление",
+      "order" : 2,
+      "collapsed" : false
+    }, {
+      "id" : "effects",
+      "name" : "Обработка звука",
+      "order" : 3,
+      "collapsed" : false
+    } ]
   },
   "engine" : {
     "backend" : "pipewire",

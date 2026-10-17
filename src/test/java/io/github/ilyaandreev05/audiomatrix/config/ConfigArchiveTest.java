@@ -30,7 +30,7 @@ class ConfigArchiveTest {
         assertEquals(3, ((Number) current.get("version")).intValue());
         assertEquals("config.json",current.get("config_entry"));
         assertEquals("audio-matrix", current.get("app"));
-        assertEquals(3, ((Number) current.get("config_schema_version")).intValue());
+        assertEquals(4, ((Number) current.get("config_schema_version")).intValue());
         assertEquals("full", current.get("kind"));
 
         Path legacy = temp.resolve("legacy.amx.zip");

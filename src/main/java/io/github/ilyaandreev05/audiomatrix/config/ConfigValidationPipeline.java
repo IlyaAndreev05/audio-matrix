@@ -11,6 +11,7 @@ final class ConfigValidationPipeline {
         ConfigValidatorRouteRules.validate(context);
         ConfigValidatorDspRules.validate(context);
         ConfigValidatorProfileRules.validate(context);
+        ConfigQuickSettingsRules.validate(config, context.errors);
         return context.errors;
     }
 }
