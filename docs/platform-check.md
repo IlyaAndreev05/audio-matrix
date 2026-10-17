@@ -73,3 +73,7 @@ The route manager was exercised directly against PipeWire 1.6.2 with a 40-second
 
 - Switch and Matrix alternatives compile to stable routes for every wired branch. Unselected paths are muted at zero level; changing active links can use the route manager's live level update instead of stopping and recreating the graph. The GNOME quick selector lists only wired port pairs.
 - Unit tests cover stable route IDs and unchanged PipeWire topology while changing the selected branch. The private PipeWire smoke switched between two temporary null sinks and verified that route capture/playback node IDs stayed unchanged. It used no physical outputs or audio test signal.
+
+## Verification update — quick-control layout
+
+- Pinning a graph parameter now asks for its GNOME label, section, and order. The panel keeps the parameter value attached to the node and derives its slider/toggle/selector type from the node model. Bridge tests verify configured labels, sections, and order without contacting GNOME or PipeWire.
