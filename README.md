@@ -1,6 +1,6 @@
 # Audio Matrix
 
-A PipeWire mixer and routing workspace for Linux, released as version 0.2.0. The app stores settings in `~/.config/audio-matrix/config.json` and talks to the user's existing PipeWire/WirePlumber session. On first launch, it migrates `config.yaml` and preserves it as `config.yaml.before-json`. The current default document is `src/main/resources/config.example.json`; `config.example.yaml` remains a migration example.
+A PipeWire mixer and routing workspace for Linux, released as version 0.2.1. This release fixes discovery of Audio Matrix's virtual system sink so the GNOME master control can synchronize with the mixer. The app stores settings in `~/.config/audio-matrix/config.json` and talks to the user's existing PipeWire/WirePlumber session. On first launch, it migrates `config.yaml` and preserves it as `config.yaml.before-json`. The current default document is `src/main/resources/config.example.json`; `config.example.yaml` remains a migration example.
 
 ## Run
 
