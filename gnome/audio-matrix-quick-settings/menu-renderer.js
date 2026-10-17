@@ -45,7 +45,7 @@ function createScrollableGroups(section) {
     return column;
 }
 
-function updateLevelRows(rows, menuRows, state, t) {
+function updateMenuControls(rows, toggles, links, menuRows, state, t) {
     if (!state) return;
     for (const application of state.applications || []) {
         updateLevelRow(rows, menuRows, `app:${application.id}`, application, t);
@@ -57,6 +57,15 @@ function updateLevelRows(rows, menuRows, state, t) {
     for (const control of state.quickControls || []) {
         if (control.kind === 'slider')
             updateLevelRow(rows, menuRows, `graph:${control.id}`, control, t);
+        if (control.kind === 'toggle') {
+            const entry = toggles.get(String(control.id));
+            if (!entry) continue;
+            entry.item.block_signal_handler(entry.signalId);
+            entry.item.state = Boolean(control.value);
+            entry.item.unblock_signal_handler(entry.signalId);
+        }
+        if (control.kind === 'links')
+            menuRows.updateGraphLinks(links.get(String(control.id)), control);
     }
 }
 
@@ -77,6 +86,8 @@ export default class AudioMatrixMenuRenderer {
         this._groupOpenState = new Map();
         this._groupCollapsedState = new Map();
         this._levelRows = new Map();
+        this._toggleRows = new Map();
+        this._linkRows = new Map();
         this._structure = null;
         this._column = null;
         this._rows = new AudioMatrixMenuRows({
@@ -89,11 +100,13 @@ export default class AudioMatrixMenuRenderer {
         if (!this._section) return;
         const structure = structureSignature(snapshot);
         if (structure === this._structure) {
-            updateLevelRows(this._levelRows, this._rows, snapshot.state, TEXT[snapshot.language]);
+            updateMenuControls(this._levelRows, this._toggleRows, this._linkRows, this._rows, snapshot.state, TEXT[snapshot.language]);
             return;
         }
         this._structure = structure;
         this._levelRows.clear();
+        this._toggleRows.clear();
+        this._linkRows.clear();
         const {state, available, language, commandError} = snapshot;
         const t = TEXT[language];
         this._section.removeAll();
@@ -218,7 +231,8 @@ export default class AudioMatrixMenuRenderer {
         for (const control of controls) {
             if (control.kind === 'slider') this._renderSliderControl(control, target);
             else if (control.kind === 'toggle') this._renderToggleControl(control, target);
-            else if (control.kind === 'links') this._rows.addGraphLinks(control, target);
+            else if (control.kind === 'links')
+                this._linkRows.set(String(control.id), this._rows.addGraphLinks(control, target));
         }
     }
 
@@ -238,8 +252,10 @@ export default class AudioMatrixMenuRenderer {
 
     _renderToggleControl(control, target) {
         const item = new PopupMenu.PopupSwitchMenuItem(control.label || control.parameterId, Boolean(control.value));
-        item.connect('toggled', () => this._send('toggle_quick_control', control.id));
+        const signalId = item.connect('toggled', () => this._send('toggle_quick_control', control.id));
+        item.connect('activate', () => item.stop_emission_by_name('activate'));
         target.addMenuItem(item);
+        this._toggleRows.set(String(control.id), {item, signalId});
     }
 
     _send(name, value) {
@@ -250,5 +266,7 @@ export default class AudioMatrixMenuRenderer {
         this._section = null;
         this._rows = null;
         this._levelRows.clear();
+        this._toggleRows.clear();
+        this._linkRows.clear();
     }
 }
