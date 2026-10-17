@@ -4,7 +4,7 @@ import {systemLanguage} from './menu-text.js';
 
 const OBJECT_PATH = '/org/ilya/AudioMatrix';
 const INTERFACE = 'org.ilya.AudioMatrix';
-const API_VERSION = 2;
+const API_VERSION = 3;
 const STALE_AFTER_SECONDS = 12;
 
 export default class AudioMatrixStateClient {
@@ -156,7 +156,7 @@ export default class AudioMatrixStateClient {
         this._pendingCommands.set(requestId, timer);
         try {
             Gio.DBus.session.emit_signal(null, OBJECT_PATH, INTERFACE, 'Command',
-                new GLib.Variant('(usss)', [API_VERSION, requestId, name, value]));
+                new GLib.Variant('(ussss)', [API_VERSION, requestId, String(this._state?.revision ?? ''), name, value]));
         } catch (error) {
             GLib.Source.remove(timer);
             this._pendingCommands.delete(requestId);

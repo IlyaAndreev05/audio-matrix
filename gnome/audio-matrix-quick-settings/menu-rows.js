@@ -5,6 +5,8 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 import {TEXT} from './menu-text.js';
 
+const LEVEL_ROW_STATE = new WeakMap();
+
 export default class AudioMatrixMenuRows {
     constructor({section, getLanguage, send, queueSliderCommand, onOpen, onDragBegin, onDragEnd}) {
         this._section = section;
@@ -61,7 +63,9 @@ export default class AudioMatrixMenuRows {
     }
 
     addLevelRow(options, target = this._section) {
-        target.addMenuItem(this.createLevelRow(options));
+        const row = this.createLevelRow(options);
+        target.addMenuItem(row);
+        return row;
     }
 
     createLevelRow(options) {
@@ -75,7 +79,7 @@ export default class AudioMatrixMenuRows {
         name.clutter_text.ellipsize = Pango.EllipsizeMode.END;
         name.set_width(112);
         row.add_child(name);
-        const initial = Math.max(0, Math.min(1, Number(options.value) || 0));
+        const initial = options.muted ? 0 : Math.max(0, Math.min(1, Number(options.value) || 0));
         const slider = new Slider.Slider(initial);
         slider.set_width(88);
         slider.x_expand = true;
@@ -84,22 +88,41 @@ export default class AudioMatrixMenuRows {
         const percentage = new St.Label({text: `${Math.round(initial * 100)}%`, style_class: 'popup-status-menu-item'});
         percentage.set_width(36);
         row.add_child(percentage);
-        this._connectSlider(slider, percentage, options);
+        const valueSignalId = this._connectSlider(slider, percentage, options);
+        let muteButton = null;
         if (typeof options.onMute === 'function') {
             const muted = Boolean(options.muted);
             const t = TEXT[this._getLanguage()];
-            row.add_child(this.iconButton(
+            muteButton = this.iconButton(
                 muted ? 'audio-volume-muted-symbolic' : 'audio-volume-high-symbolic',
-                options.mutedLabel || (muted ? t.unmute : t.mute), options.onMute));
+                options.mutedLabel || (muted ? t.unmute : t.mute), options.onMute);
+            row.add_child(muteButton);
         }
         item.add_child(row);
+        LEVEL_ROW_STATE.set(item, {slider, percentage, valueSignalId, muteButton});
         return item;
+    }
+
+    updateLevelRow(item, options) {
+        const state = LEVEL_ROW_STATE.get(item);
+        if (!state) return;
+        const initial = options.muted ? 0 : Math.max(0, Math.min(1, Number(options.value) || 0));
+        state.slider.block_signal_handler(state.valueSignalId);
+        state.slider.value = initial;
+        state.slider.unblock_signal_handler(state.valueSignalId);
+        state.percentage.text = `${Math.round(initial * 100)}%`;
+        if (!state.muteButton) return;
+        const muted = Boolean(options.muted);
+        const t = TEXT[this._getLanguage()];
+        const icon = state.muteButton.get_child();
+        icon.icon_name = muted ? 'audio-volume-muted-symbolic' : 'audio-volume-high-symbolic';
+        state.muteButton.accessible_name = options.mutedLabel || (muted ? t.unmute : t.mute);
     }
 
     _connectSlider(slider, percentage, options) {
         const key = String(options.id);
         slider.connect('drag-begin', () => this._onDragBegin());
-        slider.connect('notify::value', () => {
+        const valueSignalId = slider.connect('notify::value', () => {
             const value = Math.max(0, Math.min(1, Number(slider.value) || 0));
             percentage.text = `${Math.round(value * 100)}%`;
             if (typeof options.onValue === 'function')
@@ -111,6 +134,7 @@ export default class AudioMatrixMenuRows {
                 this._queueSliderCommand(key, value, options.onValue, true);
             this._onDragEnd();
         });
+        return valueSignalId;
     }
 
     iconButton(iconName, accessibleName, callback) {
@@ -166,7 +190,7 @@ export default class AudioMatrixMenuRows {
         return 'audio-x-generic-symbolic';
     }
 
-    addGraphLinks(control) {
+    addGraphLinks(control, target = this._section) {
         const selected = new Set(Array.isArray(control.value) ? control.value : []);
         const options = control.options || [];
         const submenu = new PopupMenu.PopupSubMenuMenuItem(
@@ -176,6 +200,6 @@ export default class AudioMatrixMenuRows {
             item.connect('toggled', () => this._send('set_quick_control_choice', `${control.id}\t${option.id}`));
             submenu.menu.addMenuItem(item);
         }
-        this._section.addMenuItem(submenu);
+        target.addMenuItem(submenu);
     }
 }

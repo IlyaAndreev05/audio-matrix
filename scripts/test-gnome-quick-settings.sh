@@ -33,6 +33,10 @@ if rg -q 'addExternalIndicator|QuickMenuToggle|SystemIndicator' "$extension_sour
     exit 1
 fi
 rg -q '_volumeOutput' "$extension_source"
+rg -q '_getMenuItems' "$extension_source"
+rg -q '_restoreBuiltInItems' "$extension_source"
+rg -q '_forceMenuButtonEnabled' "$extension_source"
+rg -q '_restoreMenuButton' "$extension_source"
 rg -q "import \* as Slider from 'resource:///org/gnome/shell/ui/slider.js';" "$extension_source"
 rg -q 'new Slider\.Slider' "$extension_source"
 rg -q 'audio-volume-muted-symbolic' "$extension_source"
@@ -40,10 +44,15 @@ rg -q "new PopupMenu\.PopupSwitchMenuItem" "$extension_source"
 rg -q 'drag-end' "$extension_source"
 rg -q '_renderPending' "$extension_source"
 rg -q 'quickControls' "$extension_source"
+rg -q 'quickGroups' "$extension_source"
+rg -q 'PopupMenu\.PopupMenuSection' "$extension_source"
+rg -q 'Atk\.StateType\.EXPANDABLE' "$extension_source"
+rg -q 'select_route' "$extension_source"
+rg -q 'set_quick_group_collapsed' "$extension_source"
 rg -q "set_quick_control" "$extension_source"
 rg -q "set_quick_control_choice" "$extension_source"
 rg -q 'addGraphLinks' "$extension_source"
-rg -Fq "new GLib.Variant('(usss)'" "$extension_source"
+rg -Fq "new GLib.Variant('(ussss)'" "$extension_source"
 rg -q "'Result'" "$extension_source"
 for source_file in "$extension_source"/*.js; do node --check "$source_file"; done
 gnome-extensions pack "$extension_source" --force --out-dir "$scratch" \
@@ -53,7 +62,7 @@ gnome-extensions pack "$extension_source" --force --out-dir "$scratch" \
     --extra-source=menu-renderer.js \
     --extra-source=volume-menu-adapter.js
 unzip -t "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip"
-unzip -p "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" metadata.json | rg '"version": 7'
+unzip -p "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" metadata.json | rg '"version": 8'
 for module in menu-text.js state-client.js menu-rows.js menu-renderer.js volume-menu-adapter.js; do
     unzip -Z1 "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" | grep -Fxq "$module"
 done

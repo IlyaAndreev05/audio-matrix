@@ -1,7 +1,7 @@
 {
   "uuid": "audio-matrix-quick-settings@ilyaandreev05",
   "name": "Audio Matrix Quick Settings",
-  "description": "Adds per-application and output controls to GNOME's standard volume menu.",
-  "version": 7,
+  "description": "Replaces GNOME's sound-output submenu with the Audio Matrix mixer.",
+  "version": 8,
   "shell-version": ["50"]
 }
