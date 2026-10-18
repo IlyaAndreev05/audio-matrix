@@ -84,6 +84,20 @@ class GraphRouteLibraryTest {
         GraphRouteLibrary.deleteRoute(config,first.id(),second.id());assertEquals(second.id(),config.get("active_route"));assertFalse(scales.containsKey(first.id()));
     }
 
+    @Test void incompleteRouteCannotReplaceTheActiveRoute(){
+        Map<String,Object> config=DefaultConfig.create();
+        AudioGraph active=graph("active-route","Active route","");
+        GraphRouteLibrary.saveRoute(config,active,"");GraphRouteLibrary.activate(config,active.id());
+        AudioGraph empty=new AudioGraph("empty-route","Empty route",List.of(),List.of());
+        GraphRouteLibrary.saveRoute(config,empty,"");
+
+        IllegalArgumentException error=assertThrows(IllegalArgumentException.class,
+                ()->GraphRouteLibrary.activate(config,empty.id()));
+
+        assertTrue(error.getMessage().contains("at least one source and one output"));
+        assertEquals(active.id(),config.get("active_route"));
+    }
+
     @Test void canvasZoomIsRangeCheckedAndMustBelongToASavedRoute(){
         Map<String,Object> config=DefaultConfig.create();AudioGraph route=graph("zoom-route","Zoom route","");GraphRouteLibrary.saveRoute(config,route,"");
         @SuppressWarnings("unchecked") Map<String,Object> scales=(Map<String,Object>)config.get("graph_ui_scale");

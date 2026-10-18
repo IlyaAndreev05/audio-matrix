@@ -59,6 +59,7 @@ public final class GraphRouteLibrary {
             throw new IllegalArgumentException("Route does not exist: " + routeId);
         String profileId=activeProfileId(config);
         if(!profileId.equals(route.get("profile_id")))throw new IllegalArgumentException("Only routes in the active profile can be activated");
+        GraphRouteActivationValidator.requireActivatable(config, route);
         config.put("active_route", routeId);
         find(maps(config.get("profiles")),profileId).put("selected_route_id",routeId);
     }
