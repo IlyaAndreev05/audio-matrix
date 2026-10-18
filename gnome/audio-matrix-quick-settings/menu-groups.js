@@ -32,6 +32,8 @@ export default class AudioMatrixMenuGroups {
             .sort((left, right) => Number(left.order || 0) - Number(right.order || 0));
         for (const pin of entries)
             this._renderPin(pin, t, content);
+        if (content.actor.get_n_children() === 0)
+            return;
         this._column.addMenuItem(header);
         this._column.addMenuItem(content);
         content.actor.visible = open;
@@ -62,6 +64,8 @@ export default class AudioMatrixMenuGroups {
         if (pin.gain || pin.nodeType === 'output' || pin.nodeType === 'device_slot')
             this._output.render(pin, t, content);
         this._renderControls(pin.controls || [], t, content);
+        if (content.actor.get_n_children() === 0)
+            return;
         target.addMenuItem(header);
         target.addMenuItem(content);
         content.actor.visible = open;
