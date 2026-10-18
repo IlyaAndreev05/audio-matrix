@@ -36,6 +36,13 @@ rg -q '_volumeOutput' "$extension_source"
 rg -q '_getMenuItems' "$extension_source"
 rg -q 'this\._menuItemsLease\.restore' "$extension_source/volume-menu-adapter.js"
 rg -q '\.restore\(\)' "$extension_source/volume-menu-adapter.js"
+rg -q 'removeMenuItem\(this\._section\)' "$extension_source/volume-menu-adapter.js"
+# PopupMenu.removeMenuItem() owns destruction of an inserted PopupMenuSection.
+# A second destroy from Extension.disable() produces disposed-actor errors.
+if rg -q 'this\._dynamic\?\.destroy\(\)' "$main_source"; then
+    echo 'The GNOME menu section must be destroyed only by its owning menu adapter' >&2
+    exit 1
+fi
 rg -q 'MenuItemsLease' "$extension_source/volume-menu-adapter.js"
 rg -q 'MenuButtonLease' "$extension_source/volume-menu-adapter.js"
 rg -q "import \* as Slider from 'resource:///org/gnome/shell/ui/slider.js';" "$extension_source"
