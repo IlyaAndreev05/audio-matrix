@@ -33,6 +33,8 @@ import java.util.concurrent.atomic.*;
 import java.util.function.Consumer;
 
 abstract class AppShellUiPart04 extends AppShellUiPart03 {
+    protected String selectedGraphNodeId = "";
+
     protected AppShellUiPart04(ConfigStore store, PipeWireBackend backend, ThemeManager themes) {
         super(store, backend, themes);
     }
@@ -43,31 +45,20 @@ abstract class AppShellUiPart04 extends AppShellUiPart03 {
         List<Map<String,Object>> routes=GraphRouteLibrary.routesForProfile(config,profileId);
         VBox page=page(t("Один активный маршрут содержит все одновременно работающие ветки. Изменения хранятся в config.json.",
                 "One active route contains all branches that run together. Changes are stored in config.json."));
-        HBox selector=new HBox(10);selector.setAlignment(Pos.CENTER_LEFT);
-        ComboBox<Map<String,Object>> routePicker=new ComboBox<>();routePicker.getItems().setAll(routes);routePicker.setMaxWidth(420);
-        routePicker.setConverter(new StringConverter<>(){
-            @Override public String toString(Map<String,Object> route){return route==null?"":string(route.get("name"),string(route.get("id"),""));}
-            @Override public Map<String,Object> fromString(String value){return null;}
-        });
         String chosen=routes.stream().anyMatch(route->selectedGraphRouteId.equals(route.get("id")))?selectedGraphRouteId:string(config.get("active_route"),"");
         Map<String,Object> selected=routes.stream().filter(route->chosen.equals(route.get("id"))).findFirst().orElse(routes.isEmpty()?null:routes.getFirst());
-        if(selected!=null){selectedGraphRouteId=string(selected.get("id"),"");routePicker.getSelectionModel().select(selected);}
-        routePicker.setOnAction(event->{Map<String,Object> choice=routePicker.getValue();if(choice!=null){selectedGraphRouteId=string(choice.get("id"),"");showPage(Page.GRAPH);}});
-        selector.getChildren().addAll(label(t("Маршрут", "Route"),"muted"),routePicker,
-                actionButton(t("Создать", "New"),this::createGraphRoute),
-                actionButton(t("Дублировать", "Duplicate"),()->duplicateSelectedGraphRoute()),
-                actionButton(t("Переименовать", "Rename"),()->renameSelectedGraphRoute()),
-                actionButton(t("Активировать", "Activate"),()->activateSelectedGraphRoute()),
-                actionButton(t("Сохранить копию", "Save snapshot"),()->saveSelectedGraphCopy()),
-                actionButton(t("Удалить", "Delete"),()->deleteSelectedGraphRoute()));
-        page.getChildren().add(selector);
+        if(selected!=null)selectedGraphRouteId=string(selected.get("id"),"");
+        VBox routesSidebar=graphRouteSidebar(routes,selected,config);
         if(selected==null){
-            VBox empty=card(t("Граф маршрута", "Route graph"));empty.getChildren().add(label(t("Создай маршрут, затем добавь источники, обработку и выходы.","Create a route, then add sources, processing and outputs."),"muted"));page.getChildren().add(empty);
+            VBox empty=card(t("Граф маршрута", "Route graph"));empty.getChildren().add(label(t("Создай маршрут, затем добавь источники, обработку и выходы.","Create a route, then add sources, processing and outputs."),"muted"));
+            SplitPane workspace=new SplitPane(routesSidebar,empty);workspace.setDividerPositions(.22);workspace.setMinHeight(560);page.getChildren().add(workspace);
         }else{
             AudioGraph graph;
             try{graph=GraphCodec.fromMap(selected);}catch(RuntimeException invalid){
-                VBox error=card(t("Некорректный граф", "Invalid graph"));error.getChildren().add(label(invalid.getMessage(),"danger"));page.getChildren().add(error);return page;
+                VBox error=card(t("Некорректный граф", "Invalid graph"));error.getChildren().add(label(invalid.getMessage(),"danger"));
+                SplitPane workspace=new SplitPane(routesSidebar,error);workspace.setDividerPositions(.22);workspace.setMinHeight(560);page.getChildren().add(workspace);return page;
             }
+            if(graph.nodes().stream().noneMatch(node->node.id().equals(selectedGraphNodeId)))selectedGraphNodeId=graph.nodes().isEmpty()?"":graph.nodes().getFirst().id();
             List<String> issues=GraphValidator.validate(graph);
             VBox status=card(t("Состояние графа", "Graph status"));
             boolean active=graph.id().equals(config.get("active_route"));
@@ -76,16 +67,29 @@ abstract class AppShellUiPart04 extends AppShellUiPart03 {
                             "Applying this graph will reconfigure PipeWire. Unsupported nodes are rejected before any changes."),"warning"),
                     actionButton(t("Применить активный граф к PipeWire","Apply active graph to PipeWire"),this::applyRoutes));
             if(!issues.isEmpty())issues.forEach(problem->status.getChildren().add(label(problem,"danger")));
-            page.getChildren().add(status);
-            page.getChildren().add(graphCanvasCard(graph));
-            page.getChildren().add(graphMatrixCard(graph));
-            page.getChildren().add(graphNodeCard(graph));
-            page.getChildren().add(graphConnectionCard(graph));
+            VBox center=new VBox(10,status,graphCanvasCard(graph),graphMatrixCard(graph));
+            VBox inspector=new VBox(10,graphNodeCard(graph),graphConnectionCard(graph));
+            ScrollPane inspectorScroll=new ScrollPane(inspector);inspectorScroll.setFitToWidth(true);inspectorScroll.setPrefViewportHeight(620);inspectorScroll.setMinWidth(280);
+            SplitPane workspace=new SplitPane(routesSidebar,center,inspectorScroll);workspace.setDividerPositions(.18,.69);workspace.setMinHeight(640);
+            page.getChildren().add(workspace);
             page.getChildren().add(graphRouteGroupCard(graph,config));
         }
         page.getChildren().add(graphSavedCopiesCard(config));
         page.getChildren().add(routeHistoryCard());
         return page;
+    }
+
+    protected VBox graphRouteSidebar(List<Map<String,Object>> routes,Map<String,Object> selected,Map<String,Object> config){
+        VBox box=card(t("Маршруты","Routes"));box.setMinWidth(190);box.setPrefWidth(250);
+        ListView<Map<String,Object>> list=new ListView<>(FXCollections.observableArrayList(routes));list.setAccessibleText(t("Маршруты профиля","Profile routes"));list.setPrefHeight(430);VBox.setVgrow(list,Priority.ALWAYS);
+        list.setCellFactory(items->new ListCell<>(){@Override protected void updateItem(Map<String,Object> route,boolean empty){super.updateItem(route,empty);if(empty||route==null){setText(null);return;}String id=string(route.get("id"),"");String marker=id.equals(config.get("active_route"))?" · ●":"";setText(string(route.get("name"),id)+marker);setTooltip(new Tooltip(string(route.get("name"),id)));}});
+        if(selected!=null)list.getSelectionModel().select(selected);
+        list.getSelectionModel().selectedItemProperty().addListener((observable,oldValue,route)->{if(route!=null&&!route.get("id").equals(selectedGraphRouteId)){selectedGraphRouteId=string(route.get("id"),"");selectedGraphNodeId="";showPage(Page.GRAPH);}});
+        FlowPane actions=new FlowPane(6,6);actions.setPrefWrapLength(220);actions.getChildren().addAll(
+                actionButton(t("Создать","New"),this::createGraphRoute),actionButton(t("Дублировать","Duplicate"),this::duplicateSelectedGraphRoute),
+                actionButton(t("Переименовать","Rename"),this::renameSelectedGraphRoute),actionButton(t("Активировать","Activate"),this::activateSelectedGraphRoute),
+                actionButton(t("Сохранить копию","Save snapshot"),this::saveSelectedGraphCopy),actionButton(t("Удалить","Delete"),this::deleteSelectedGraphRoute));
+        box.getChildren().addAll(list,actions);return box;
     }
 
     protected VBox graphCanvasCard(AudioGraph graph){
@@ -141,24 +145,28 @@ abstract class AppShellUiPart04 extends AppShellUiPart03 {
         for(GraphNode node:graph.nodes()){
             if(collapsedForNode.containsKey(node.id()))continue;
             double[] position=initial.get(node.id());double x=position[0],y=position[1];
-            VBox card=new VBox(5);card.setPrefWidth(node instanceof RouterNode?360:250);card.setMinHeight(82);card.setLayoutX(x);card.setLayoutY(y);card.setStyle("-fx-background-color: #292d35; -fx-border-color: #656b77; -fx-border-radius: 8; -fx-background-radius: 8; -fx-padding: 8;");
+            VBox card=new VBox(5);card.setPrefWidth(node instanceof RouterNode?360:250);card.setMinHeight(82);card.setLayoutX(x);card.setLayoutY(y);card.setStyle("-fx-background-color: -fx-control-inner-background; -fx-border-color: "+(node.id().equals(selectedGraphNodeId)?"#3584e4":"-fx-box-border")+"; -fx-border-radius: 8; -fx-background-radius: 8; -fx-padding: 8;");
             Label title=label(node.name(),"card-title");title.setWrapText(true);title.setMaxWidth(160);
             Label type=label(node.type(),"muted");
+            CheckBox subgraphSelection=new CheckBox();subgraphSelection.setAccessibleText(t("Выбрать для подграфа: ","Select for subgraph: ")+node.name());subgraphSelection.setSelected(selectedSubgraphNodeIds.contains(node.id()));
+            subgraphSelection.setOnAction(event->{if(subgraphSelection.isSelected())selectedSubgraphNodeIds.add(node.id());else selectedSubgraphNodeIds.remove(node.id());showPage(Page.GRAPH);});
             VBox inputButtons=new VBox(2),outputButtons=new VBox(2);inputButtons.setAlignment(Pos.CENTER_LEFT);outputButtons.setAlignment(Pos.CENTER_RIGHT);
-            for(AudioPort port:node.inputs()){Button button=graphPortButton("◉ "+port.id());button.setAccessibleText(t("Входной порт ","Input port ")+node.name()+" · "+port.id());button.setOnAction(event->selectGraphPort(graph.id(),node.id(),port));inputButtons.getChildren().add(button);}
-            for(AudioPort port:node.outputs()){Button button=graphPortButton(port.id()+" ◉");button.setAccessibleText(t("Выходной порт ","Output port ")+node.name()+" · "+port.id());button.setOnAction(event->selectGraphPort(graph.id(),node.id(),port));outputButtons.getChildren().add(button);}
+            for(AudioPort port:node.inputs()){Button button=graphPortButton("◉ "+port.id());button.setAccessibleText(t("Входной порт ","Input port ")+node.name()+" · "+port.id());button.setOnAction(event->selectGraphPort(graph.id(),node.id(),port));GraphPortDrag.installInput(button,(sourceNode,sourcePort)->addGraphPortConnection(graph.id(),new GraphPortRef(graph.id(),sourceNode,sourcePort),node.id(),port.id()));inputButtons.getChildren().add(button);}
+            for(AudioPort port:node.outputs()){Button button=graphPortButton(port.id()+" ◉");button.setAccessibleText(t("Выходной порт ","Output port ")+node.name()+" · "+port.id());button.setOnAction(event->selectGraphPort(graph.id(),node.id(),port));GraphPortDrag.installOutput(button,node.id(),port.id());outputButtons.getChildren().add(button);}
             if(node instanceof RouterNode router){
                 title.setWrapText(false);title.setTextOverrun(javafx.scene.control.OverrunStyle.ELLIPSIS);title.setMaxWidth(185);
-                HBox header=new HBox(10,title,label(router.type()+" · "+router.activeLinks().size()+"/"+(router.inputs().size()*router.outputs().size()),"muted"));
+                HBox header=new HBox(10,subgraphSelection,title,label(router.type()+" · "+router.activeLinks().size()+"/"+(router.inputs().size()*router.outputs().size()),"muted"));
                 card.getChildren().addAll(header,graphRouterCanvas(router,inputButtons,outputButtons));
             }else{
-                VBox description=new VBox(3,title,type);HBox portRow=new HBox(4,inputButtons,description,outputButtons);HBox.setHgrow(description,Priority.ALWAYS);
+                VBox description=new VBox(3,title,type);HBox portRow=new HBox(4,inputButtons,subgraphSelection,description,outputButtons);HBox.setHgrow(description,Priority.ALWAYS);
                 card.getChildren().add(portRow);
             }
             views.put(node.id(),card);canvas.getChildren().add(card);
         }
+        Set<String> highlightedEdges=GraphPathHighlights.throughNode(graph,selectedGraphNodeId);
         for(GraphConnection edge:graph.connections()){
-            Line line=new Line();line.setStroke(edge.enabled()?javafx.scene.paint.Color.web("#37b5a5"):javafx.scene.paint.Color.web("#62666f"));line.setStrokeWidth(edge.enabled()?2.5:1.0);if(!edge.enabled())line.getStrokeDashArray().setAll(6.0,5.0);line.setMouseTransparent(true);lines.put(edge.id(),line);canvas.getChildren().add(0,line);
+            boolean highlighted=highlightedEdges.contains(edge.id());
+            Line line=new Line();line.setStroke(edge.enabled()?javafx.scene.paint.Color.web(highlighted?"#3584e4":"#37b5a5"):javafx.scene.paint.Color.web("#62666f"));line.setStrokeWidth(highlighted?4:edge.enabled()?2.5:1.0);if(!edge.enabled())line.getStrokeDashArray().setAll(6.0,5.0);line.setMouseTransparent(true);lines.put(edge.id(),line);canvas.getChildren().add(0,line);
         }
         Runnable refreshLines=()->{
             for(GraphConnection edge:graph.connections()){
@@ -177,7 +185,7 @@ abstract class AppShellUiPart04 extends AppShellUiPart03 {
             Node view=views.get(node.id());double[] start=initial.get(node.id());double[] pointer=new double[2];boolean[] moved={false};
             view.setOnMousePressed(event->{if(isButtonTarget(event.getTarget(),view))return;pointer[0]=event.getSceneX();pointer[1]=event.getSceneY();start[0]=view.getLayoutX();start[1]=view.getLayoutY();moved[0]=false;event.consume();});
             view.setOnMouseDragged(event->{if(isButtonTarget(event.getTarget(),view))return;double scale=Math.max(.5,zoom.getValue());double x=Math.max(0,Math.min(canvasWidth-260,start[0]+(event.getSceneX()-pointer[0])/scale));double y=Math.max(0,Math.min(canvasHeight-90,start[1]+(event.getSceneY()-pointer[1])/scale));view.setLayoutX(x);view.setLayoutY(y);moved[0]=true;refreshLines.run();event.consume();});
-            view.setOnMouseReleased(event->{if(!isButtonTarget(event.getTarget(),view)&&moved[0])saveGraphNodePosition(graph.id(),node.id(),view.getLayoutX(),view.getLayoutY());});
+            view.setOnMouseReleased(event->{if(isButtonTarget(event.getTarget(),view))return;if(moved[0])saveGraphNodePosition(graph.id(),node.id(),view.getLayoutX(),view.getLayoutY());else if(!node.id().equals(selectedGraphNodeId)){selectedGraphNodeId=node.id();showPage(Page.GRAPH);}});
         }
         for(GraphSubgraph group:groups){
             Node view=groupViews.get(group.id());double[] start={view.getLayoutX(),view.getLayoutY()};double[] pointer=new double[2];boolean[] moved={false};
