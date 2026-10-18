@@ -14,7 +14,7 @@ export default class AudioMatrixMenuOutput {
             return;
         }
         this._addLevelRow({
-            id: 'output:' + (output.id || output.name), name: output.description || output.name,
+            id: 'graph-output:' + pin.nodeId, name: output.description || output.name,
             icon: this._outputIcon(output), value: output.volume, muted: output.muted,
             mutedLabel: output.muted ? t.unmute : t.mute,
             onValue: value => this._send('set_output_volume', (output.id || output.name) + '\t' + value.toFixed(3)),

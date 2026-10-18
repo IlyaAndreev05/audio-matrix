@@ -7,33 +7,9 @@ import AudioMatrixMenuLinks from './menu-links.js';
 import AudioMatrixMenuMatrix from './menu-matrix.js';
 import AudioMatrixMenuMixer from './menu-mixer.js';
 import AudioMatrixMenuOutput from './menu-output.js';
+import AudioMatrixMenuDisclosure from './menu-disclosure.js';
+import {menuLevelRows, menuStructureSignature} from './menu-state.js';
 import {TEXT} from './menu-text.js';
-
-function structureSignature(snapshot) {
-    const state = snapshot.state || {};
-    return JSON.stringify({
-        available: snapshot.available, language: snapshot.language, commandError: snapshot.commandError,
-        profile: state.profile, activeRoute: state.activeRoute, activeRouteId: state.activeRouteId,
-        routes: (state.routes || []).map(({id, name}) => [id, name]),
-        groups: (state.quickGroups || []).map(({id, name, order, collapsed}) => [id, name, order, collapsed]),
-        pins: (state.quickPins || []).map(pin => [
-            pin.id, pin.routeId, pin.nodeId, pin.name, pin.nodeType, pin.groupId, pin.order, pin.view,
-            (pin.controls || []).map(control => [control.id, control.parameterId, control.label, control.kind,
-                control.nodeType, control.multiple, (control.options || []).map(option => [option.id, option.label])]),
-            (pin.applications || []).map(application => [application.id, application.name,
-                (application.streams || []).map(stream => [stream.id, stream.name, stream.description])]),
-            (pin.mixerInputs || []).map(input => [input.id, input.name]),
-            pin.output ? [pin.output.id, pin.output.name, pin.output.description, pin.output.available] : null,
-            pin.sourceGain ? [pin.sourceGain.routeId, pin.sourceGain.sourceNodeId, pin.sourceGain.gainNodeId] : null,
-        ]),
-        controls: (state.quickControls || []).map(control => [
-            control.id, control.nodeId, control.parameterId, control.label, control.section,
-            control.groupId, control.order, control.kind, control.multiple,
-            control.nodeType,
-            (control.options || []).map(option => [option.id, option.label]),
-        ]),
-    });
-}
 
 function createScrollableGroups(section) {
     const column = new PopupMenu.PopupMenuSection();
@@ -55,22 +31,9 @@ function createScrollableGroups(section) {
 
 function updateMenuControls(rows, toggles, linkRows, matrixRows, linkRenderer, matrixRenderer, menuRows, state, t) {
     if (!state) return;
-    for (const application of state.applications || []) {
-        updateLevelRow(rows, menuRows, `app:${application.id}`, application, t);
-        for (const stream of application.streams || [])
-            updateLevelRow(rows, menuRows, `stream:${stream.id}`, stream, t);
-    }
-    for (const output of state.outputs || [])
-        updateLevelRow(rows, menuRows, `output:${output.id || output.name}`, output, t);
-    for (const pin of state.quickPins || [])
-        if (pin.sourceGain)
-            updateLevelRow(rows, menuRows, `source:${pin.nodeId}`, pin.sourceGain, t);
-    for (const pin of state.quickPins || [])
-        for (const input of pin.mixerInputs || [])
-            updateLevelRow(rows, menuRows, `mixer:${pin.nodeId}:${input.id}`, input, t);
+    for (const [id, source] of menuLevelRows(state))
+        updateLevelRow(rows, menuRows, id, source, t);
     for (const control of state.quickControls || []) {
-        if (control.kind === 'slider')
-            updateLevelRow(rows, menuRows, `graph:${control.id}`, control, t);
         if (control.kind === 'toggle') {
             const entry = toggles.get(String(control.id));
             if (!entry) continue;
@@ -113,10 +76,7 @@ export default class AudioMatrixMenuRenderer {
         this._getSnapshot = getSnapshot;
         this._onOpen = onOpen;
         this._sendCommand = send;
-        this._groupOpenState = new Map();
-        this._groupCollapsedState = new Map();
-        this._pinOpenState = new Map();
-        this._pinViewState = new Map();
+        this._disclosures = new AudioMatrixMenuDisclosure();
         this._levelRows = new Map();
         this._toggleRows = new Map();
         this._linkRows = new Map();
@@ -147,10 +107,11 @@ export default class AudioMatrixMenuRenderer {
 
     render(snapshot = this._getSnapshot()) {
         if (!this._section) return;
-        const structure = structureSignature(snapshot);
+        const structure = menuStructureSignature(snapshot);
         if (structure === this._structure) {
             updateMenuControls(this._levelRows, this._toggleRows, this._linkRows, this._matrixRows,
                 this._links, this._matrix, this._rows, snapshot.state, TEXT[snapshot.language]);
+            this._disclosures.sync(snapshot.state);
             return;
         }
         this._structure = structure;
@@ -158,6 +119,7 @@ export default class AudioMatrixMenuRenderer {
         this._toggleRows.clear();
         this._linkRows.clear();
         this._matrixRows.clear();
+        this._disclosures.resetRows();
         const {state, available, language, commandError} = snapshot;
         const t = TEXT[language];
         this._section.removeAll();
@@ -175,21 +137,14 @@ export default class AudioMatrixMenuRenderer {
         const groups = state.quickGroups || [];
         for (const group of groups)
             this._renderGroup(group, state.quickPins || [], t);
-        this._groupOpenState = new Map([...this._groupOpenState].filter(([id]) => groups.some(group => group.id === id)));
-        this._groupCollapsedState = new Map(groups.map(group => [String(group.id), Boolean(group.collapsed)]));
-        this._pinOpenState = new Map([...this._pinOpenState].filter(([id]) => (state.quickPins || []).some(pin => pin.id === id)));
-        this._pinViewState = new Map((state.quickPins || []).map(pin => [String(pin.id), String(pin.view || 'DEFAULT')]));
+        this._disclosures.retain(state);
         this._section.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._rows.addAction(t.open, () => this._onOpen(true), 'preferences-system-symbolic');
     }
 
     _renderGroup(group, pins, t) {
         const id = String(group.id || group.name);
-        const collapsed = Boolean(group.collapsed);
-        const previousCollapsed = this._groupCollapsedState.get(id);
-        const configChanged = previousCollapsed !== undefined && previousCollapsed !== collapsed;
-        const wasOpen = this._groupOpenState.get(id);
-        const open = configChanged ? !collapsed : (wasOpen ?? !collapsed);
+        const open = this._disclosures.groupOpen(group);
         const header = new PopupMenu.PopupImageMenuItem(
             String(group.name || id), open ? 'pan-down-symbolic' : 'pan-end-symbolic');
         header.add_accessible_state(Atk.StateType.EXPANDABLE);
@@ -202,14 +157,9 @@ export default class AudioMatrixMenuRenderer {
         this._column.addMenuItem(header);
         this._column.addMenuItem(content);
         content.actor.visible = open;
-        this._groupOpenState.set(id, open);
+        this._disclosures.trackGroup(id, header, content);
         const toggle = () => {
-            const nextOpen = !this._groupOpenState.get(id);
-            this._groupOpenState.set(id, nextOpen);
-            content.actor.visible = nextOpen;
-            header.setIcon(nextOpen ? 'pan-down-symbolic' : 'pan-end-symbolic');
-            if (nextOpen) header.add_accessible_state(Atk.StateType.EXPANDED);
-            else header.remove_accessible_state(Atk.StateType.EXPANDED);
+            const nextOpen = this._disclosures.toggleGroup(id);
             this._send('set_quick_group_collapsed', `${id}\t${!nextOpen}`);
         };
         header.activate = toggle;
@@ -221,10 +171,7 @@ export default class AudioMatrixMenuRenderer {
 
     _renderPin(pin, t, target) {
         const id = String(pin.id);
-        const view = String(pin.view || 'DEFAULT');
-        const previousView = this._pinViewState.get(id);
-        const viewChanged = previousView !== undefined && previousView !== view;
-        const open = viewChanged ? view !== 'COMPACT' : (this._pinOpenState.get(id) ?? view !== 'COMPACT');
+        const open = this._disclosures.pinOpen(pin);
         const header = new PopupMenu.PopupImageMenuItem(
             String(pin.name || pin.nodeId), open ? 'pan-down-symbolic' : 'pan-end-symbolic');
         header.add_accessible_state(Atk.StateType.EXPANDABLE);
@@ -240,14 +187,9 @@ export default class AudioMatrixMenuRenderer {
         target.addMenuItem(header);
         target.addMenuItem(content);
         content.actor.visible = open;
-        this._pinOpenState.set(id, open);
+        this._disclosures.trackPin(id, header, content);
         const toggle = () => {
-            const nextOpen = !this._pinOpenState.get(id);
-            this._pinOpenState.set(id, nextOpen);
-            content.actor.visible = nextOpen;
-            header.setIcon(nextOpen ? 'pan-down-symbolic' : 'pan-end-symbolic');
-            if (nextOpen) header.add_accessible_state(Atk.StateType.EXPANDED);
-            else header.remove_accessible_state(Atk.StateType.EXPANDED);
+            const nextOpen = this._disclosures.togglePin(id);
             this._send('set_quick_pin_view', id + '\t' + (nextOpen ? 'EXPANDED' : 'COMPACT'));
         };
         header.activate = toggle;
@@ -306,7 +248,6 @@ export default class AudioMatrixMenuRenderer {
         this._toggleRows.clear();
         this._linkRows.clear();
         this._matrixRows.clear();
-        this._pinOpenState.clear();
-        this._pinViewState.clear();
+        this._disclosures.destroy();
     }
 }

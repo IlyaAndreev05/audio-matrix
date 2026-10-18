@@ -27,10 +27,14 @@ export default class AudioMatrixMenuApplications {
         }
         for (const application of applications) {
             if (sourceGain) {
-                const submenu = new PopupMenu.PopupSubMenuMenuItem(
-                    `${application.name || application.id} (${(application.streams || []).length})`, false);
-                this._renderStreams(application, t, submenu.menu);
-                target.addMenuItem(submenu);
+                if (applications.length === 1) {
+                    this._renderStreams(application, t, target);
+                } else {
+                    const submenu = new PopupMenu.PopupSubMenuMenuItem(
+                        `${application.name || application.id} (${(application.streams || []).length})`, false);
+                    this._renderStreams(application, t, submenu.menu);
+                    target.addMenuItem(submenu);
+                }
             } else {
                 this._addLevelRow({
                     id: `app:${application.id}`, name: application.name || application.id,
@@ -47,8 +51,6 @@ export default class AudioMatrixMenuApplications {
     _renderStreams(application, t, target) {
         const streams = application.streams || [];
         if (streams.length === 0) return;
-        const submenu = new PopupMenu.PopupSubMenuMenuItem(
-            (application.name || t.streams) + ' (' + streams.length + ')', false);
         for (const stream of streams) {
             this._addLevelRow({
                 id: 'stream:' + stream.id, name: stream.description || stream.name,
@@ -56,8 +58,7 @@ export default class AudioMatrixMenuApplications {
                 mutedLabel: stream.muted ? t.unmute : t.mute,
                 onValue: value => this._send('set_stream_volume', stream.id + '\t' + value.toFixed(3)),
                 onMute: () => this._send('toggle_stream_mute', String(stream.id)),
-            }, submenu.menu);
+            }, target);
         }
-        target.addMenuItem(submenu);
     }
 }

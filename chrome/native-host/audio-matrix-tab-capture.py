@@ -30,7 +30,7 @@ class Host:
             "application.id": APP_ID,
             "application.name": APP_NAME,
             "application.process.binary": "audio-matrix-tab-capture",
-            "media.name": f"Chrome · {valid_tab_title(title, tab_id)}",
+            "media.name": valid_tab_title(title, tab_id),
             "target.object": SINK_NAME,
             "node.dont-fallback": True,
             "node.dont-reconnect": True,

@@ -56,6 +56,9 @@ rg -q 'set_quick_group_collapsed' "$extension_source"
 rg -q "set_quick_control" "$extension_source"
 rg -q "set_quick_control_choice" "$extension_source"
 rg -q 'this\._links\.render' "$extension_source/menu-renderer.js"
+rg -q 'menuStructureSignature' "$extension_source/menu-renderer.js"
+rg -q 'menuLevelRows' "$extension_source/menu-renderer.js"
+rg -q 'applications.length === 1' "$extension_source/menu-applications.js"
 rg -q 'set_mixer_input_volume' "$extension_source"
 rg -q 'toggle_mixer_input_mute' "$extension_source"
 rg -q "PopupMenu\.PopupMenuItem\(label\)" "$extension_source/menu-links.js"
@@ -66,6 +69,7 @@ rg -q 'AudioMatrixMenuMatrix' "$extension_source/menu-matrix.js"
 rg -Fq "new GLib.Variant('(ussss)'" "$extension_source"
 rg -q "'Result'" "$extension_source"
 for source_file in "$extension_source"/*.js; do node --check "$source_file"; done
+gjs -m "$repo_root/scripts/test-gnome-quick-settings-state.js"
 node "$repo_root/scripts/test-volume-menu-lease.mjs"
 gnome-extensions pack "$extension_source" --force --out-dir "$scratch" \
     --extra-source=menu-text.js \
@@ -76,12 +80,14 @@ gnome-extensions pack "$extension_source" --force --out-dir "$scratch" \
     --extra-source=menu-matrix.js \
     --extra-source=menu-mixer.js \
     --extra-source=menu-output.js \
+    --extra-source=menu-disclosure.js \
     --extra-source=menu-renderer.js \
+    --extra-source=menu-state.js \
     --extra-source=menu-lease.js \
     --extra-source=volume-menu-adapter.js
 unzip -t "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip"
 unzip -p "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" metadata.json | rg '"version": 14'
-for module in menu-text.js state-client.js menu-rows.js menu-applications.js menu-links.js menu-matrix.js menu-mixer.js menu-output.js menu-renderer.js menu-lease.js volume-menu-adapter.js; do
+for module in menu-text.js state-client.js menu-rows.js menu-applications.js menu-links.js menu-matrix.js menu-mixer.js menu-output.js menu-disclosure.js menu-renderer.js menu-state.js menu-lease.js volume-menu-adapter.js; do
     unzip -Z1 "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" | grep -Fxq "$module"
 done
 
