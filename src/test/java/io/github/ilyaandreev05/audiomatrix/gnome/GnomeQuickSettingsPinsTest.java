@@ -1,6 +1,7 @@
 package io.github.ilyaandreev05.audiomatrix.gnome;
 
 import io.github.ilyaandreev05.audiomatrix.audio.AudioNode;
+import io.github.ilyaandreev05.audiomatrix.audio.DeviceIdentity;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.config.ChannelMatrix;
 import io.github.ilyaandreev05.audiomatrix.config.DefaultConfig;
@@ -106,6 +107,62 @@ class GnomeQuickSettingsPinsTest {
         assertEquals("black-gain", ((Map<?, ?>) pin(pins, black.id()).get("output")).get("graphGainNodeId"));
         assertEquals(((Map<?, ?>) pin(pins, green.id()).get("output")).get("id"),
                 ((Map<?, ?>) pin(pins, black.id()).get("output")).get("id"));
+    }
+
+    @Test void publishesOutputPinsFromInactiveRoutesWithoutFabricatingGains() {
+        Map<String, Object> config = DefaultConfig.create();
+        config.put("active_route", "octine-monitor");
+        DeviceIdentity identity = new DeviceIdentity(
+                "dc1da7e53884d84b5072b438b0f886d5ac4bcff5018d98d2168fbf07a10d5e4e",
+                "pci-0000:0b:00.3", "", "analog-stereo", "analog-output-headphones", "", 2, "FL,FR", "HIGH");
+        config.put("devices", List.of(DefaultConfig.map("id", "family17h-front-headphones",
+                "name", "Front headphones", "kind", "device_slot", "role", "haptic_output",
+                "identity", identity.toMap())));
+        bindSlot(config, "octine-headphones", "octine-headphones-output");
+        bindSlot(config, "octine-free", "octine-free-headphones");
+        AudioNode sink = new AudioNode(72, "alsa_output.pci-0000_0b_00.3.analog-stereo",
+                "Family 17h analog stereo", "Audio/Sink", "running", "", "", "", 2, List.of(48000),
+                1.0, false, null, identity);
+        PipeWireBackend.Snapshot snapshot = new PipeWireBackend.Snapshot(true, "", List.of(sink), List.of(),
+                List.of(), List.of(), Map.of(), sink.id(), 0);
+
+        List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config, snapshot, List.of(), List.of(), List.of());
+
+        Map<String, Object> headphones = pinFor(pins, "octine-headphones", "octine-headphones-output");
+        assertEquals("outputs", headphones.get("groupId"));
+        assertEquals(1, headphones.get("order"));
+        assertEquals(false, headphones.get("pinned"));
+        assertEquals(false, headphones.containsKey("gain"));
+        Map<?, ?> headphonesOutput = (Map<?, ?>) headphones.get("output");
+        assertEquals("ONLINE", headphonesOutput.get("state"));
+        assertEquals(true, headphonesOutput.get("available"));
+        assertEquals(false, headphonesOutput.containsKey("volume"));
+        Map<String, Object> freeHeadphones = pinFor(pins, "octine-free", "octine-free-headphones");
+        assertEquals(3, freeHeadphones.get("order"));
+        assertEquals(false, freeHeadphones.get("pinned"));
+        Map<?, ?> freeOutput = (Map<?, ?>) freeHeadphones.get("output");
+        assertEquals("ONLINE", freeOutput.get("state"));
+        assertEquals(false, freeOutput.containsKey("volume"));
+        assertEquals(1, pins.stream().filter(item -> "octine-headphones".equals(item.get("routeId"))
+                && "octine-headphones-output".equals(item.get("nodeId"))).count());
+        assertEquals(1, pins.stream().filter(item -> "octine-monitor".equals(item.get("routeId"))
+                && "octine-monitor-output".equals(item.get("nodeId"))).count());
+        assertEquals(5, pins.stream().filter(item -> "octine-common-vibro".equals(item.get("routeId"))).count());
+        assertEquals(false, pins.stream().anyMatch(item -> "octine-free-switch".equals(item.get("nodeId"))));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void bindSlot(Map<String, Object> config, String routeId, String nodeId) {
+        Map<String, Object> route = ((List<Map<String, Object>>) config.get("route_library")).stream()
+                .filter(item -> routeId.equals(item.get("id"))).findFirst().orElseThrow();
+        Map<String, Object> node = ((List<Map<String, Object>>) route.get("nodes")).stream()
+                .filter(item -> nodeId.equals(item.get("id"))).findFirst().orElseThrow();
+        node.put("parameters", DefaultConfig.map("device_id", "family17h-front-headphones"));
+    }
+
+    private static Map<String, Object> pinFor(List<Map<String, Object>> pins, String routeId, String nodeId) {
+        return pins.stream().filter(item -> routeId.equals(item.get("routeId")) && nodeId.equals(item.get("nodeId")))
+                .findFirst().orElseThrow();
     }
 
     private static Map<String, Object> pin(List<Map<String, Object>> pins, String nodeId) {

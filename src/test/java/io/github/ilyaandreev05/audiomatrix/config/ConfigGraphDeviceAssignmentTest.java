@@ -11,9 +11,21 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ConfigGraphDeviceAssignmentTest {
+
+    @Test void inactiveRouteMayPreBindTheVibroPhysicalOutput() {
+        Map<String, Object> config = DefaultConfig.create();
+        GraphCommonVibro.save(config, replaceSlot(GraphCommonVibro.graph(config),
+                GraphCommonVibro.VIBRO_OUTPUT_ID, "front-aux"));
+        GraphRouteLibrary.saveRoute(config,
+                replaceSlot(route(config, "octine-headphones"), "octine-headphones-output", "front-aux"),
+                "", "headphones");
+
+        assertEquals(List.of(), ConfigValidator.validate(config));
+    }
 
     @Test void ordinaryRouteCannotReuseTheVibroPhysicalOutput() {
         Map<String, Object> config = DefaultConfig.create();

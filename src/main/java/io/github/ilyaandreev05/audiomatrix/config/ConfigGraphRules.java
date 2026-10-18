@@ -89,14 +89,18 @@ final class ConfigGraphRules {
             if(node==null||!node.parameters().containsKey(parameter))errors.add("quick_controls["+i+"] references an unavailable node parameter");
         }
         ConfigPinnedNodeRules.validate(config, graphs, controls, errors);
-        validatePhysicalAssignments(graphs, errors);
+        validatePhysicalAssignments(graphs, active, errors);
         validateGraphLayouts(config,graphs,routeIds,errors);
         ConfigGraphMatrixViewRules.validate(config, graphs, routeIds, errors);
         validateGraphUiScales(config,routeIds,errors);
         validateGraphSubgraphs(config,graphs,routeIds,errors);
     }
-    /** Two slots in one graph, or the Vibro slot plus any other branch, must not share a physical output. */
-    static void validatePhysicalAssignments(Map<String,AudioGraph> graphs,List<String> errors){
+    /**
+     * Two slots in one graph must not share a physical output, and the active route must not
+     * double the always-applied Vibro output. Inactive routes may pre-bind shared hardware so
+     * their outputs stay visible in the controls without becoming part of the applied graph.
+     */
+    static void validatePhysicalAssignments(Map<String,AudioGraph> graphs,String activeRoute,List<String> errors){
         String commonId=GraphCommonVibro.COMMON_ROUTE_ID, vibroDevice="";
         AudioGraph common=graphs.get(commonId);
         if(common!=null)for(GraphNode node:common.nodes())
@@ -104,11 +108,12 @@ final class ConfigGraphRules {
                 vibroDevice=deviceReference(slot.deviceId());
         for(Map.Entry<String,AudioGraph> entry:graphs.entrySet()){
             String routeId=entry.getKey();Set<String> assigned=new HashSet<>();
+            boolean applied=commonId.equals(routeId)||routeId.equals(activeRoute);
             for(GraphNode node:entry.getValue().nodes()){
                 String device=deviceId(node);
                 if(device.isBlank()||"system_default".equals(device))continue;
                 if(!assigned.add(device))errors.add("graph "+routeId+" node "+node.id()+" duplicates physical output "+device);
-                if(!commonId.equals(routeId)&&!vibroDevice.isBlank()&&device.equals(vibroDevice))
+                if(applied&&!commonId.equals(routeId)&&!vibroDevice.isBlank()&&device.equals(vibroDevice))
                     errors.add("graph "+routeId+" node "+node.id()+" reuses the Vibro physical output "+device);
             }
         }

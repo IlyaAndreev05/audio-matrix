@@ -33,7 +33,7 @@ public final class GraphCommonVibro {
                 new FilterNode("octine-bass-low-pass", "Басы · 120 Hz", CHANNELS, "low_pass", true,
                         Map.of("frequency_hz", 120.0, "q", 0.70710678)),
                 new SourceNode("octine-event-source", "Event Sound Studio", EventSoundStudioSource.SELECTOR, CHANNELS),
-                new MixerNode(VIBRO_MIXER_ID, "Vibro Mixer", CHANNELS, Map.of("bass", 1.0, "events", 1.0)),
+                new MixerNode(VIBRO_MIXER_ID, "Vibro Mixer", CHANNELS, Map.of("bass", 0.6, "events", 0.65)),
                 new GainNode(VIBRO_GAIN_ID, "Vibro Gain / Mute", CHANNELS, 0.6, false),
                 new FilterNode("octine-vibro-limiter", "Vibro Limiter", CHANNELS, "limiter", true,
                         Map.of("ceiling_db", -1.0, "lookahead_ms", 5.0, "release_ms", 80.0)),
