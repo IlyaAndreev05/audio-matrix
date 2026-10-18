@@ -140,6 +140,7 @@ def main():
             command = [
                 "./gradlew", "test", "--tests",
                 "io.github.ilyaandreev05.audiomatrix.audio.PipeWireSignedMatrixRouteLiveSmokeTest",
+                "--tests", "io.github.ilyaandreev05.audiomatrix.audio.GraphPipeWireRouteLiveSmokeTest",
                 "--no-configuration-cache", "--no-daemon", "--rerun-tasks",
             ]
             result = subprocess.run(command, env=environment, check=False)
