@@ -1,7 +1,9 @@
 package io.github.ilyaandreev05.audiomatrix.audio;
 
+import io.github.ilyaandreev05.audiomatrix.config.DefaultConfig;
 import org.junit.jupiter.api.Test;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -21,6 +23,15 @@ class RouteInputSignatureTest {
                 List.of(stream(318, "audiomatrix_route_abc_playback", "")));
 
         assertEquals(first, afterRebuild);
+    }
+
+    @Test
+    void transientSinkIdChurnDoesNotForceAGraphRebuild() {
+        Map<String, Object> config = Map.of("active_route", "desktop", "engine", Map.of("apply_on_start", true));
+        String before = signature(config, List.of(sink(69, "alsa_output.hdmi-stereo")), List.of());
+        String afterReconnect = signature(config, List.of(sink(777, "alsa_output.hdmi-stereo")), List.of());
+
+        assertEquals(before, afterReconnect);
     }
 
     @Test
@@ -56,9 +67,28 @@ class RouteInputSignatureTest {
         assertNotEquals(hdmi, usb);
     }
 
+    @Test
+    void changesWhenTheSharedVibroGraphChanges() {
+        Map<String, Object> config = DefaultConfig.create();
+        List<AudioNode> sinks = List.of(sink(69, "alsa_output.front"));
+        String before = signature(config, sinks, List.of());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> common = new LinkedHashMap<>((Map<String, Object>) config.get("common_vibro_graph"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> nodes = (List<Map<String, Object>>) common.get("nodes");
+        Map<String, Object> gain = nodes.stream()
+                .filter(node -> "octine-vibro-gain".equals(node.get("id"))).findFirst().orElseThrow();
+        Map<String, Object> parameters = new LinkedHashMap<>((Map<String, Object>) gain.get("parameters"));
+        parameters.put("gain", 0.25);
+        gain.put("parameters", parameters);
+        config.put("common_vibro_graph", common);
+
+        assertNotEquals(before, signature(config, sinks, List.of()));
+    }
+
     private static String signature(Map<String, Object> config, List<AudioNode> sinks, List<AudioNode> streams) {
         PipeWireBackend.Snapshot snapshot = new PipeWireBackend.Snapshot(true, "", sinks, List.of(), streams,
-                List.of(), Map.of(), 69, 0);
+                List.of(), Map.of(), sinks.isEmpty() ? -1 : sinks.getFirst().id(), 0);
         return RouteInputSignature.create(config, snapshot, 1);
     }
 

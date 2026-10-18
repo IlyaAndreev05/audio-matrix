@@ -1,10 +1,13 @@
 package io.github.ilyaandreev05.audiomatrix.config;
 
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
+import io.github.ilyaandreev05.audiomatrix.graph.DeviceSlotNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphCommonVibro;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphSubgraph;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphValidator;
+import io.github.ilyaandreev05.audiomatrix.graph.OutputNode;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -64,6 +67,20 @@ final class ConfigGraphRules {
             try{AudioGraph graph=GraphCodec.fromMap(route);for(String problem:GraphValidator.validate(graph))errors.add("saved_copies["+i+"]: "+problem);}
             catch(RuntimeException invalid){errors.add("saved_copies["+i+"] is invalid: "+invalid.getMessage());}
         }
+        if (config.containsKey("common_vibro_graph")) {
+            try {
+                AudioGraph common = GraphCommonVibro.graph(config);
+                if (common == null) throw new IllegalArgumentException("common_vibro_graph must be an object");
+                if (!GraphCommonVibro.COMMON_ROUTE_ID.equals(common.id()))
+                    errors.add("common_vibro_graph.id must be " + GraphCommonVibro.COMMON_ROUTE_ID);
+                for (String problem : GraphValidator.validate(common)) errors.add("common_vibro_graph: " + problem);
+                GraphCommonVibro.requireValid(common);
+                if (graphs.containsKey(common.id())) errors.add("common_vibro_graph id collides with a saved route");
+                graphs.put(common.id(), common);
+                routeIds = new HashSet<>(routeIds);
+                routeIds.add(common.id());
+            } catch (RuntimeException invalid) { errors.add("common_vibro_graph is invalid: " + invalid.getMessage()); }
+        }
         for(int i=0;i<controls.size();i++){
             Map<String,Object> control=controls.get(i);String routeId=String.valueOf(control.getOrDefault("route_id",active));AudioGraph graph=graphs.get(routeId);
             if(graph==null){errors.add("quick_controls["+i+"] references a missing route");continue;}
@@ -72,10 +89,39 @@ final class ConfigGraphRules {
             if(node==null||!node.parameters().containsKey(parameter))errors.add("quick_controls["+i+"] references an unavailable node parameter");
         }
         ConfigPinnedNodeRules.validate(config, graphs, controls, errors);
+        validatePhysicalAssignments(graphs, errors);
         validateGraphLayouts(config,graphs,routeIds,errors);
         ConfigGraphMatrixViewRules.validate(config, graphs, routeIds, errors);
         validateGraphUiScales(config,routeIds,errors);
         validateGraphSubgraphs(config,graphs,routeIds,errors);
+    }
+    /** Two slots in one graph, or the Vibro slot plus any other branch, must not share a physical output. */
+    static void validatePhysicalAssignments(Map<String,AudioGraph> graphs,List<String> errors){
+        String commonId=GraphCommonVibro.COMMON_ROUTE_ID, vibroDevice="";
+        AudioGraph common=graphs.get(commonId);
+        if(common!=null)for(GraphNode node:common.nodes())
+            if(node instanceof DeviceSlotNode slot&&GraphCommonVibro.VIBRO_OUTPUT_ID.equals(slot.id()))
+                vibroDevice=deviceReference(slot.deviceId());
+        for(Map.Entry<String,AudioGraph> entry:graphs.entrySet()){
+            String routeId=entry.getKey();Set<String> assigned=new HashSet<>();
+            for(GraphNode node:entry.getValue().nodes()){
+                String device=deviceId(node);
+                if(device.isBlank()||"system_default".equals(device))continue;
+                if(!assigned.add(device))errors.add("graph "+routeId+" node "+node.id()+" duplicates physical output "+device);
+                if(!commonId.equals(routeId)&&!vibroDevice.isBlank()&&device.equals(vibroDevice))
+                    errors.add("graph "+routeId+" node "+node.id()+" reuses the Vibro physical output "+device);
+            }
+        }
+    }
+
+    private static String deviceId(GraphNode node){
+        if(node instanceof DeviceSlotNode slot)return deviceReference(slot.deviceId());
+        if(node instanceof OutputNode output)return deviceReference(output.deviceId());
+        return "";
+    }
+
+    private static String deviceReference(String deviceId){
+        return deviceId!=null&&deviceId.startsWith("device:")?deviceId.substring("device:".length()):deviceId;
     }
     static void validateGraphSubgraphs(Map<String,Object> config,Map<String,AudioGraph> graphs,Set<String> routeIds,List<String> errors){
         Object raw=config.get("graph_ui_subgraphs");if(raw==null)return;

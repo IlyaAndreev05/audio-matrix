@@ -6,6 +6,7 @@ import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
 import io.github.ilyaandreev05.audiomatrix.graph.GainNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphCommonVibro;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphRouteLibrary;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphValidator;
@@ -46,12 +47,19 @@ public final class GnomeGraphOutputGain {
     }
 
     public static void set(Map<String, Object> config, Target target, Double level, boolean toggleMute) {
-        if (!target.routeId().equals(config.get("active_route")))
+        boolean common = GraphCommonVibro.COMMON_ROUTE_ID.equals(target.routeId());
+        if (!common && !target.routeId().equals(config.get("active_route")))
             throw new IllegalArgumentException("Output gain is not on the active route");
-        Map<String, Object> route = maps(config.get("route_library")).stream()
-                .filter(item -> target.routeId().equals(item.get("id"))).findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("Output route no longer exists"));
-        AudioGraph graph = GraphCodec.fromMap(route);
+        Map<String, Object> route = Map.of();
+        AudioGraph graph;
+        if (common) graph = GraphCommonVibro.graph(config);
+        else {
+            route = maps(config.get("route_library")).stream()
+                    .filter(item -> target.routeId().equals(item.get("id"))).findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException("Output route no longer exists"));
+            graph = GraphCodec.fromMap(route);
+        }
+        if (graph == null) throw new IllegalArgumentException("Output route no longer exists");
         GainNode current = graph.nodes().stream().filter(node -> node.id().equals(target.gainNodeId())
                 && node instanceof GainNode).map(GainNode.class::cast).findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("Output Gain node no longer exists"));
@@ -65,7 +73,8 @@ public final class GnomeGraphOutputGain {
         AudioGraph changed = new AudioGraph(graph.id(), graph.name(), nodes, graph.connections());
         List<String> problems = GraphValidator.validate(changed);
         if (!problems.isEmpty()) throw new IllegalArgumentException(String.join("; ", problems));
-        GraphRouteLibrary.saveRoute(config, changed, String.valueOf(route.getOrDefault("group_id", "")));
+        if (common) GraphCommonVibro.save(config, changed);
+        else GraphRouteLibrary.saveRoute(config, changed, String.valueOf(route.getOrDefault("group_id", "")));
     }
 
     private static AudioNode resolve(OutputNode output, PipeWireBackend.Snapshot snapshot,

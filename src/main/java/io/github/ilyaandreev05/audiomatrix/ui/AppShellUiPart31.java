@@ -79,7 +79,7 @@ abstract class AppShellUiPart31 extends AppShellUiPart30 {
         }
         Double targetGain = gain;
         return updateRouteConfigCommand(t("Изменить вход микшера из GNOME", "Change Mixer input from GNOME"), config -> {
-            if (!fields[0].equals(config.get("active_route")))
+            if (!GraphUiRoutes.available(config, fields[0]))
                 throw new IllegalArgumentException("Mixer input is not on the active route");
             Map<String, Object> route = route(config, fields[0]);
             AudioGraph graph = GraphCodec.fromMap(route);
@@ -101,7 +101,7 @@ abstract class AppShellUiPart31 extends AppShellUiPart30 {
                     .filter(item -> fields[0].equals(item.get("id"))).findFirst()
                     .orElseThrow(() -> new IllegalArgumentException("Matrix control no longer exists"));
             String routeId = string(control.get("route_id"), string(config.get("active_route"), ""));
-            if (!routeId.equals(config.get("active_route")))
+            if (!GraphUiRoutes.available(config, routeId))
                 throw new IllegalArgumentException("Matrix control is not on the active route");
             Map<String, Object> route = route(config, routeId);
             AudioGraph graph = GraphCodec.fromMap(route);
@@ -139,7 +139,6 @@ abstract class AppShellUiPart31 extends AppShellUiPart30 {
     }
 
     private Map<String, Object> route(Map<String, Object> config, String routeId) {
-        return maps(config.get("route_library")).stream().filter(item -> routeId.equals(item.get("id")))
-                .findFirst().orElseThrow(() -> new IllegalArgumentException("Route is unavailable"));
+        return GraphUiRoutes.route(config, routeId);
     }
 }

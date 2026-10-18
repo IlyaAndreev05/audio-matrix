@@ -3,6 +3,7 @@ package io.github.ilyaandreev05.audiomatrix.audio;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.ilyaandreev05.audiomatrix.config.ChannelMatrix;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphCommonVibro;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -29,6 +30,13 @@ import java.util.concurrent.TimeUnit;
 /** Applies explicitly requested Audio Matrix routing by owning PipeWire loopback nodes and links. */
 
 abstract class PipeWireRoutePart04 extends PipeWireRoutePart03 {
+    private static boolean isTransientShellSound(AudioNode stream) {
+        String app = stream.applicationName() == null ? "" : stream.applicationName();
+        String process = stream.processName() == null ? "" : stream.processName();
+        return "gnome-shell".equalsIgnoreCase(app) || "gnome-shell".equalsIgnoreCase(process)
+                || process.startsWith("gsd-") || "xdg-desktop-portal".equalsIgnoreCase(app);
+    }
+
     protected Plan plan(Map<String, Object> config, PipeWireBackend.Snapshot snapshot) throws IOException {
         Map<String, Object> profile = maps(config.get("profiles")).stream()
                 .filter(item -> String.valueOf(config.get("active_profile")).equals(item.get("id")))
@@ -44,6 +52,9 @@ abstract class PipeWireRoutePart04 extends PipeWireRoutePart03 {
                 .filter(node -> !node.name().startsWith("audiomatrix_")).toList();
         List<Map<String, Object>> devices = maps(config.get("devices"));
         List<String> warnings = new ArrayList<>();
+        unavailableOutputs = 0;
+        conflictingOutputs = 0;
+        Set<Integer> vibroSinkIds = new HashSet<>(), ordinarySinkIds = new HashSet<>();
         List<RoutePlan> routes = new ArrayList<>();
         Map<String, Set<String>> sourceRolesByBus = new HashMap<>();
         for (String busId : activeBuses) {
@@ -68,7 +79,11 @@ abstract class PipeWireRoutePart04 extends PipeWireRoutePart03 {
                     sink = resolveSink(fallback, profile, physicalSinks, devices, snapshot.defaultSinkId());
                     if (sink != null) warnings.add("route " + id + " is using fallback output " + fallback);
                 }
-                if (sink == null) { warnings.add("route " + id + " has no available output or fallback"); continue; }
+                if (sink == null) {
+                    unavailableOutputs++;
+                    warnings.add("route " + id + " has no available output or fallback");
+                    continue;
+                }
                 String outputRole = configuredOutputRole(sink, devices);
                 String sourceRole = text(bus.get("role"), ProfileRoutePolicy.builtInBusRole(from));
                 ProfileRoutePolicy.Decision policy = ProfileRoutePolicy.evaluate(profileMode, sourceRole,
@@ -104,12 +119,25 @@ abstract class PipeWireRoutePart04 extends PipeWireRoutePart03 {
                     routeNodeName("dsp_input", id), routeNodeName("dsp_output", id), positions, filters, limiterEnabled(config));
             if (channelMatrix != null) PipeWireFilterChainConfig.renderMatrix("Audio Matrix channel matrix " + id,
                     routeNodeName("matrix_input", id), routeNodeName("matrix_output", id), channelMatrix);
+            if (sink != null) {
+                Set<String> roots = sourceRolesByBus.getOrDefault(from, Set.of());
+                boolean vibro = "vibro".equals(route.get("role")) || "octine-vibro-output".equals(to)
+                        || "haptic_output".equals(configuredOutputRole(sink, devices)) || roots.contains("effects");
+                if (vibro) vibroSinkIds.add(sink.id()); else ordinarySinkIds.add(sink.id());
+            }
             routes.add(new RoutePlan(id, from, targetBus, sink, text(route.get("channel_map"), "stereo"), positions, channelMatrix,
                     number(route.get("volume"), 1), gain, number(route.get("delay_ms"), 0),
                     Boolean.TRUE.equals(route.get("mute")), (int) number(route.get("priority"), 0),
                     filters, captureNode, playbackNode, routeNodeName("dsp_input", id), routeNodeName("dsp_output", id),
                     routeNodeName("matrix_input", id), routeNodeName("matrix_output", id)));
         }
+        vibroSinkIds.retainAll(ordinarySinkIds);
+        conflictingOutputs = vibroSinkIds.size();
+        routes.removeIf(route -> {
+            if (route.sink() == null || !vibroSinkIds.contains(route.sink().id())) return false;
+            warnings.add("route " + route.id() + " skipped: Vibro and ordinary audio share physical output; select separate outputs");
+            return true;
+        });
         routes.sort(Comparator.comparingInt(RoutePlan::priority).reversed());
         Map<String, List<RoutePlan>> outgoing = new LinkedHashMap<>();
         for (RoutePlan route : routes) outgoing.computeIfAbsent(route.fromBusId(), ignored -> new ArrayList<>()).add(route);
@@ -169,7 +197,9 @@ abstract class PipeWireRoutePart04 extends PipeWireRoutePart03 {
         List<StreamPlan> streams = new ArrayList<>();
         if (!profileOff && !routes.isEmpty()) {
             List<String> eventInputBuses = EventInputStreamPlanner.append(config, buses, streams, this::applicationFilters);
-            for (AudioNode stream : snapshot.streams()) {
+            boolean builtin = GraphCommonVibro.isBuiltinRoute(text(config.get("active_route")));
+            if (!builtin) for (AudioNode stream : snapshot.streams()) {
+                if (isTransientShellSound(stream)) continue;
                 boolean eventStream = isEventSoundStudioStream(stream);
                 if (eventStream && !eventInputBuses.isEmpty()) continue;
                 Map<String, Object> rule = eventStream

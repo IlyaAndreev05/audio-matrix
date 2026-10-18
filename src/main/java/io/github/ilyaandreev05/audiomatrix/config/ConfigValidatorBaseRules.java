@@ -49,7 +49,8 @@ final class ConfigValidatorBaseRules {
         ConfigValidationValues.validateVolumes(ctx.applications, "applications", ctx.errors);
         ConfigValidationValues.validateVolumes(ctx.buses, "buses", ctx.errors);
         for (int i = 0; i < ctx.devices.size(); i++) {
-            Map<String, Object> selector = ConfigValidationValues.object(ctx.devices.get(i).get("selector"), "devices[" + i + "].selector", ctx.errors);
+            Map<String, Object> selector = ctx.devices.get(i).containsKey("identity") ? null
+                    : ConfigValidationValues.object(ctx.devices.get(i).get("selector"), "devices[" + i + "].selector", ctx.errors);
             if (selector != null) {
                 if (!Set.of("name_equals", "name_contains", "description_contains").contains(selector.get("kind")))
                     ctx.errors.add("devices[" + i + "].selector.kind is unsupported");
@@ -65,6 +66,7 @@ final class ConfigValidatorBaseRules {
             }
             if (!(ctx.devices.get(i).get("mute") instanceof Boolean)) ctx.errors.add("devices[" + i + "].mute must be boolean");
         }
+        ConfigDeviceRules.validate(ctx);
         for (int i = 0; i < ctx.applications.size(); i++) {
             Map<String, Object> match = ConfigValidationValues.object(ctx.applications.get(i).get("match"), "applications[" + i + "].match", ctx.errors);
             if (match != null && !(match.get("process") instanceof String) && !(match.get("app_id") instanceof String))

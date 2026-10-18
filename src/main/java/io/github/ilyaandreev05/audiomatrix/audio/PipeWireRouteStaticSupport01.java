@@ -126,16 +126,6 @@ abstract class PipeWireRouteStaticSupport01 extends PipeWireRouteTypes {
         }
     }
 
-    protected static String run(List<String> command, Duration timeout) throws Exception {
-        Path output = Files.createTempFile("audio-matrix-route-command-", ".out");
-        try {
-            Process process = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(output.toFile()).start();
-            if (!process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS)) { process.destroyForcibly(); throw new IOException(command.getFirst() + " timed out"); }
-            String text = Files.readString(output);
-            if (process.exitValue() != 0) throw new IOException(text.isBlank() ? command.getFirst() + " exited with " + process.exitValue() : text.trim());
-            return text;
-        } finally { Files.deleteIfExists(output); }
-    }
 
     @SuppressWarnings("unchecked") protected static List<Map<String, Object>> maps(Object value) { return value instanceof List<?> list ? (List<Map<String, Object>>) list : List.of(); }
 

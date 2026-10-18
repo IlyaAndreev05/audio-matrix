@@ -28,7 +28,7 @@ import java.util.concurrent.TimeUnit;
 
 /** Applies explicitly requested Audio Matrix routing by owning PipeWire loopback nodes and links. */
 
-abstract class PipeWireRoutePart06 extends PipeWireRoutePart05 {
+abstract class PipeWireRoutePart06 extends PipeWireRouteReconciliation {
     protected void startFilterChain(String processKey, String description, String inputNodeName, String outputNodeName,
                                   List<String> positions, List<Map<String, Object>> filters) throws Exception {
         ManagedProcess existing = filterChainProcesses.get(processKey);
@@ -102,38 +102,6 @@ abstract class PipeWireRoutePart06 extends PipeWireRoutePart05 {
         throw new IOException("PipeWire node was not found: " + nodeName);
     }
 
-    protected void connectAll(List<Link> links) throws Exception {
-        if (links.isEmpty()) throw new IOException("No compatible PipeWire channel ports were found");
-        for (Link link : links) {
-            if (observedLinks.contains(link)) {
-                if (isAudioMatrixGraphLink(link))
-                    ownedLinks.add(link);
-                continue;
-            }
-            try {
-                run(List.of("pw-link", "--wait", link.output(), link.input()), COMMAND_TIMEOUT);
-                observedLinks.add(link);
-                ownedLinks.add(link);
-            } catch (Exception error) {
-                List<Link> live = PipeWireLinkOperations.allLinks(run(List.of("pw-link", "-l"), COMMAND_TIMEOUT));
-                if (!live.contains(link)) throw error;
-                observedLinks.add(link);
-                ownedLinks.add(link);
-            }
-        }
-    }
-
-    protected void disconnectAll(List<Link> links) {
-        for (Link link : links) try {
-            run(List.of("pw-link", "-d", link.output(), link.input()), COMMAND_TIMEOUT);
-            observedLinks.remove(link);
-            ownedLinks.remove(link);
-        } catch (Exception ignored) {}
-    }
-
-    protected void disconnectOwnedLinks() {
-        disconnectAll(new ArrayList<>(ownedLinks)); ownedLinks.clear();
-    }
 
     protected void stopOwnedProcesses() {
         stopProcesses(filterChainProcesses); stopProcesses(routeProcesses); stopProcesses(busProcesses);
@@ -190,26 +158,11 @@ abstract class PipeWireRoutePart06 extends PipeWireRoutePart05 {
         disconnectOwnedLinks();
         stopOwnedProcesses();
         if (restoreStreams) restoreAllOriginal();
-        originalStreamLinks.clear(); observedLinks.clear(); skippedStreamCount = 0;
+        originalStreamLinks.clear(); desiredLinks.clear(); observedLinks.clear(); skippedStreamCount = 0;
         active = false; appliedSignature = ""; appliedPlan = null;
         status = transitionWarnings.isEmpty() ? "Routes are not applied"
                 : "Routes are not applied · " + String.join("; ", transitionWarnings);
         transitionWarnings.clear();
     }
 
-    protected void restoreAllOriginal() {
-        for (String stream : new ArrayList<>(originalStreamLinks.keySet())) restoreOriginal(stream);
-    }
-
-    protected void restoreOriginal(String streamNode) {
-        List<Link> original = originalStreamLinks.getOrDefault(streamNode, List.of());
-        Set<String> outputPorts;
-        Set<String> inputPorts;
-        try {
-            outputPorts = new HashSet<>(ports("-o").getOrDefault(streamNode, List.of()));
-            inputPorts = new HashSet<>(); ports("-i").values().forEach(inputPorts::addAll);
-        } catch (Exception e) { return; }
-        for (Link link : original) if (outputPorts.contains(link.output()) && inputPorts.contains(link.input()))
-            try { run(List.of("pw-link", "--wait", link.output(), link.input()), COMMAND_TIMEOUT); } catch (Exception ignored) {}
-    }
 }

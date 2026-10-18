@@ -54,13 +54,16 @@ class GnomeQuickSettingsPinsTest {
         PipeWireBackend.Snapshot snapshot = new PipeWireBackend.Snapshot(true, "", List.of(sink), List.of(),
                 List.of(), List.of(), Map.of(), sink.id(), 0);
 
-        List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config, snapshot, List.of(), applications, outputs);
+        List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config, snapshot, List.of(), applications, outputs)
+                .stream().filter(item -> graph.id().equals(item.get("routeId"))).toList();
 
         assertEquals(4, pins.size());
         Map<String, Object> chromePin = pin(pins, "chrome");
         assertEquals(1.0, ((Map<?, ?>) chromePin.get("sourceGain")).get("volume"));
         Map<String, Object> fallbackPin = pin(pins, "other-apps");
         assertEquals(List.of("chrome-stream"), ids(chromePin.get("applications")));
+        assertEquals(false, chromePin.get("tabAdapterAvailable"));
+        assertEquals(false, chromePin.get("pinned"));
         assertEquals(List.of("telegram-stream"), ids(fallbackPin.get("applications")));
         Map<String, Object> mixerPin = pin(pins, "mixer-1");
         @SuppressWarnings("unchecked") List<Map<String, Object>> mixerInputs = (List<Map<String, Object>>) mixerPin.get("mixerInputs");

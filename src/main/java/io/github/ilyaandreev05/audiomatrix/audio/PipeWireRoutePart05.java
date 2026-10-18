@@ -152,7 +152,7 @@ abstract class PipeWireRoutePart05 extends PipeWireRoutePart04 {
         String playbackName = bus.nodeName() + "_discard";
         String propsOut = json.writeValueAsString(Map.of("node.name", playbackName, "node.description", "Audio Matrix bus internal output",
                 "node.autoconnect", false, "node.passive", true, "stream.dont-remix", true, "audio.position", bus.positions()));
-        List<String> command = List.of("pw-loopback", "-n", bus.nodeName(), "-c", Integer.toString(bus.positions().size()), "-m", positionArg(bus.positions()), "-i", propsIn, "-o", propsOut);
+        List<String> command = List.of("pw-loopback", "-n", bus.nodeName(), "-l", "25", "-c", Integer.toString(bus.positions().size()), "-m", positionArg(bus.positions()), "-i", propsIn, "-o", propsOut);
         ManagedProcess process = startProcess(command, bus.nodeName());
         busProcesses.put(bus.id(), process);
         awaitPorts(bus.nodeName(), "-i", process.process());
@@ -166,7 +166,7 @@ abstract class PipeWireRoutePart05 extends PipeWireRoutePart04 {
                 "node.autoconnect", false, "node.passive", true, "audio.position", routePositions));
         String outProps = json.writeValueAsString(Map.of("node.name", route.playbackNodeName(), "node.description", "Audio Matrix route playback " + route.id(),
                 "node.autoconnect", false, "node.passive", true, "stream.dont-remix", true, "audio.position", routePositions));
-        List<String> command = new ArrayList<>(List.of("pw-loopback", "-n", route.captureNodeName(), "-c", Integer.toString(routePositions.size()), "-m", positionArg(routePositions), "-d", Double.toString(route.delayMs() / 1000.0), "-i", inProps, "-o", outProps));
+        List<String> command = new ArrayList<>(List.of("pw-loopback", "-n", route.captureNodeName(), "-l", "25", "-c", Integer.toString(routePositions.size()), "-m", positionArg(routePositions), "-d", Double.toString(route.delayMs() / 1000.0), "-i", inProps, "-o", outProps));
         ManagedProcess process = startProcess(command, route.captureNodeName());
         routeProcesses.put(route.id(), process);
         awaitPorts(route.captureNodeName(), "-i", process.process());

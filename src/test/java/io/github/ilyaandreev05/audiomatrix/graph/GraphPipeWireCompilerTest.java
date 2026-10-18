@@ -28,7 +28,8 @@ class GraphPipeWireCompilerTest {
         assertEquals("haptic-output",route.get("to"));
         assertEquals(.4,route.get("volume"));
         assertEquals("dsp.route_chains.graph-chain-"+route.get("id"),route.get("filters_ref"));
-        assertFalse(compiled.toString().contains("node_id"));
+        assertFalse(compiled.toString().contains("object.id"));
+        assertFalse(compiled.toString().contains("link.output.node"));
     }
 
     @Test void mixerInputGainAndMuteSurviveJsonRoundTripAndMuteOnlyTheirOwnBranch(){
@@ -144,7 +145,7 @@ class GraphPipeWireCompilerTest {
         assertEquals(List.of("in-a->out-b"),((MatrixNode)decoded.nodes().stream().filter(MatrixNode.class::isInstance).findFirst().orElseThrow()).activeLinks());
     }
 
-    @Test void switchSelectsExactlyOneOutputAndMultiswitchCanSelectSeveral(){
+    @Test void switchPreservesSingleSelectionAndAllowsSeveralOutputs(){
         SourceNode source=new SourceNode("source","Apps","application:unassigned",STEREO);
         SwitchNode single=new SwitchNode("single","Single select",STEREO,List.of("to-monitor","to-aux"),List.of("in->to-aux"));
         OutputNode monitor=new OutputNode("monitor","Monitor","monitor-id",STEREO);
@@ -166,7 +167,7 @@ class GraphPipeWireCompilerTest {
         assertEquals(1.0,switchedRoutes.stream().filter(route->"monitor-id".equals(route.get("to"))).findFirst().orElseThrow().get("volume"));
         assertEquals(0.0,switchedRoutes.stream().filter(route->"aux-id".equals(route.get("to"))).findFirst().orElseThrow().get("volume"));
 
-        MultiSwitchNode multi=new MultiSwitchNode("multi","Multi select",STEREO,List.of("to-monitor","to-aux"),List.of("in->to-monitor","in->to-aux"));
+        SwitchNode multi=new SwitchNode("multi","Multi select",STEREO,List.of("to-monitor","to-aux"),List.of("in->to-monitor","in->to-aux"));
         AudioGraph multiGraph=new AudioGraph("route-multi","Multi",List.of(source,multi,monitor,aux),List.of(
                 link("source","out","multi","in"),link("multi","to-monitor","monitor","in"),link("multi","to-aux","aux","in")));
         assertEquals(2,((List<?>)GraphPipeWireCompiler.compile(multiGraph,DefaultConfig.create()).get("routes")).size());
@@ -204,7 +205,7 @@ class GraphPipeWireCompilerTest {
 
     @Test void sharesOnePostMixLimiterAcrossFrontAndRearPairsOfOnePhysicalDevice(){
         SourceNode source=new SourceNode("source","Applications","application:unassigned",STEREO);
-        MultiSwitchNode split=new MultiSwitchNode("split","Family outputs",STEREO,List.of("front","rear"),List.of("in->front","in->rear"));
+        SwitchNode split=new SwitchNode("split","Family outputs",STEREO,List.of("front","rear"),List.of("in->front","in->rear"));
         FilterNode limiter=new FilterNode("limiter","Vibration limiter",STEREO,"limiter",true,
                 Map.of("ceiling_db",-2.0,"lookahead_ms",5.0,"release_ms",80.0));
         OutputNode front=new OutputNode("front-output","Green AUX", "family17h",STEREO);

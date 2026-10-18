@@ -30,7 +30,7 @@ class ConfigArchiveTest {
         assertEquals(3, ((Number) current.get("version")).intValue());
         assertEquals("config.json",current.get("config_entry"));
         assertEquals("audio-matrix", current.get("app"));
-        assertEquals(7, ((Number) current.get("config_schema_version")).intValue());
+        assertEquals(DefaultConfig.SCHEMA_VERSION, ((Number) current.get("config_schema_version")).intValue());
         assertEquals("full", current.get("kind"));
 
         Path legacy = temp.resolve("legacy.amx.zip");
@@ -41,7 +41,7 @@ class ConfigArchiveTest {
             manifest.remove("kind");
         });
         try (ConfigArchive.PreparedImport prepared = ConfigArchive.prepare(legacy)) {
-            assertEquals(1, prepared.profileCount());
+            assertEquals(3, prepared.profileCount());
         }
 
         Path future = temp.resolve("future.amx.zip");
@@ -91,7 +91,7 @@ class ConfigArchiveTest {
                 String restoredDecay = String.valueOf(restoredCalibration.get("decay_curve_file"));
                 assertTrue(restoredDecay.startsWith("measurements/imported/"));
                 assertEquals("time_ms,envelope_relative_db,integrated_decay_db\n0,0,0\n", Files.readString(destinationDir.resolve(restoredDecay)));
-                assertEquals("desk", restored.get("active_profile"));
+                assertEquals("monitor", restored.get("active_profile"));
             }
         }
     }

@@ -156,7 +156,7 @@ abstract class AppShellUiPart17 extends AppShellUiPart16 {
     }
 
     protected VBox profilesPage() {
-        VBox page = page(t("Профиль сохраняет режим, выход, активные шины и маршруты.", "A profile stores mode, output, active buses, and routes."));
+        VBox page = page(t("Монитор, Наушники и Свободный используют один общий закреплённый Vibro-тракт. Неизвестные выходы требуют явной привязки.", "Monitor, Headphones and Free share one pinned Vibro path. Unknown outputs require explicit binding."));
         Map<String,Object> config=store.snapshot();
         List<Map<String, Object>> profiles = maps(config.get("profiles"));
         VBox list = card(t("Профили", "Profiles"));
@@ -178,7 +178,12 @@ abstract class AppShellUiPart17 extends AppShellUiPart16 {
             list.getChildren().add(row);
         }
         list.getChildren().add(actionButton(t("Новый профиль", "New profile"), this::createProfile));
+        if (!Boolean.TRUE.equals(config.get("octine_profiles_available")))
+            list.getChildren().add(actionButton(t("Добавить профили Монитор / Наушники / Свободный…", "Add Monitor / Headphones / Free profiles…"),
+                    () -> updateRouteConfig(t("Добавить общие профили Octine", "Add Octine presets"), GraphProfileLibrary::installOctineProfiles)));
         page.getChildren().add(list);
+        page.getChildren().add(GraphVibroControls.create(config,this::t,
+                change->updateRouteConfig(t("Изменить общий Vibro", "Change common Vibro"),change)));
         VBox presets = card(t("Режимы выхода", "Output modes"));
         presets.getChildren().addAll(label(t("Haptic · Subwoofer · Speaker · Hybrid · Multi-output · Off", "Haptic · Subwoofer · Speaker · Hybrid · Multi-output · Off"), "card-title"),
                 label(t("Haptic пропускает шины с ролью effects на выходы haptic_output; Subwoofer — шину subwoofer на выход subwoofer; Speaker — маршруты на speaker. Назначьте роли в редакторах шин и устройств. Без роли специальный маршрут будет пропущен.",

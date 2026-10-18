@@ -6,6 +6,7 @@ import io.github.ilyaandreev05.audiomatrix.audio.DeviceSelectorMatcher;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphCommonVibro;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
 import io.github.ilyaandreev05.audiomatrix.graph.RouterNode;
 
@@ -34,8 +35,8 @@ public final class GnomeControlBridge implements AutoCloseable {
     public static final int API_VERSION=3;
     private static final java.util.Set<String> SUPPORTED_COMMANDS=java.util.Set.of("open","select_output","toggle_mute",
             "set_output_volume","toggle_output_mute","set_source_volume","toggle_source_mute","set_app_volume","toggle_app_mute","set_stream_volume",
-            "set_graph_output_volume","toggle_graph_output_mute","toggle_stream_mute","set_mixer_input_volume","toggle_mixer_input_mute","set_quick_control","toggle_quick_control","set_quick_control_choice",
-            "set_quick_group_collapsed","set_quick_pin_view","set_quick_matrix_view","select_route","set_mode","set_channel_map");
+            "set_graph_output_volume","toggle_graph_output_mute","set_graph_gain","toggle_graph_gain_mute","toggle_stream_mute","set_mixer_input_volume","toggle_mixer_input_mute","set_quick_control","toggle_quick_control","set_quick_control_choice",
+            "set_quick_group_collapsed","reorder_quick_group","set_quick_pin_view","set_quick_matrix_view","select_route","set_mode","set_channel_map");
     private final PipeWireBackend backend;
     private final Function<Command,CompletableFuture<Void>> commands;
     private final ObjectMapper json=new ObjectMapper();
@@ -57,7 +58,7 @@ public final class GnomeControlBridge implements AutoCloseable {
         for(AudioNode stream:snapshot.streams()){
             String appId=stream.applicationId()==null?"":stream.applicationId();String process=stream.processName()==null?"":stream.processName();
             String key=!appId.isBlank()?"app:"+appId:!process.isBlank()?"process:"+process:"stream:"+stream.name();
-            Map<String,Object> group=groups.computeIfAbsent(key,ignored->{Map<String,Object> created=new LinkedHashMap<>();created.put("id",key);created.put("name",stream.applicationName().isBlank()?stream.description():stream.applicationName());created.put("application_id",appId);created.put("process",process);created.put("streams",new ArrayList<Map<String,Object>>());created.put("volume",Double.isFinite(stream.volume())?Math.max(0,Math.min(1,stream.volume())):0);created.put("muted",stream.muted());return created;});
+            Map<String,Object> group=groups.computeIfAbsent(key,ignored->{Map<String,Object> created=new LinkedHashMap<>();created.put("id",key);created.put("name",stream.applicationName().isBlank()?stream.description():stream.applicationName());created.put("application_id",appId);created.put("process",process);created.put("streams",new ArrayList<Map<String,Object>>());created.put("volume",Double.isFinite(stream.volume())?Math.max(0,Math.min(1,stream.volume())):0);created.put("muted",stream.muted());created.put("tabAdapterAvailable",false);return created;});
             @SuppressWarnings("unchecked") List<Map<String,Object>> children=(List<Map<String,Object>>)group.get("streams");Map<String,Object> child=new LinkedHashMap<>();child.put("id",stream.id());child.put("name",stream.name());child.put("description",stream.description());child.put("volume",Double.isFinite(stream.volume())?Math.max(0,Math.min(1,stream.volume())):0);child.put("muted",stream.muted());children.add(child);
         }
         state.put("applications",List.copyOf(groups.values()));
@@ -70,27 +71,34 @@ public final class GnomeControlBridge implements AutoCloseable {
     }
     private static String activeRouteName(Map<String,Object> config){String id=String.valueOf(config.getOrDefault("active_route",""));if(id.isBlank())return "";for(Map<String,Object> route:maps(config.get("route_library")))if(id.equals(route.get("id")))return String.valueOf(route.getOrDefault("name",id));return id;}
     static List<Map<String,Object>> quickControls(Map<String,Object> config){
-        String active=String.valueOf(config.getOrDefault("active_route",""));if(active.isBlank())return List.of();
-        Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->active.equals(item.get("id"))).findFirst().orElse(null);if(route==null)return List.of();
-        AudioGraph graph;try{graph=GraphCodec.fromMap(route);}catch(RuntimeException invalid){return List.of();}
+        String active=String.valueOf(config.getOrDefault("active_route",""));
+        Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->active.equals(item.get("id"))).findFirst().orElse(null);
+        AudioGraph graph=null;if(route!=null)try{graph=GraphCodec.fromMap(route);}catch(RuntimeException invalid){/* Common controls remain available. */}
+        AudioGraph commonGraph=null;try{commonGraph=GraphCommonVibro.graph(config);}catch(RuntimeException invalid){/* Invalid common state is not published. */}
         List<Map<String,Object>> result=new ArrayList<>();
-        for(Map<String,Object> control:maps(config.get("quick_controls"))){if(!active.equals(String.valueOf(control.getOrDefault("route_id",active))))continue;
-            String nodeId=String.valueOf(control.getOrDefault("node_id","")),parameter=String.valueOf(control.getOrDefault("parameter_id",""));GraphNode node=graph.nodes().stream().filter(candidate->candidate.id().equals(nodeId)).findFirst().orElse(null);if(node==null)continue;
+        for(Map<String,Object> control:maps(config.get("quick_controls"))){
+            String controlRoute=String.valueOf(control.getOrDefault("route_id",active));
+            boolean common=GraphCommonVibro.COMMON_ROUTE_ID.equals(controlRoute);
+            if(!common&&!active.equals(controlRoute))continue;
+            AudioGraph controlGraph=common?commonGraph:graph;
+            if(controlGraph==null)continue;
+            String nodeId=String.valueOf(control.getOrDefault("node_id","")),parameter=String.valueOf(control.getOrDefault("parameter_id",""));GraphNode node=controlGraph.nodes().stream().filter(candidate->candidate.id().equals(nodeId)).findFirst().orElse(null);if(node==null)continue;
             Map<String,Object> metadata=GnomeQuickControlParameter.describe(node,parameter,language(config));if(metadata==null)continue;String kind=String.valueOf(metadata.get("kind"));
             Map<String,Object> item=new LinkedHashMap<>();item.put("id",control.get("id"));item.put("nodeId",nodeId);item.put("nodeType",node.type());item.put("parameterId",parameter);item.put("label",control.getOrDefault("label",node.name()));item.put("section",control.getOrDefault("section","Audio Matrix"));item.put("order",control.getOrDefault("order",0));item.putAll(metadata);
+            item.put("routeId",controlRoute);item.put("pinned",common);
             item.put("view",control.getOrDefault("view","MATRIX"));
             item.put("groupId",control.getOrDefault("group_id",control.getOrDefault("section","routing")));
             if("gain".equals(node.type())&&"gain".equals(parameter))item.put("muted",Boolean.TRUE.equals(node.parameters().get("muted")));
             if("links".equals(kind)&&node instanceof RouterNode router){
-                List<String> wiredInputs=graph.connections().stream().filter(edge->edge.enabled()&&edge.toNode().equals(router.id())).map(edge->edge.toPort()).distinct().toList();
-                List<String> wiredOutputs=graph.connections().stream().filter(edge->edge.enabled()&&edge.fromNode().equals(router.id())).map(edge->edge.fromPort()).distinct().toList();
+                List<String> wiredInputs=controlGraph.connections().stream().filter(edge->edge.enabled()&&edge.toNode().equals(router.id())).map(edge->edge.toPort()).distinct().toList();
+                List<String> wiredOutputs=controlGraph.connections().stream().filter(edge->edge.enabled()&&edge.fromNode().equals(router.id())).map(edge->edge.fromPort()).distinct().toList();
                 List<Map<String,Object>> options=new ArrayList<>();for(var input:router.inputs())if(wiredInputs.contains(input.id()))for(var output:router.outputs())if(wiredOutputs.contains(output.id())){String link=input.id()+"->"+output.id();options.add(Map.of("id",link,"label",input.id()+" → "+output.id()));}item.put("options",options);item.put("multiple",router.multiple());
             }
             result.add(item);
         }
         result.sort(java.util.Comparator.comparingInt(item->item.get("order") instanceof Number number?number.intValue():0));return List.copyOf(result);
     }
-    static String controlKind(String nodeType,String parameter){if("gain".equals(nodeType)&&"gain".equals(parameter))return "slider";if("gain".equals(nodeType)&&"muted".equals(parameter))return "toggle";if("gate".equals(nodeType)&&"open".equals(parameter))return "toggle";if("filter".equals(nodeType)&&"enabled".equals(parameter))return "toggle";if("filter".equals(nodeType)&&parameter.endsWith("_hz"))return "range";if("filter".equals(nodeType)&&parameter.endsWith("_ms"))return "range";if("filter".equals(nodeType)&&parameter.endsWith("_db"))return "range";if("filter".equals(nodeType)&&("slope_db_oct".equals(parameter)||parameter.endsWith(".type")))return "choice";if(List.of("switch","multi_switch","selector","multi_selector","matrix").contains(nodeType)&&"active_links".equals(parameter))return "links";return "";}
+    static String controlKind(String nodeType,String parameter){if("gain".equals(nodeType)&&"gain".equals(parameter))return "slider";if("gain".equals(nodeType)&&"muted".equals(parameter))return "toggle";if("gate".equals(nodeType)&&"open".equals(parameter))return "toggle";if("filter".equals(nodeType)&&"enabled".equals(parameter))return "toggle";if("filter".equals(nodeType)&&parameter.endsWith("_hz"))return "range";if("filter".equals(nodeType)&&parameter.endsWith("_ms"))return "range";if("filter".equals(nodeType)&&parameter.endsWith("_db"))return "range";if("filter".equals(nodeType)&&("slope_db_oct".equals(parameter)||parameter.endsWith(".type")))return "choice";if(List.of("switch","selector","multi_selector","matrix").contains(nodeType)&&"active_links".equals(parameter))return "links";return "";}
     private void reemitLatestState(){String payload=lastState;if(!closed.get()&&!payload.isBlank())emit("State",payload);}
     static List<Map<String,Object>> channelRoutes(PipeWireBackend.Snapshot snapshot,Map<String,Object> config,Map<String,Object> profile,AudioNode selected,int defaultId,List<Map<String,Object>> devices){
         if(selected==null)return List.of();

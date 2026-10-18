@@ -64,9 +64,8 @@ export default class AudioMatrixQuickSettingsExtension extends Extension {
         this._client?.stop();
         this._adapter?.destroy();
         this._renderer?.destroy();
-        // The GNOME popup menu owns the inserted section and removes/destroys
-        // its actor through removeMenuItem(). Destroying it again here causes
-        // disposed-actor errors when GNOME tears down Quick Settings.
+        // The adapter owns the section, including when Shell never exposed a
+        // compatible volume menu during this extension's lifetime.
         this._client = null;
         this._adapter = null;
         this._renderer = null;

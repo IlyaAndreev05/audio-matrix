@@ -72,6 +72,7 @@ abstract class PipeWireRouteStaticSupport03 extends PipeWireRouteStaticSupport02
                     || !left.limiterInputNodeName().equals(right.limiterInputNodeName())
                     || !left.limiterOutputNodeName().equals(right.limiterOutputNodeName())) return false;
         }
+        if (next.streams().size() != previous.streams().size()) return false;
         Map<String, StreamPlan> nextStreams = new LinkedHashMap<>();
         next.streams().forEach(stream -> nextStreams.put(stream.node().name(), stream));
         for (StreamPlan left : previous.streams()) {
@@ -149,15 +150,21 @@ abstract class PipeWireRouteStaticSupport03 extends PipeWireRouteStaticSupport02
 
     protected static String configuredOutputRole(AudioNode sink, List<Map<String, Object>> devices) {
         List<Map<String, Object>> matching = devices.stream()
-                .filter(device -> DeviceSelectorMatcher.matches(sink, object(device.get("selector")))).toList();
+                .filter(device -> configuredDeviceMatches(sink, device)).toList();
         if (matching.size() != 1) return matching.isEmpty() ? "" : "ambiguous";
         return text(matching.getFirst().get("role"), "");
     }
 
     protected static String configuredOutputDeviceId(AudioNode sink, List<Map<String, Object>> devices) {
         List<Map<String, Object>> matching = devices.stream()
-                .filter(device -> DeviceSelectorMatcher.matches(sink, object(device.get("selector")))).toList();
+                .filter(device -> configuredDeviceMatches(sink, device)).toList();
         return matching.size() == 1 ? text(matching.getFirst().get("id"), "") : "";
+    }
+
+    private static boolean configuredDeviceMatches(AudioNode sink, Map<String, Object> device) {
+        if (device.get("identity") instanceof Map<?, ?>)
+            return DeviceDiscovery.resolve(List.of(sink), device).state() == DeviceDiscovery.State.ONLINE;
+        return DeviceSelectorMatcher.matches(sink, object(device.get("selector")));
     }
 
     protected static boolean hasLowPass(List<Map<String, Object>> filters) {

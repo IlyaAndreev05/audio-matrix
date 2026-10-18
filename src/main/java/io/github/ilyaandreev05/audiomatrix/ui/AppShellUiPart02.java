@@ -58,23 +58,26 @@ abstract class AppShellUiPart02 extends AppShellUiPart01 {
             outputs.setCellFactory(list -> nodeCell()); outputs.setButtonCell(nodeCell());
             AudioNode configured = configuredSink();
             AudioNode actual = physicalSinks().stream().filter(n -> n.id() == snapshot.defaultSinkId()).findFirst().orElse(null);
-            selectedSink = configured != null ? configured : actual != null ? actual : physicalSinks().stream().findFirst().orElse(null);
+            AudioNode previous=selectedSink;
+            selectedSink = previous==null?null:physicalSinks().stream().filter(node->node.name().equals(previous.name())).findFirst().orElse(null);
+            if(selectedSink==null)selectedSink=configured!=null?configured:actual;
             if (selectedSink != null) outputs.getSelectionModel().select(selectedSink);
             outputs.setOnAction(event -> {
                 AudioNode selected = outputs.getValue(); if (selected == null) return;
                 selectedSink = selected;
                 setNotice(t("Выход выбран для индивидуальных настроек и измерения.", "Output selected for individual controls and measurements."), false);
+                showPage(Page.HOME);
             });
             Label outputLabel = label(t("Выходное устройство", "Output device"), ""); outputLabel.setLabelFor(outputs);
-            Slider level = new Slider(0, 1, selectedSink != null && Double.isFinite(selectedSink.volume()) ? Math.min(1, selectedSink.volume()) : 0);
+            Slider level = new Slider(0, 1, selectedSink != null && !selectedSink.muted() && Double.isFinite(selectedSink.volume()) ? Math.min(1, selectedSink.volume()) : 0);
             level.setAccessibleText(t("Громкость выходного устройства", "Output device volume")); level.setShowTickMarks(false);
-            Label percent = label(volumeLabel(selectedSink == null ? Double.NaN : selectedSink.volume()), "stat-value");
+            Label percent = label(volumeLabel(selectedSink == null ? Double.NaN : selectedSink.muted()?0:selectedSink.volume()), "stat-value");
             PauseTransition debounce = new PauseTransition(Duration.millis(160));
             level.valueProperty().addListener((obs, old, value) -> {
                 percent.setText(volumeLabel(value.doubleValue()));
                 if (selectedSink == null) return;
                 AudioNode target = selectedSink;
-                debounce.setOnFinished(e -> backend.setVolume(target.id(), level.getValue()).whenComplete((v, error) -> {
+                debounce.setOnFinished(e -> backend.setMute(target.id(),false).thenCompose(ignored->backend.setVolume(target.id(), level.getValue())).whenComplete((v, error) -> {
                     if (error != null) Platform.runLater(() -> setNotice(t("Не удалось изменить уровень: ", "Could not change the level: ") + rootMessage(error), true));
                 }));
                 debounce.playFromStart();

@@ -69,12 +69,13 @@ public final class GraphFilterEditor {
                 Object bands = "eq".equals(source.processor()) ? params.get("bands") :
                         List.of(Map.of("type", "peaking", "frequency_hz", 100.0, "gain_db", 0.0, "q", 1.0));
                 eqBands = new GraphEqBandEditor(bands, t);
+                eqBands.setOnChange(this::validate);
                 fields.getChildren().add(eqBands.view());
             }
             case "low_pass", "high_pass" -> renderPassFields(params);
             case "delay" -> {
                 delay = field(t.apply("Задержка ветки (мс)", "Path delay (ms)"),
-                        value(params, "delay_ms", 0.0)); fields.getChildren().add(delay);
+                        value(params, "delay_ms", 0.0)); fields.getChildren().add(labeled(delay));
             }
             case "limiter" -> renderLimiterFields(params);
             default -> fields.getChildren().add(new Label("Unsupported filter"));
@@ -83,17 +84,21 @@ public final class GraphFilterEditor {
     }
 
     private void renderPassFields(Map<String, Object> params) {
-        frequency = field(t.apply("Частота среза (Hz)", "Cutoff frequency (Hz)"), value(params, "frequency_hz", 100.0));
+        frequency = field(t.apply("Частота среза (Hz)", "Cutoff frequency (Hz)"),
+                value(params, "frequency_hz", "low_pass".equals(effect.getValue()) ? 120.0 : 20.0));
         slope = new ComboBox<>(); slope.getItems().setAll(6, 12, 18, 24, 36, 48);
-        slope.setValue((int) number(params.get("slope_db_oct"), 24));
-        fields.getChildren().addAll(frequency, new Label(t.apply("Крутизна (dB/октаву)", "Slope (dB/octave)")), slope);
+        slope.setValue((int) number(params.get("slope_db_oct"), 12));
+        slope.valueProperty().addListener((observable, oldValue, newValue) -> validate());
+        fields.getChildren().addAll(labeled(frequency), new Label(t.apply("Крутизна (dB/октаву)", "Slope (dB/octave)")), slope);
     }
 
     private void renderLimiterFields(Map<String, Object> params) {
         ceiling = field(t.apply("Порог (dBFS)", "Ceiling (dBFS)"), value(params, "ceiling_db", -1.0));
         lookahead = field(t.apply("Lookahead (мс)", "Lookahead (ms)"), value(params, "lookahead_ms", 5.0));
         release = field(t.apply("Восстановление (мс)", "Release (ms)"), value(params, "release_ms", 80.0));
-        fields.getChildren().addAll(ceiling, lookahead, release);
+        fields.getChildren().addAll(labeled(ceiling), labeled(lookahead), labeled(release),
+                new Label(t.apply("Цифровой limiter не гарантирует защиту динамика от превышения мощности.",
+                        "A digital limiter does not guarantee protection against speaker power overload.")));
     }
 
     private void validate() {
@@ -113,6 +118,8 @@ public final class GraphFilterEditor {
             case "eq" -> params.put("bands", eqBands.bands());
             case "low_pass", "high_pass" -> {
                 params.put("frequency_hz", parse(frequency)); params.put("slope_db_oct", slope.getValue());
+                if (source.processor().equals(effect.getValue()) && source.parameters().containsKey("q"))
+                    params.put("q", source.parameters().get("q"));
             }
             case "delay" -> params.put("delay_ms", parse(delay));
             case "limiter" -> {
@@ -126,9 +133,11 @@ public final class GraphFilterEditor {
 
     private TextField field(String label, String initial) {
         TextField input = new TextField(initial); input.setPromptText(label);
+        input.setAccessibleText(label);
         input.textProperty().addListener((observable, oldValue, newValue) -> validate());
         return input;
     }
+    private static VBox labeled(TextField input) { return new VBox(3, new Label(input.getPromptText()), input); }
 
     private static String value(Map<String, Object> params, String key, double fallback) {
         return Double.toString(number(params.get(key), fallback));

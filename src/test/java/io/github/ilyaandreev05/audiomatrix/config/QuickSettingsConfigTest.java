@@ -25,7 +25,7 @@ class QuickSettingsConfigTest {
         String groupId = String.valueOf(control.get("group_id"));
         Map<String, Object> group = QuickSettingsConfig.groups(config).stream()
                 .filter(candidate -> groupId.equals(candidate.get("id"))).findFirst().orElse(null);
-        assertEquals(7, config.get("schema_version"));
+        assertEquals(DefaultConfig.SCHEMA_VERSION, config.get("schema_version"));
         assertNotNull(group);
         assertEquals("Bass and events", group.get("name"));
         assertEquals("Bass and events", control.get("section"));
@@ -35,8 +35,9 @@ class QuickSettingsConfigTest {
     @Test void defaultConfigurationHasTheFourSuggestedDisplayGroups() {
         List<Map<String, Object>> groups = QuickSettingsConfig.groups(DefaultConfig.create());
 
-        assertEquals(List.of("sources", "outputs", "routing", "effects"),
+        assertEquals(List.of("sources", "outputs", "routing", "effects", groups.get(4).get("id")),
                 groups.stream().map(group -> String.valueOf(group.get("id"))).toList());
+        assertEquals("Закреплённый тактильный тракт", groups.get(4).get("name"));
         assertFalse(groups.getFirst().get("collapsed").equals(true));
     }
 
@@ -47,7 +48,7 @@ class QuickSettingsConfigTest {
                 "id", "gain-control", "route_id", "route-1", "node_id", "gain-1", "parameter_id", "gain",
                 "section", "Коммутация и управление", "label", "Bass", "order", 1)));
         Map<String, Object> route = DefaultConfig.map(
-                "id", "route-1", "name", "Desk", "profile_id", "desk", "group_id", "", "nodes", List.of(
+                "id", "route-1", "name", "Desk", "profile_id", "monitor", "group_id", "", "nodes", List.of(
                         DefaultConfig.map("id", "source-1", "name", "Chrome", "type", "source",
                                 "channels", List.of("FL", "FR"), "parameters", DefaultConfig.map("selector", "application:chrome")),
                         DefaultConfig.map("id", "gain-1", "name", "Bass", "type", "gain",
@@ -56,11 +57,17 @@ class QuickSettingsConfigTest {
                                 "channels", List.of("FL", "FR"), "parameters", DefaultConfig.map("device_id", "monitor"))),
                 "connections", List.of());
         config.put("route_library", List.of(route));
+        config.put("active_route", "route-1");
+        @SuppressWarnings("unchecked") List<Map<String, Object>> profiles =
+                (List<Map<String, Object>>) config.get("profiles");
+        profiles.getFirst().put("selected_route_id", "route-1");
+        config.put("profiles", List.of(profiles.getFirst()));
+        QuickSettingsConfig.pins(config).clear();
 
         ConfigMigration.upgradeConfig(config);
 
         List<Map<String, Object>> pins = QuickSettingsConfig.pins(config);
-        assertEquals(7, config.get("schema_version"));
+        assertEquals(DefaultConfig.SCHEMA_VERSION, config.get("schema_version"));
         assertEquals(4, pins.size());
         assertTrue(pins.stream().anyMatch(pin -> "source-1".equals(pin.get("node_id"))
                 && "sources".equals(pin.get("group_id"))));

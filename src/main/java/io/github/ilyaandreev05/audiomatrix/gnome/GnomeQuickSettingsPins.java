@@ -4,9 +4,12 @@ import io.github.ilyaandreev05.audiomatrix.audio.AudioNode;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.config.QuickSettingsConfig;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
+import io.github.ilyaandreev05.audiomatrix.graph.DeviceSlotNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphConnection;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphCommonVibro;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
+import io.github.ilyaandreev05.audiomatrix.graph.FilterNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GainNode;
 import io.github.ilyaandreev05.audiomatrix.graph.MixerNode;
 import io.github.ilyaandreev05.audiomatrix.graph.OutputNode;
@@ -27,28 +30,44 @@ final class GnomeQuickSettingsPins {
         String routeId = String.valueOf(config.getOrDefault("active_route", ""));
         Map<String, Object> route = maps(config.get("route_library")).stream()
                 .filter(item -> routeId.equals(item.get("id"))).findFirst().orElse(null);
-        if (route == null) return List.of();
-        AudioGraph graph;
-        try { graph = GraphCodec.fromMap(route); }
-        catch (RuntimeException invalid) { return List.of(); }
+        AudioGraph graph = null;
+        if (route != null) try { graph = GraphCodec.fromMap(route); }
+        catch (RuntimeException invalid) { /* Common pins remain available. */ }
+        AudioGraph commonGraph = null;
+        try { commonGraph = GraphCommonVibro.graph(config); }
+        catch (RuntimeException invalid) { /* Invalid common state is not published. */ }
         List<Map<String, Object>> result = new ArrayList<>();
         for (Map<String, Object> pin : QuickSettingsConfig.pins(config)) {
-            if (!routeId.equals(pin.get("route_id"))) continue;
+            boolean common = GraphCommonVibro.COMMON_ROUTE_ID.equals(pin.get("route_id"));
+            if (!common && !routeId.equals(pin.get("route_id"))) continue;
+            AudioGraph pinGraph = common ? commonGraph : graph;
+            if (pinGraph == null) continue;
             String nodeId = String.valueOf(pin.getOrDefault("node_id", ""));
-            GraphNode node = graph.nodes().stream().filter(item -> nodeId.equals(item.id())).findFirst().orElse(null);
+            GraphNode node = pinGraph.nodes().stream().filter(item -> nodeId.equals(item.id())).findFirst().orElse(null);
             if (node == null) continue;
-            if (isEndpointGain(graph, node)) continue;
+            if (node instanceof FilterNode filter && "phase_invert".equals(filter.processor())) continue;
+            if (isEndpointGain(pinGraph, node)) continue;
             Map<String, Object> state = pinState(pin, node);
+            state.put("pinned", common);
             state.put("controls", controlsFor(pin, quickControls));
             if (node instanceof SourceNode source) {
-                state.put("applications", applicationsFor(source, applications, graph));
-                GainNode sourceGain = GnomeGraphSourceGain.forSource(graph, source.id());
-                if (sourceGain != null) state.put("sourceGain", sourceGainState(routeId, source, sourceGain));
+                List<Map<String, Object>> sourceApplications = applicationsFor(source, applications, pinGraph);
+                state.put("applications", sourceApplications);
+                state.put("tabAdapterAvailable", sourceApplications.stream()
+                        .anyMatch(app -> Boolean.TRUE.equals(app.get("tabAdapterAvailable"))));
+                GainNode sourceGain = GnomeGraphSourceGain.forSource(pinGraph, source.id());
+                if (sourceGain != null) state.put("sourceGain", sourceGainState(
+                        String.valueOf(pin.get("route_id")), source, sourceGain));
             }
             if (node instanceof OutputNode output)
-                state.put("output", outputFor(output, graph, snapshot, config, outputs));
+                state.put("output", outputFor(output, pinGraph, snapshot, config, outputs));
+            if (node instanceof DeviceSlotNode slot)
+                state.put("output", GnomeDeviceSlotState.describe(slot, snapshot, config));
+            if (node instanceof GainNode gain)
+                state.put("gain", Map.of("routeId", String.valueOf(pin.get("route_id")),
+                        "nodeId", gain.id(), "volume", gain.gain(), "muted", gain.muted()));
             if (node instanceof MixerNode mixer)
-                state.put("mixerInputs", mixerInputs(graph, mixer));
+                state.put("mixerInputs", mixerInputs(pinGraph, mixer));
             result.add(state);
         }
         result.sort(java.util.Comparator.comparingInt(item -> number(item.get("order"), 0)));
@@ -136,11 +155,12 @@ final class GnomeQuickSettingsPins {
         AudioNode resolved = output.deviceId().equals("system_default")
                 ? snapshot.sinks().stream().filter(node -> node.id() == snapshot.defaultSinkId()).findFirst().orElse(null)
                 : GnomeOutputState.resolve(snapshot.sinks(), output.deviceId(), devices);
-        if (resolved == null) return Map.of("available", false, "id", output.deviceId(), "name", output.name());
-        Map<String, Object> state = outputs.stream().filter(item -> resolved.name().equals(item.get("name")))
-                .findFirst().map(item -> withAvailability(item, true))
-                .orElseGet(() -> new LinkedHashMap<>(Map.of("available", false,
-                        "id", output.deviceId(), "name", output.name())));
+        Map<String, Object> state = resolved == null
+                ? new LinkedHashMap<>(Map.of("available", false, "id", output.deviceId(), "name", output.name()))
+                : outputs.stream().filter(item -> resolved.name().equals(item.get("name")))
+                    .findFirst().map(item -> withAvailability(item, true))
+                    .orElseGet(() -> new LinkedHashMap<>(Map.of("available", false,
+                            "id", output.deviceId(), "name", output.name())));
         GainNode gain = GnomeGraphOutputGain.forOutput(graph, output);
         if (gain == null) return state;
         state.put("volume", gain.gain());

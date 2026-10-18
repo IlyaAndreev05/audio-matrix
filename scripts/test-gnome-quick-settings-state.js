@@ -1,4 +1,5 @@
-import {hasAvailableMenuState, menuLevelRows, menuStructureSignature} from '../gnome/audio-matrix-quick-settings/menu-state.js';
+import {hasAvailableMenuState, menuLevelRows, menuStructureSignature, orderedQuickGroups,
+    visibleApplicationStreams} from '../gnome/audio-matrix-quick-settings/menu-state.js';
 
 function assert(condition, message) {
     if (!condition)
@@ -69,5 +70,69 @@ const changedRange = clone(range);
 changedRange.state.quickControls[0].maximum = 10000;
 assert(menuStructureSignature(changedRange) !== rangeSignature,
     'Changing a filter control range must rebuild its slider');
+
+const groups = {quickGroups: [
+    {id: 'outputs', name: 'My output group', order: 20},
+    {id: 'custom', name: 'Anything / любые имена', order: 10},
+    {id: 'sources', name: 'Sources', order: 0},
+]};
+assert(orderedQuickGroups(groups).map(group => group.id).join(',') === 'sources,custom,outputs',
+    'Source/output/custom groups must share one persisted vertical ordering');
+assert(groups.quickGroups[0].id === 'outputs', 'Rendering must not mutate the shared snapshot');
+const renamed = clone(snapshot);
+renamed.state.quickGroups[0].name = 'Anything / любые имена';
+assert(menuStructureSignature(renamed) !== firstSignature, 'Arbitrary group renames must reach Shell');
+const chrome = {id: 'google-chrome', streams: [{id: 'tab-1', name: 'YouTube'}]};
+assert(visibleApplicationStreams(chrome).length === 0, 'No individual Chrome controls without a real adapter');
+assert(visibleApplicationStreams(chrome, {tabAdapterAvailable: true}).length === 1,
+    'An available source adapter enables real individual tab controls');
+assert(visibleApplicationStreams({...chrome, tabAdapterAvailable: false}, {tabAdapterAvailable: true}).length === 0,
+    'Application-specific unavailable capability overrides the source capability');
+assert(visibleApplicationStreams({id: 'chromium-browser', streams: chrome.streams}).length === 0,
+    'Chromium also requires a real tab adapter');
+assert(visibleApplicationStreams({id: 'telegram', streams: chrome.streams}).length === 1,
+    'Native non-browser streams must remain controllable without a browser adapter');
+const capabilityChange = clone(snapshot);
+capabilityChange.state.quickPins[0].tabAdapterAvailable = true;
+assert(menuStructureSignature(capabilityChange) !== firstSignature,
+    'Adapter connect/disconnect must rebuild the visible stream controls');
+const gain = clone(snapshot);
+gain.state.quickPins.push({id: 'pin-gain', nodeId: 'vibro-gain', name: 'Vibro Gain',
+    nodeType: 'gain', groupId: 'vibro', order: 1,
+    gain: {routeId: 'common', nodeId: 'gain-1', volume: 0.5, muted: false}, controls: [], applications: []});
+const gainSignature = menuStructureSignature(gain);
+assert(menuLevelRows(gain.state).get('graph-gain:vibro-gain')?.volume === 0.5,
+    'Pinned Gain must expose a live level row');
+const movedGain = clone(gain);
+movedGain.state.quickPins.at(-1).gain.volume = 0.2;
+movedGain.state.quickPins.at(-1).gain.muted = true;
+assert(menuStructureSignature(movedGain) === gainSignature,
+    'Moving or muting a pinned Gain must update the row without rebuilding the menu');
+const retargetedGain = clone(gain);
+retargetedGain.state.quickPins.at(-1).gain.nodeId = 'gain-2';
+assert(menuStructureSignature(retargetedGain) !== gainSignature,
+    'Replacing the Gain command target must rebuild the slider');
+
+const pinMark = clone(snapshot);
+pinMark.state.quickPins[0].pinned = true;
+assert(menuStructureSignature(pinMark) !== firstSignature, 'Shared Pin marking changes must refresh Shell');
+const slot = clone(snapshot);
+slot.state.quickPins[0].nodeType = 'device_slot';
+slot.state.quickPins[0].output = {id: 'usb', name: 'Vibro slot', deviceName: 'USB DAC',
+    available: false, state: 'UNBOUND'};
+const unboundSlot = menuStructureSignature(slot);
+slot.state.quickPins[0].output.state = 'ONLINE';
+slot.state.quickPins[0].output.available = true;
+assert(menuStructureSignature(slot) !== unboundSlot, 'Device Slot ONLINE/OFFLINE changes must rebuild its row');
+slot.state.quickPins[0].output.state = 'CONFLICT';
+assert(menuStructureSignature(slot) !== unboundSlot, 'Device conflicts must reach the rendered row');
+const renamedSlot = clone(slot);
+renamedSlot.state.quickPins[0].output.name = 'Scene output';
+assert(menuStructureSignature(renamedSlot) !== menuStructureSignature(slot),
+    'Arbitrary slot label changes must reach the row');
+const hardwareRename = clone(slot);
+hardwareRename.state.quickPins[0].output.deviceName = 'Another DAC';
+assert(menuStructureSignature(hardwareRename) === menuStructureSignature(slot),
+    'deviceName must not be rendered or trigger structural rebuilds');
 
 print('GNOME mixer state tests passed (in-place volume/filter updates, graph output gain binding, structural rebuilds)');

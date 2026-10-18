@@ -6,7 +6,20 @@ export default class AudioMatrixMenuMixer {
         this._send = send;
     }
 
-    render(routeId, nodeId, inputs, t, target) {
+    render(routeId, nodeId, inputs, t, target, compact = false) {
+        if (compact) {
+            for (const input of inputs || []) {
+                const label = input.id === 'bass' ? t.bass
+                    : input.id === 'events' ? t.events : input.name || input.id;
+                const item = new PopupMenu.PopupSwitchMenuItem(label, !input.muted);
+                item.connect('toggled', () => this._send('toggle_mixer_input_mute',
+                    routeId + '\t' + nodeId + '\t' + input.id));
+                target.addMenuItem(item);
+            }
+            if (!(inputs || []).length)
+                target.addMenuItem(new PopupMenu.PopupMenuItem(t.noMixerInputs, {reactive: false, can_focus: false}));
+            return;
+        }
         for (const input of inputs || []) {
             this._addLevelRow({
                 id: this.rowId(nodeId, input.id), name: input.name || input.id,

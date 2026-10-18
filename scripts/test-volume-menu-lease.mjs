@@ -28,11 +28,26 @@ assert.equal(section.actor.visible, false);
 
 const output = {
     deviceCount: 1,
-    menuEnabled: false,
+    _menuEnabled: false,
+    _listener: null,
+    get menuEnabled() { return this._menuEnabled; },
+    set menuEnabled(value) {
+        if (this._menuEnabled === value) return;
+        this._menuEnabled = value;
+        this._listener?.();
+    },
+    connect(signal, listener) {
+        assert.equal(signal, 'notify::menu-enabled');
+        this._listener = listener;
+        return 1;
+    },
+    disconnect(id) { assert.equal(id, 1); this._listener = null; },
     _sync() { this.menuEnabled = this.deviceCount > 1; },
 };
 const originalSync = output._sync;
 const button = new MenuButtonLease(output);
+assert.equal(button.isCurrent(), true);
+assert.equal(output._sync, originalSync, 'Lease must not monkey-patch Shell methods');
 output._sync();
 assert.equal(output.menuEnabled, true);
 output.deviceCount = 3;
@@ -44,5 +59,18 @@ assert.equal(output.menuEnabled, true);
 output.deviceCount = 1;
 output._sync();
 assert.equal(output.menuEnabled, false);
+assert.equal(button.isCurrent(), false);
+assert.equal(output._listener, null, 'Disabling must disconnect the visibility override');
+button.restore();
+
+const propertyOnly = {
+    menuEnabled: false,
+    connect() { return 2; },
+    disconnect(id) { assert.equal(id, 2); },
+};
+const propertyLease = new MenuButtonLease(propertyOnly);
+assert.equal(propertyOnly.menuEnabled, true);
+propertyLease.restore();
+assert.equal(propertyOnly.menuEnabled, false, 'Shell variants without _sync must restore the prior state');
 
 console.log('Volume menu leases preserve stock state across repeated attachment and detach');

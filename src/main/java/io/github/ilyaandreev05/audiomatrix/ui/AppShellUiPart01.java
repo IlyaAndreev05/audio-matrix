@@ -63,6 +63,10 @@ abstract class AppShellUiPart01 extends AppShellState {
     public void start() {
         meterRefresh.setCycleCount(Timeline.INDEFINITE);
         meterRefresh.play();
+        routeRefresh = new Timeline(new KeyFrame(javafx.util.Duration.seconds(1),
+                event -> maybeApplyConfiguredRoutes(store.snapshot(), backend.current())));
+        routeRefresh.setCycleCount(Timeline.INDEFINITE);
+        routeRefresh.play();
         gnomeBridge.start();
         publishGnomeState();
         backend.start(next -> Platform.runLater(() -> {

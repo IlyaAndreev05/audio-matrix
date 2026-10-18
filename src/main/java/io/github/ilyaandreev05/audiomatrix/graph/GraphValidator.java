@@ -48,6 +48,11 @@ public final class GraphValidator {
                 errors.add("Channel layout mismatch on connection " + edge.id() + ": " + source.channels() + " → " + target.channels());
             if (edge.enabled()) adjacency.computeIfAbsent(edge.fromNode(), ignored -> new HashSet<>()).add(edge.toNode());
         }
+        for (GraphNode node : graph.nodes()) if (node instanceof DeviceSlotNode) {
+            long outputs = graph.connections().stream().filter(GraphConnection::enabled)
+                    .filter(edge -> edge.fromNode().equals(node.id())).count();
+            if (outputs > 1) errors.add("Device Slot " + node.id() + " accepts one logical output");
+        }
         if (hasCycle(nodes.keySet(), adjacency)) errors.add("Graph contains a feedback cycle");
         return List.copyOf(errors);
     }

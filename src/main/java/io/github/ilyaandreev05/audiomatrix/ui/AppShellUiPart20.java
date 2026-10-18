@@ -69,6 +69,12 @@ abstract class AppShellUiPart20 extends AppShellUiPart19 {
     }
 
     protected List<AudioNode> matchingNodes(Map<String, Object> device) {
+        if (device.get("identity") instanceof Map<?, ?>) {
+            List<AudioNode> all = new ArrayList<>(physicalSinks());
+            all.addAll(snapshot.sources());
+            AudioNode resolved = DeviceDiscovery.resolve(all, device).node();
+            return resolved == null ? List.of() : List.of(resolved);
+        }
         Map<String, Object> selector = map(device.get("selector"));
         return matchingNodes(new ConfigArchive.ImportedDevice(String.valueOf(device.getOrDefault("id", "")),
                 String.valueOf(device.getOrDefault("name", device.getOrDefault("id", "Device"))),
@@ -77,8 +83,8 @@ abstract class AppShellUiPart20 extends AppShellUiPart19 {
 
     protected List<ConfigArchive.DeviceTarget> availableDeviceTargets() {
         List<ConfigArchive.DeviceTarget> targets = new ArrayList<>();
-        physicalSinks().forEach(node -> targets.add(new ConfigArchive.DeviceTarget("output", node.name())));
-        snapshot.sources().forEach(node -> targets.add(new ConfigArchive.DeviceTarget("input", node.name())));
+        physicalSinks().forEach(node -> targets.add(new ConfigArchive.DeviceTarget("output", node.name(), node.identity())));
+        snapshot.sources().forEach(node -> targets.add(new ConfigArchive.DeviceTarget("input", node.name(), node.identity())));
         return List.copyOf(targets);
     }
 
@@ -197,10 +203,11 @@ abstract class AppShellUiPart20 extends AppShellUiPart19 {
     }
 
     protected void saveDeviceVolume(AudioNode sink, double volume) {
-        backend.setVolume(sink.id(), volume);
+        backend.setMute(sink.id(),false).thenCompose(ignored->backend.setVolume(sink.id(), volume));
         updateConfig(config -> {
             Map<String, Object> device = ensureDevice(config, sink);
             device.put("volume", volume);
+            device.put("mute", false);
         });
     }
 

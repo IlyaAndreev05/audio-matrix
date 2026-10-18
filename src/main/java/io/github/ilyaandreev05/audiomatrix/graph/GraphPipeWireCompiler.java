@@ -16,12 +16,14 @@ public final class GraphPipeWireCompiler {
     private GraphPipeWireCompiler() {}
 
     public static Map<String,Object> compile(AudioGraph graph,Map<String,Object> baseConfig){
+        graph=GraphCommonVibro.effectiveGraph(graph,baseConfig);
         List<String> problems=GraphValidator.validate(graph);if(!problems.isEmpty())throw new IllegalArgumentException(String.join("; ",problems));
         List<SourceNode> sources=graph.nodes().stream().filter(SourceNode.class::isInstance).map(SourceNode.class::cast).toList();
-        if(sources.isEmpty()||graph.nodes().stream().noneMatch(OutputNode.class::isInstance))throw new IllegalArgumentException("The active route needs at least one source and one output");
+        if(sources.isEmpty()||graph.nodes().stream().noneMatch(node->node instanceof OutputNode||node instanceof DeviceSlotNode))throw new IllegalArgumentException("The active route needs at least one source and one output or device slot");
         Map<String,GraphNode> nodes=new LinkedHashMap<>();graph.nodes().forEach(node->nodes.put(node.id(),node));
+        rejectSharedVibroOutput(graph);
         for(GraphNode node:graph.nodes())if(node instanceof RouterNode&&node.type().equals("router"))
-            throw new IllegalArgumentException("Legacy router node '"+node.name()+"' has no typed switching behavior; replace it with a Switch, MultiSwitch, Selector or Matrix node");
+            throw new IllegalArgumentException("Legacy router node '"+node.name()+"' has no typed switching behavior; replace it with a Switch, Selector or Matrix node");
         List<Map<String,Object>> buses=new ArrayList<>(),routes=new ArrayList<>(),applications=new ArrayList<>();
         List<String> activeBusIds=new ArrayList<>(),activeRouteIds=new ArrayList<>(),eventInputBuses=new ArrayList<>();
         Map<String,Object> routeChains=new LinkedHashMap<>();Map<String,Map<String,Object>> outputLimiters=new LinkedHashMap<>();
@@ -49,7 +51,7 @@ public final class GraphPipeWireCompiler {
             List<GraphConnection> first=outgoing(graph,source.id());
             for(GraphConnection edge:first){PathState state=new PathState(source.id(),edge.gain(),false,true,new ArrayList<>(),new ArrayList<>());state.edgeIds.add(edge.id());walk(edge.toNode(),edge.toPort(),state,nodes,graph,new HashSet<>(),routes,activeRouteIds,routeChains,outputLimiters,sourceOutputs);}
         }
-        if(routes.isEmpty())throw new IllegalArgumentException("The graph has no enabled path from a source to an output");
+        if(routes.isEmpty()&&graph.nodes().stream().noneMatch(DeviceSlotNode.class::isInstance))throw new IllegalArgumentException("The graph has no enabled path from a source to an output");
         Map<String,Object> result=deep(baseConfig);
         result.put("buses",buses);result.put("routes",routes);result.put("applications",applications);result.put("event_input_buses",eventInputBuses);result.put("graph_default_bus",defaultBus);
         Map<String,Object> profile=activeProfile(result);profile.put("mode","multi-output");profile.put("active_buses",activeBusIds);profile.put("active_routes",activeRouteIds);
@@ -60,11 +62,40 @@ public final class GraphPipeWireCompiler {
         return result;
     }
 
+    private static String deviceReference(String deviceId){
+        return deviceId!=null&&deviceId.startsWith("device:")?deviceId.substring("device:".length()):deviceId;
+    }
+
+    private static void rejectSharedVibroOutput(AudioGraph graph){
+        String vibro="";
+        for(GraphNode node:graph.nodes())
+            if(node instanceof DeviceSlotNode slot&&GraphCommonVibro.VIBRO_OUTPUT_ID.equals(slot.id()))
+                vibro=deviceReference(slot.deviceId());
+        if(vibro.isBlank())return;
+        for(GraphNode node:graph.nodes()){
+            if(GraphCommonVibro.VIBRO_OUTPUT_ID.equals(node.id()))continue;
+            String device=deviceReference(node instanceof DeviceSlotNode slot?slot.deviceId():node instanceof OutputNode output?output.deviceId():"");
+            if(vibro.equals(device))throw new IllegalArgumentException("Physical output '"+device
+                    +"' is assigned to both the Vibro slot and '"+node.name()+"'; choose separate outputs");
+        }
+    }
+
     private static void walk(String nodeId,String incomingPort,PathState path,Map<String,GraphNode> nodes,AudioGraph graph,Set<String> visiting,
                              List<Map<String,Object>> routes,List<String> activeRoutes,Map<String,Object> routeChains,
                              Map<String,Map<String,Object>> outputLimiters,Set<String> sourceOutputs){
         if(!visiting.add(nodeId))throw new IllegalArgumentException("Feedback cycle reached during graph compilation");
         GraphNode node=nodes.get(nodeId);if(node==null)throw new IllegalArgumentException("Connection references missing node "+nodeId);
+        if(node instanceof DeviceSlotNode slot){
+            String deviceId=deviceReference(slot.deviceId());
+            if(deviceId.isBlank()){visiting.remove(nodeId);return;}
+            List<GraphConnection> next=outgoing(graph,nodeId);
+            if(next.isEmpty())node=new OutputNode(slot.id(),slot.name(),deviceId,slot.inputs().getFirst().channels());
+            else for(GraphConnection edge:next){
+                GraphNode target=nodes.get(edge.toNode());
+                if(!(target instanceof OutputNode output)||!deviceId.equals(deviceReference(output.deviceId())))
+                    throw new IllegalArgumentException("A bound device slot may only feed its assigned physical output");
+            }
+        }
         boolean endpointGain=node instanceof GainNode gain&&!gain.endpointNodeId().isBlank();
         if(path.outputLimiter!=null&&!(node instanceof OutputNode)&&!(node instanceof RouterNode)&&!endpointGain)
             throw new IllegalArgumentException("Peak limiter nodes must be the final processor before an output; move '"+node.name()+"' before the limiter");
@@ -92,6 +123,10 @@ public final class GraphPipeWireCompiler {
             String targetKey=path.sourceId+"\u0000"+output.deviceId()+"\u0000"+targetChannels;
             if(path.selected&&!sourceOutputs.add(targetKey))throw new IllegalArgumentException("Multiple paths from source '"+path.sourceId+"' are selected for the same channels of output '"+output.deviceId()+"'; route alternatives through a Switch or Matrix node");
             String id=stableRouteId(path,output);boolean muted=path.muted||!path.selected;Map<String,Object> route=map("id",id,"name",path.sourceId+" → "+output.name(),"from",path.sourceId,"to",output.deviceId(),"volume",muted?0:Math.max(0,Math.min(1,path.gain)),"gain_db",0,"delay_ms",path.delayMs,"mute",muted,"channel_map","stereo","enabled",true);
+            if(GraphCommonVibro.VIBRO_OUTPUT_ID.equals(output.id()))route.put("role","vibro");
+            if(GraphCommonVibro.isBuiltinRoute(graph.id())&&"octine-event-source".equals(path.sourceId)
+                    &&!GraphCommonVibro.VIBRO_OUTPUT_ID.equals(output.id()))
+                throw new IllegalArgumentException("EVENT must not reach ordinary audio outputs");
             route.put("channel_map",layout(output.inputs().getFirst().channels()));
             if(channelMatrix!=null)route.put("channel_matrix",channelMatrix.toMap());
             if(!path.filters.isEmpty()){String chainId="graph-chain-"+id;route.put("filters_ref","dsp.route_chains."+chainId);routeChains.put(chainId,map("enabled",true,"filters",List.copyOf(path.filters)));}
@@ -110,8 +145,10 @@ public final class GraphPipeWireCompiler {
             }else{
                 path.filters.addAll(GraphFilterCompiler.routeFilters(filter));
             }
-        }else if(node instanceof MixerNode mixer){path.gain*=mixer.inputGains().getOrDefault(incomingPort,0.0);path.muted|=mixer.inputMuted(incomingPort);}
-        else throw new IllegalArgumentException("Unsupported processing node "+node.type()+" '"+node.name()+"'");
+        }else if(node instanceof MixerNode mixer){path.gain*=mixer.inputGains().getOrDefault(incomingPort,0.0);path.muted|=mixer.inputMuted(incomingPort);
+            path.protectMixedOutput|=graph.connections().stream().filter(GraphConnection::enabled).filter(edge->edge.toNode().equals(mixer.id()))
+                    .filter(edge->!mixer.inputMuted(edge.toPort())).map(GraphConnection::toPort).distinct().count()>1;}
+        else if(!(node instanceof DeviceSlotNode))throw new IllegalArgumentException("Unsupported processing node "+node.type()+" '"+node.name()+"'");
         List<GraphConnection> next=outgoing(graph,nodeId);
         if(next.isEmpty())throw new IllegalArgumentException("Node '"+node.name()+"' has no connection to an output");
         for(GraphConnection edge:next){if(!edge.enabled())continue;PathState branch=path.copy();applyEdgeGain(branch,edge);walk(edge.toNode(),edge.toPort(),branch,nodes,graph,new HashSet<>(visiting),routes,activeRoutes,routeChains,outputLimiters,sourceOutputs);}

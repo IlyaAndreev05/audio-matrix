@@ -42,7 +42,8 @@ abstract class AppShellUiPart04 extends AppShellUiPart03 {
     protected VBox graphPage() {
         Map<String,Object> config=store.snapshot();
         String profileId=GraphRouteLibrary.activeProfileId(config);
-        List<Map<String,Object>> routes=GraphRouteLibrary.routesForProfile(config,profileId);
+        List<Map<String,Object>> routes=new ArrayList<>(GraphRouteLibrary.routesForProfile(config,profileId));
+        if(config.get("common_vibro_graph") instanceof Map<?,?>)routes.addFirst(GraphUiRoutes.route(config,GraphCommonVibro.COMMON_ROUTE_ID));
         VBox page=page(t("Один активный маршрут содержит все одновременно работающие ветки. Изменения хранятся в config.json.",
                 "One active route contains all branches that run together. Changes are stored in config.json."));
         String chosen=routes.stream().anyMatch(route->selectedGraphRouteId.equals(route.get("id")))?selectedGraphRouteId:string(config.get("active_route"),"");
@@ -61,20 +62,26 @@ abstract class AppShellUiPart04 extends AppShellUiPart03 {
             if(graph.nodes().stream().noneMatch(node->node.id().equals(selectedGraphNodeId)))selectedGraphNodeId=graph.nodes().isEmpty()?"":graph.nodes().getFirst().id();
             List<String> issues=GraphValidator.validate(graph);
             VBox status=card(t("Состояние графа", "Graph status"));
-            boolean active=graph.id().equals(config.get("active_route"));
-            status.getChildren().addAll(label((active?t("Активен в конфигурации", "Active in configuration"):t("Сохранённый маршрут", "Saved route"))+" · "+graph.nodes().size()+t(" нод · "," nodes · ")+graph.connections().size()+t(" связей"," links"),active?"accent":"muted"),
+            boolean common=GraphUiRoutes.common(graph.id());
+            boolean active=common||graph.id().equals(config.get("active_route"));
+            status.getChildren().addAll(label((common?t("Общий закреплённый Vibro · общий для рабочих пространств","Pinned common Vibro · shared across workspaces"):active?t("Активен в конфигурации", "Active in configuration"):t("Сохранённый маршрут", "Saved route"))+" · "+graph.nodes().size()+t(" нод · "," nodes · ")+graph.connections().size()+t(" связей"," links"),active?"accent":"muted"),
                     label(t("Применение графа перенастроит PipeWire. Неподдерживаемые ноды будут отклонены до внесения изменений.",
                             "Applying this graph will reconfigure PipeWire. Unsupported nodes are rejected before any changes."),"warning"),
                     actionButton(t("Применить активный граф к PipeWire","Apply active graph to PipeWire"),this::applyRoutes));
+            var diagnostics=routeManager.diagnostics();
+            status.getChildren().add(label(t("Последнее согласование (не live): ","Last reconciliation (not live): ")+
+                    "desired="+diagnostics.desiredLinks()+" · observed="+diagnostics.observedLinks()+" · missing="+diagnostics.missingLinks()+
+                    " · unavailable outputs="+diagnostics.unavailableOutputs()+" · conflicting outputs="+diagnostics.conflictingOutputs()+
+                    " · timeouts="+diagnostics.commandTimeouts()+" · active="+diagnostics.active(),"muted"));
             if(!issues.isEmpty())issues.forEach(problem->status.getChildren().add(label(problem,"danger")));
             VBox center=new VBox(10,status,graphCanvasCard(graph),graphMatrixCard(graph));
             VBox inspector=new VBox(10,graphNodeCard(graph),graphConnectionCard(graph));
             ScrollPane inspectorScroll=new ScrollPane(inspector);inspectorScroll.setFitToWidth(true);inspectorScroll.setPrefViewportHeight(620);inspectorScroll.setMinWidth(280);
             SplitPane workspace=new SplitPane(routesSidebar,center,inspectorScroll);workspace.setDividerPositions(.18,.69);workspace.setMinHeight(640);
             page.getChildren().add(workspace);
-            page.getChildren().add(graphRouteGroupCard(graph,config));
+            if(!common)page.getChildren().add(graphRouteGroupCard(graph,config));
         }
-        page.getChildren().add(graphSavedCopiesCard(config));
+        if(!GraphUiRoutes.common(selectedGraphRouteId))page.getChildren().add(graphSavedCopiesCard(config));
         page.getChildren().add(routeHistoryCard());
         return page;
     }
@@ -82,11 +89,13 @@ abstract class AppShellUiPart04 extends AppShellUiPart03 {
     protected VBox graphRouteSidebar(List<Map<String,Object>> routes,Map<String,Object> selected,Map<String,Object> config){
         VBox box=card(t("Маршруты","Routes"));box.setMinWidth(190);box.setPrefWidth(250);
         ListView<Map<String,Object>> list=new ListView<>(FXCollections.observableArrayList(routes));list.setAccessibleText(t("Маршруты профиля","Profile routes"));list.setPrefHeight(430);VBox.setVgrow(list,Priority.ALWAYS);
-        list.setCellFactory(items->new ListCell<>(){@Override protected void updateItem(Map<String,Object> route,boolean empty){super.updateItem(route,empty);if(empty||route==null){setText(null);return;}String id=string(route.get("id"),"");String marker=id.equals(config.get("active_route"))?" · ●":"";setText(string(route.get("name"),id)+marker);setTooltip(new Tooltip(string(route.get("name"),id)));}});
+        list.setCellFactory(items->new ListCell<>(){@Override protected void updateItem(Map<String,Object> route,boolean empty){super.updateItem(route,empty);if(empty||route==null){setText(null);setTooltip(null);return;}String id=string(route.get("id"),"");String marker=GraphUiRoutes.common(id)?t(" · закреплённый общий"," · pinned common"):id.equals(config.get("active_route"))?" · ●":"";setText(string(route.get("name"),id)+marker);setTooltip(new Tooltip(string(route.get("name"),id)));}});
         if(selected!=null)list.getSelectionModel().select(selected);
         list.getSelectionModel().selectedItemProperty().addListener((observable,oldValue,route)->{if(route!=null&&!route.get("id").equals(selectedGraphRouteId)){selectedGraphRouteId=string(route.get("id"),"");selectedGraphNodeId="";showPage(Page.GRAPH);}});
-        FlowPane actions=new FlowPane(6,6);actions.setPrefWrapLength(220);actions.getChildren().addAll(
-                actionButton(t("Создать","New"),this::createGraphRoute),actionButton(t("Дублировать","Duplicate"),this::duplicateSelectedGraphRoute),
+        FlowPane actions=new FlowPane(6,6);actions.setPrefWrapLength(220);
+        actions.getChildren().add(actionButton(t("Создать","New"),this::createGraphRoute));
+        if(selected!=null&&!GraphUiRoutes.common(string(selected.get("id"),"")))actions.getChildren().addAll(
+                actionButton(t("Дублировать","Duplicate"),this::duplicateSelectedGraphRoute),
                 actionButton(t("Переименовать","Rename"),this::renameSelectedGraphRoute),actionButton(t("Активировать","Activate"),this::activateSelectedGraphRoute),
                 actionButton(t("Сохранить копию","Save snapshot"),this::saveSelectedGraphCopy),actionButton(t("Удалить","Delete"),this::deleteSelectedGraphRoute));
         box.getChildren().addAll(list,actions);return box;
@@ -129,7 +138,7 @@ abstract class AppShellUiPart04 extends AppShellUiPart03 {
             Map<String,Object> saved=map(routeLayout.get(node.id()));double x=number(saved.get("x"),defaultX),y=number(saved.get("y"),defaultY);
             initial.put(node.id(),new double[]{x,y});
         }
-        List<GraphSubgraph> groups=GraphSubgraphLibrary.forRoute(store.snapshot(),graph.id()).stream().filter(GraphSubgraph::collapsed).toList();
+        List<GraphSubgraph> groups=GraphUiRoutes.common(graph.id())?List.of():GraphSubgraphLibrary.forRoute(store.snapshot(),graph.id()).stream().filter(GraphSubgraph::collapsed).toList();
         Map<String,GraphSubgraph> collapsedForNode=new LinkedHashMap<>();groups.forEach(group->group.nodeIds().forEach(nodeId->collapsedForNode.put(nodeId,group)));
         Map<String,VBox> groupViews=new LinkedHashMap<>();
         for(GraphSubgraph group:groups){
@@ -155,10 +164,10 @@ abstract class AppShellUiPart04 extends AppShellUiPart03 {
             for(AudioPort port:node.outputs()){Button button=graphPortButton(port.id()+" ◉");button.setAccessibleText(t("Выходной порт ","Output port ")+node.name()+" · "+port.id());button.setOnAction(event->selectGraphPort(graph.id(),node.id(),port));GraphPortDrag.installOutput(button,node.id(),port.id());outputButtons.getChildren().add(button);}
             if(node instanceof RouterNode router){
                 title.setWrapText(false);title.setTextOverrun(javafx.scene.control.OverrunStyle.ELLIPSIS);title.setMaxWidth(185);
-                HBox header=new HBox(10,subgraphSelection,title,label(router.type()+" · "+router.activeLinks().size()+"/"+(router.inputs().size()*router.outputs().size()),"muted"));
+                HBox header=new HBox(10,GraphUiRoutes.common(graph.id())?new Region():subgraphSelection,title,label(router.type()+" · "+router.activeLinks().size()+"/"+(router.inputs().size()*router.outputs().size()),"muted"));
                 card.getChildren().addAll(header,graphRouterCanvas(router,inputButtons,outputButtons));
             }else{
-                VBox description=new VBox(3,title,type);HBox portRow=new HBox(4,inputButtons,subgraphSelection,description,outputButtons);HBox.setHgrow(description,Priority.ALWAYS);
+                VBox description=new VBox(3,title,type);HBox portRow=new HBox(4,inputButtons,GraphUiRoutes.common(graph.id())?new Region():subgraphSelection,description,outputButtons);HBox.setHgrow(description,Priority.ALWAYS);
                 card.getChildren().add(portRow);
             }
             views.put(node.id(),card);canvas.getChildren().add(card);

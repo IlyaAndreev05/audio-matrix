@@ -169,6 +169,7 @@ abstract class AppShellUiPart19 extends AppShellUiPart18 {
         if (closeFuture != null) return closeFuture;
         closing = true;
         meterRefresh.stop();
+        if (routeRefresh != null) routeRefresh.stop();
         backend.monitorOutput(null);
         backend.monitorInput(null);
         backend.cancelCalibrationCapture();

@@ -1,4 +1,5 @@
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+import {visibleApplicationStreams} from './menu-state.js';
 
 export default class AudioMatrixMenuApplications {
     constructor({addLevelRow, rows, send}) {
@@ -28,11 +29,11 @@ export default class AudioMatrixMenuApplications {
         for (const application of applications) {
             if (sourceGain) {
                 if (applications.length === 1) {
-                    this._renderStreams(application, t, target);
+                    this._renderStreams(application, pin, t, target);
                 } else {
                     const submenu = new PopupMenu.PopupSubMenuMenuItem(
-                        `${application.name || application.id} (${(application.streams || []).length})`, false);
-                    this._renderStreams(application, t, submenu.menu);
+                        `${application.name || application.id}`, false);
+                    this._renderStreams(application, pin, t, submenu.menu);
                     target.addMenuItem(submenu);
                 }
             } else {
@@ -43,13 +44,13 @@ export default class AudioMatrixMenuApplications {
                     onValue: value => this._send('set_app_volume', application.id + '\t' + value.toFixed(3)),
                     onMute: () => this._send('toggle_app_mute', application.id),
                 }, target);
-                this._renderStreams(application, t, target);
+                this._renderStreams(application, pin, t, target);
             }
         }
     }
 
-    _renderStreams(application, t, target) {
-        const streams = application.streams || [];
+    _renderStreams(application, pin, t, target) {
+        const streams = visibleApplicationStreams(application, pin);
         if (streams.length === 0) return;
         for (const stream of streams) {
             this._addLevelRow({

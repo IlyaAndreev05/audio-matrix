@@ -2,16 +2,32 @@ package io.github.ilyaandreev05.audiomatrix.graph;
 
 import io.github.ilyaandreev05.audiomatrix.config.ConfigValidator;
 import io.github.ilyaandreev05.audiomatrix.config.DefaultConfig;
+import io.github.ilyaandreev05.audiomatrix.config.QuickSettingsConfig;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class GraphProfileLibraryTest {
-    @Test void creatingProfileStartsWithNoGraphRoutes() {
+    /** Preset profiles are installed by production defaults; these tests exercise a single legacy workspace. */
+    private static Map<String,Object> deskConfig() {
         Map<String,Object> config=DefaultConfig.create();
+        config.put("profiles",new ArrayList<>(List.of(DefaultConfig.map("id","desk","name","Рабочий стол","mode","hybrid",
+                "selected_route_id","","default_output","system_default","active_buses",List.of("main","music","effects"),
+                "active_routes",List.of(),"device_overrides",DefaultConfig.map()))));
+        config.put("route_library",new ArrayList<>());
+        config.put("route_groups",new ArrayList<>());
+        config.put("active_profile","desk");
+        config.put("active_route","");
+        QuickSettingsConfig.pins(config).clear();
+        return config;
+    }
+
+    @Test void creatingProfileStartsWithNoGraphRoutes() {
+        Map<String,Object> config=deskConfig();
         AudioGraph route=graph("desk-route","Desk route");GraphRouteLibrary.saveRoute(config,route,"","desk");
 
         Map<String,Object> created=GraphProfileLibrary.createProfile(config,"desk","Empty workspace");
@@ -27,7 +43,7 @@ class GraphProfileLibraryTest {
     }
 
     @Test void profileCopyGetsIndependentGraphWorkspaceWithoutChangingTheActiveRoute() {
-        Map<String,Object> config=DefaultConfig.create();
+        Map<String,Object> config=deskConfig();
         String group=GraphRouteLibrary.createGroup(config,"desk","Desk group");
         AudioGraph route=graph("desk-route","Desk route");
         GraphRouteLibrary.saveRoute(config,route,group,"desk");
@@ -49,7 +65,7 @@ class GraphProfileLibraryTest {
     }
 
     @Test void profileSwitchRemembersEachRoutesAndOnlyOneIsActive() {
-        Map<String,Object> config=DefaultConfig.create();
+        Map<String,Object> config=deskConfig();
         String first=GraphRouteLibrary.createGroup(config,"desk","First");
         AudioGraph deskRoute=graph("desk-route","Desk route");
         GraphRouteLibrary.saveRoute(config,deskRoute,first,"desk");
@@ -68,7 +84,7 @@ class GraphProfileLibraryTest {
     }
 
     @Test void deletingActiveProfileNeedsReplacementRouteOrExplicitStopAndRemovesItsWorkspace() {
-        Map<String,Object> config=DefaultConfig.create();
+        Map<String,Object> config=deskConfig();
         AudioGraph desk=graph("desk-route","Desk route");GraphRouteLibrary.saveRoute(config,desk,"","desk");GraphRouteLibrary.activate(config,desk.id());
         Map<String,Object> duplicate=GraphProfileLibrary.duplicateProfile(config,"desk","Travel");
         String replacementId=String.valueOf(duplicate.get("id"));String replacementRoute=String.valueOf(duplicate.get("selected_route_id"));
@@ -84,7 +100,7 @@ class GraphProfileLibraryTest {
     }
 
     @Test void deletingActiveProfileCanExplicitlyStopGraph() {
-        Map<String,Object> config=DefaultConfig.create();
+        Map<String,Object> config=deskConfig();
         AudioGraph desk=graph("desk-route","Desk route");GraphRouteLibrary.saveRoute(config,desk,"","desk");GraphRouteLibrary.activate(config,desk.id());
         Map<String,Object> duplicate=GraphProfileLibrary.duplicateProfile(config,"desk","Travel");
         String replacementId=String.valueOf(duplicate.get("id"));

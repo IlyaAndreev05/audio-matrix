@@ -35,13 +35,14 @@ public final class GraphCodec {
             Map<String, Object> parameters = object(item.get("parameters"));
             nodes.add(switch (type) {
                 case "source" -> new SourceNode(nodeId, nodeName, text(parameters.get("selector")), channels);
+                case "device_slot" -> new DeviceSlotNode(nodeId, nodeName, text(parameters.get("device_id")), channels);
                 case "output" -> new OutputNode(nodeId, nodeName, text(parameters.get("device_id")), channels,
                         parameters.containsKey("channel_matrix") ? ChannelMatrix.parse(parameters.get("channel_matrix")) : null);
                 case "gain" -> new GainNode(nodeId, nodeName, channels, number(parameters.get("gain"), 1),
                         Boolean.TRUE.equals(parameters.get("muted")), text(parameters.get("endpoint_node_id")));
                 case "gate" -> new GateNode(nodeId, nodeName, channels, Boolean.TRUE.equals(parameters.getOrDefault("open", Boolean.TRUE)));
-                case "switch" -> new SwitchNode(nodeId, nodeName, channels, ports(parameters.get("output_ports"),List.of("out")), strings(parameters.get("active_links")));
-                case "multi_switch" -> new MultiSwitchNode(nodeId, nodeName, channels, ports(parameters.get("output_ports"),List.of("out")), strings(parameters.get("active_links")));
+                // Both historical types migrate losslessly to the canonical multi-select Switch.
+                case "switch", "multi_switch" -> new SwitchNode(nodeId, nodeName, channels, ports(parameters.get("output_ports"),List.of("out")), strings(parameters.get("active_links")));
                 case "selector" -> new SelectorNode(nodeId, nodeName, channels, ports(parameters.get("input_ports"),List.of("in")), strings(parameters.get("active_links")));
                 case "multi_selector" -> new MultiSelectorNode(nodeId, nodeName, channels, ports(parameters.get("input_ports"),List.of("in")), strings(parameters.get("active_links")));
                 case "matrix" -> new MatrixNode(nodeId, nodeName, channels, ports(parameters.get("input_ports"),List.of("in")), ports(parameters.get("output_ports"),List.of("out")), strings(parameters.get("active_links")));

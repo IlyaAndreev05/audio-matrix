@@ -26,7 +26,7 @@ export default class AudioMatrixVolumeMenuAdapter {
                 menu.addMenuItem(this._section);
             return true;
         }
-        this.detach();
+        this.detach(false);
         this._output = output;
         this._menuButtonLease = new MenuButtonLease(output);
         this._menu = menu;
@@ -42,18 +42,21 @@ export default class AudioMatrixVolumeMenuAdapter {
         this._menuItemsLease.rollback(this._section);
     }
 
-    detach() {
+    detach(destroySection = true) {
+        this._menuItemsLease.restore();
         if (this._menu && this._section) {
             try {
-                if (this._menu.removeMenuItem)
-                    this._menu.removeMenuItem(this._section);
-                else
-                    this._section.destroy();
+                // PopupMenu sections are actors. Detach without destroying when
+                // Quick Settings is rebuilt, then let the new menu adopt it.
+                this._section.disconnectObject?.(this._menu);
+                const actor = this._section.actor;
+                actor.get_parent()?.remove_child(actor);
             } catch (error) {
                 console.debug(`Audio Matrix menu cleanup failed: ${error}`);
             }
-            this._menuItemsLease.restore();
         }
+        if (destroySection)
+            this._section?.destroy();
         this._menuButtonLease?.restore();
         this._menuButtonLease = null;
         this._menu = null;

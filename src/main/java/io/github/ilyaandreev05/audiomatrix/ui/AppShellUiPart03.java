@@ -40,6 +40,8 @@ abstract class AppShellUiPart03 extends AppShellUiPart02 {
     protected VBox devicesPage() {
         VBox page = page(t("Sink, source и их свойства сообщаются PipeWire.", "Sinks, sources, and properties reported by PipeWire."));
         Map<String,Object> config=store.snapshot();
+        page.getChildren().add(GraphDeviceDiscovery.create(physicalSinks(), config, this::t,
+                change -> updateRouteConfig(t("Изменить привязку устройства", "Change device binding"), change)));
         VBox outputs = card(t("Выходы · sinks", "Outputs · sinks"));
         if (physicalSinks().isEmpty()) outputs.getChildren().add(label(t("Система не сообщила выходы.", "No outputs were reported by the system."), "muted"));
         for (AudioNode node : filtered(physicalSinks(), search.getText())) {

@@ -52,6 +52,7 @@ abstract class AppShellState extends AppShellContract02 {
     protected AudioNode selectedInputSource;
     protected boolean inputMeterEnabled;
     protected final Timeline meterRefresh = new Timeline(new KeyFrame(Duration.millis(250), event -> refreshMeterLabel()));
+    protected Timeline routeRefresh;
     protected final TextField search = new TextField();
     protected final Map<Page, ToggleButton> navButtons = new LinkedHashMap<>();
     protected final ApplicationStreamRuleApplier streamRuleApplier;

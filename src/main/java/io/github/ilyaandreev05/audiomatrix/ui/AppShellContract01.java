@@ -69,7 +69,7 @@ abstract class AppShellContract01 extends AppShellBase {
     protected abstract void activateSelectedGraphRoute();
     protected abstract void saveSelectedGraphCopy();
     protected abstract void addGraphNode(AudioGraph graph,String type);
-    protected abstract void setRouterLink(String routeId,String nodeId,String link,boolean enabled);
+    protected abstract void setRouterLink(String routeId,String nodeId,String link,boolean enabled,boolean multiple);
     protected abstract void addRouterPort(String routeId,GraphNode node,String direction);
     protected abstract String quickControlParameter(GraphNode node);
     protected abstract boolean quickControlPinned(String routeId,String nodeId,String parameter);

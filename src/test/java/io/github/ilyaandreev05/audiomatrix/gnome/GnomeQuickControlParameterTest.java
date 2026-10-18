@@ -47,6 +47,31 @@ class GnomeQuickControlParameterTest {
                 () -> GnomeQuickControlParameter.choose(node, "bands.0.type", "unknown"));
     }
 
+    @Test void publishesOnlyGateOnOffAndPreservesGainWhenMuting() {
+        Map<String, Object> gate = new LinkedHashMap<>(Map.of("type", "gate",
+                "parameters", Map.of("open", true)));
+        GnomeQuickControlParameter.apply(gate, "open", "", true);
+        assertEquals(false, object(gate.get("parameters")).get("open"));
+        GnomeQuickControlParameter.apply(gate, "open", "", true);
+        assertEquals(true, object(gate.get("parameters")).get("open"));
+
+        Map<String, Object> gain = new LinkedHashMap<>(Map.of("type", "gain",
+                "parameters", Map.of("gain", .42, "muted", false)));
+        GnomeQuickControlParameter.apply(gain, "gain", "", true);
+        assertEquals(Map.of("gain", .42, "muted", true), gain.get("parameters"));
+        GnomeQuickControlParameter.apply(gain, "gain", "", true);
+        assertEquals(Map.of("gain", .42, "muted", false), gain.get("parameters"));
+    }
+
+    @Test void excludesPhaseInvertAndLegacyMultiSwitchFromPublishedControls() {
+        assertEquals(null, GnomeQuickControlParameter.describe("filter",
+                Map.of("processor", "phase_invert", "enabled", true), "enabled", "en"));
+        assertEquals(null, GnomeQuickControlParameter.describe("multi_switch",
+                Map.of("active_links", List.of("in->out")), "active_links", "en"));
+        assertEquals("links", GnomeQuickControlParameter.describe("switch",
+                Map.of("active_links", List.of("in->a", "in->b")), "active_links", "en").get("kind"));
+    }
+
     private static Map<String, Object> object(Object value) {
         Map<String, Object> result = new LinkedHashMap<>();
         ((Map<?, ?>) value).forEach((key, item) -> result.put(String.valueOf(key), item));
