@@ -28,23 +28,28 @@ final class GnomeQuickSettingsPins {
                                            List<Map<String, Object>> applications,
                                            List<Map<String, Object>> outputs) {
         String routeId = String.valueOf(config.getOrDefault("active_route", ""));
-        Map<String, Object> route = maps(config.get("route_library")).stream()
-                .filter(item -> routeId.equals(item.get("id"))).findFirst().orElse(null);
-        AudioGraph graph = null;
-        if (route != null) try { graph = GraphCodec.fromMap(route); }
-        catch (RuntimeException invalid) { /* Common pins remain available. */ }
         AudioGraph commonGraph = null;
         try { commonGraph = GraphCommonVibro.graph(config); }
         catch (RuntimeException invalid) { /* Invalid common state is not published. */ }
+        Map<String, AudioGraph> graphs = new LinkedHashMap<>();
+        if (commonGraph != null) graphs.put(GraphCommonVibro.COMMON_ROUTE_ID, commonGraph);
+        AudioGraph activeGraph = routeGraph(config, routeId);
+        if (activeGraph != null) graphs.put(routeId, activeGraph);
         List<Map<String, Object>> result = new ArrayList<>();
         for (Map<String, Object> pin : QuickSettingsConfig.pins(config)) {
-            boolean common = GraphCommonVibro.COMMON_ROUTE_ID.equals(pin.get("route_id"));
-            if (!common && !routeId.equals(pin.get("route_id"))) continue;
-            AudioGraph pinGraph = common ? commonGraph : graph;
+            String pinRouteId = String.valueOf(pin.getOrDefault("route_id", ""));
+            boolean common = GraphCommonVibro.COMMON_ROUTE_ID.equals(pinRouteId);
+            boolean active = routeId.equals(pinRouteId);
+            if (!common && !active && !graphs.containsKey(pinRouteId)) {
+                AudioGraph inactive = routeGraph(config, pinRouteId);
+                if (inactive != null) graphs.put(pinRouteId, inactive);
+            }
+            AudioGraph pinGraph = graphs.get(pinRouteId);
             if (pinGraph == null) continue;
             String nodeId = String.valueOf(pin.getOrDefault("node_id", ""));
             GraphNode node = pinGraph.nodes().stream().filter(item -> nodeId.equals(item.id())).findFirst().orElse(null);
             if (node == null) continue;
+            if (!common && !active && !(node instanceof OutputNode) && !(node instanceof DeviceSlotNode)) continue;
             if (node instanceof FilterNode filter && "phase_invert".equals(filter.processor())) continue;
             if (isEndpointGain(pinGraph, node)) continue;
             Map<String, Object> state = pinState(pin, node);
@@ -72,6 +77,15 @@ final class GnomeQuickSettingsPins {
         }
         result.sort(java.util.Comparator.comparingInt(item -> number(item.get("order"), 0)));
         return List.copyOf(result);
+    }
+
+    private static AudioGraph routeGraph(Map<String, Object> config, String routeId) {
+        if (routeId.isBlank()) return null;
+        Map<String, Object> route = maps(config.get("route_library")).stream()
+                .filter(item -> routeId.equals(item.get("id"))).findFirst().orElse(null);
+        if (route == null) return null;
+        try { return GraphCodec.fromMap(route); }
+        catch (RuntimeException invalid) { return null; }
     }
 
     private static Map<String, Object> sourceGainState(String routeId, SourceNode source, GainNode gain) {

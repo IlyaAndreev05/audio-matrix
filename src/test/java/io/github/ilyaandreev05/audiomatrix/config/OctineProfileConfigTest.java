@@ -17,6 +17,10 @@ class OctineProfileConfigTest {
         assertTrue(common.nodes().stream().anyMatch(node -> GraphCommonVibro.VIBRO_OUTPUT_ID.equals(node.id())));
         assertEquals(1, common.nodes().stream().filter(node -> GraphCommonVibro.VIBRO_MIXER_ID.equals(node.id())
                 && node instanceof MixerNode).count());
+        MixerNode vibroMixer = (MixerNode) common.nodes().stream()
+                .filter(node -> GraphCommonVibro.VIBRO_MIXER_ID.equals(node.id())).findFirst().orElseThrow();
+        assertEquals(0.6, vibroMixer.inputGains().get("bass"));
+        assertEquals(0.65, vibroMixer.inputGains().get("events"));
         assertEquals(0, GraphValidator.validate(common).size());
         assertEquals(List.of(), ConfigValidator.validate(config));
     }

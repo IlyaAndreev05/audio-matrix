@@ -113,10 +113,8 @@ export default class AudioMatrixMenuRenderer {
             send: (name, value) => this._send(name, value),
         });
         this._groups = new AudioMatrixMenuGroups({
-            getSnapshot: () => this._getSnapshot(),
             send: (name, value) => this._send(name, value),
             disclosures: this._disclosures,
-            rows: this._rows,
             applications: this._applications,
             mixer: this._mixer,
             output: this._output,
