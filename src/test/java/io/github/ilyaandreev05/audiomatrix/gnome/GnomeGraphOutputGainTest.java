@@ -2,17 +2,20 @@ package io.github.ilyaandreev05.audiomatrix.gnome;
 
 import io.github.ilyaandreev05.audiomatrix.audio.AudioNode;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
+import io.github.ilyaandreev05.audiomatrix.config.ChannelMatrix;
 import io.github.ilyaandreev05.audiomatrix.config.DefaultConfig;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphConnection;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphRouteLibrary;
+import io.github.ilyaandreev05.audiomatrix.graph.GainNode;
 import io.github.ilyaandreev05.audiomatrix.graph.OutputNode;
 import io.github.ilyaandreev05.audiomatrix.graph.SourceNode;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -49,5 +52,50 @@ class GnomeGraphOutputGainTest {
         assertNull(GnomeGraphOutputGain.find(config, snapshot,
                 new AudioNode(99, "other", "Other", "Audio/Sink", "running", "", "", "", 2,
                         List.of(48000), .5, false, null)));
+    }
+
+    @Test void stableOutputNodeTargetsSeparateTwoLogicalOutputsOnOneFamilyCard() {
+        Map<String, Object> config = DefaultConfig.create();
+        List<String> stereo = List.of("FL", "FR");
+        SourceNode source = new SourceNode("apps", "Applications", "application:unassigned", stereo);
+        GainNode greenGain = new GainNode("green-gain", "Green AUX level", stereo, .25, false, "green");
+        GainNode blackGain = new GainNode("black-gain", "Black AUX level", stereo, .65, false, "black");
+        OutputNode green = new OutputNode("green", "Green AUX", "family17h-surround", stereo);
+        OutputNode black = new OutputNode("black", "Black AUX", "family17h-surround", stereo,
+                new ChannelMatrix(stereo, List.of("RL", "RR"), List.of(List.of(1.0, 0.0), List.of(0.0, 1.0))));
+        AudioGraph graph = new AudioGraph("family-route", "Family outputs", List.of(source, greenGain, blackGain,
+                green, black), List.of(new GraphConnection("apps-green", "apps", "out", "green-gain", "in", true, 1),
+                new GraphConnection("green-out", "green-gain", "out", "green", "in", true, 1),
+                new GraphConnection("apps-black", "apps", "out", "black-gain", "in", true, 1),
+                new GraphConnection("black-out", "black-gain", "out", "black", "in", true, 1)));
+        GraphRouteLibrary.saveRoute(config, graph, "");
+        GraphRouteLibrary.activate(config, graph.id());
+        GnomeGraphOutputGain.Target greenTarget = new GnomeGraphOutputGain.Target(graph.id(), "green", "green-gain");
+        GnomeGraphOutputGain.Target blackTarget = new GnomeGraphOutputGain.Target(graph.id(), "black", "black-gain");
+
+        GnomeGraphOutputGain.set(config, greenTarget, .18, false);
+        GnomeGraphOutputGain.set(config, blackTarget, null, true);
+
+        @SuppressWarnings("unchecked") Map<String, Object> savedRoute =
+                ((List<Map<String, Object>>) config.get("route_library")).getFirst();
+        AudioGraph changed = GraphCodec.fromMap(savedRoute);
+        GainNode updatedGreen = (GainNode) changed.nodes().stream().filter(node -> node.id().equals("green-gain")).findFirst().orElseThrow();
+        GainNode updatedBlack = (GainNode) changed.nodes().stream().filter(node -> node.id().equals("black-gain")).findFirst().orElseThrow();
+        assertEquals(.18, updatedGreen.gain());
+        assertEquals(false, updatedGreen.muted());
+        assertEquals(.65, updatedBlack.gain());
+        assertEquals(true, updatedBlack.muted());
+    }
+
+    @Test void graphOutputCommandsAreAcceptedAndRejectStaleRevision() {
+        GnomeControlBridge.Command command = GnomeControlBridge.parseCommandLine(
+                "AudioMatrix.Command (uint32 3, 'request-green', '12', 'set_graph_output_volume', 'family-route\\tgreen\\tgreen-gain\\t0.31')");
+
+        assertEquals(new GnomeControlBridge.Command(3, "request-green", "12", "set_graph_output_volume",
+                "family-route\tgreen\tgreen-gain\t0.31"), command);
+        assertEquals("ok", GnomeControlBridge.execute(command,
+                ignored -> CompletableFuture.completedFuture(null)).join().status());
+        assertEquals(true, GnomeCommandRevision.isStale(command, 13));
+        assertEquals(false, GnomeCommandRevision.isStale(command, 12));
     }
 }

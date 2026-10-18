@@ -16,7 +16,8 @@ const snapshot = {
         quickPins: [{
             id: 'pin-output', routeId: 'route-1', nodeId: 'output-node', name: 'Вибродинамик',
             nodeType: 'output', groupId: 'outputs', order: 0, view: 'DEFAULT',
-            output: {id: 'device-vibro', name: 'Family 17h', available: true, volume: 0.32, muted: false},
+            output: {id: 'device-vibro', name: 'Family 17h', graphGainNodeId: 'green-gain',
+                available: true, volume: 0.32, muted: false},
             controls: [], applications: [], mixerInputs: [],
         }],
         outputs: [{id: 'device-vibro', name: 'Family 17h', volume: 0.91, muted: false}],
@@ -45,5 +46,10 @@ const addedPin = clone(snapshot);
 addedPin.state.quickPins[0].id = 'different-pin';
 assert(menuStructureSignature(addedPin) !== firstSignature,
     'Adding or replacing a pin must rebuild the menu structure');
+
+const changedGainReference = clone(snapshot);
+changedGainReference.state.quickPins[0].output.graphGainNodeId = 'new-green-gain';
+assert(menuStructureSignature(changedGainReference) !== firstSignature,
+    'Replacing a pinned output Gain must rebuild the command target');
 
 print('GNOME mixer state tests passed (in-place updates, graph output gain binding, structural rebuilds)');

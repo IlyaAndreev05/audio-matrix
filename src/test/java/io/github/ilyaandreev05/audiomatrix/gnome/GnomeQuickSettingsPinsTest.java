@@ -2,9 +2,11 @@ package io.github.ilyaandreev05.audiomatrix.gnome;
 
 import io.github.ilyaandreev05.audiomatrix.audio.AudioNode;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
+import io.github.ilyaandreev05.audiomatrix.config.ChannelMatrix;
 import io.github.ilyaandreev05.audiomatrix.config.DefaultConfig;
 import io.github.ilyaandreev05.audiomatrix.config.QuickSettingsConfig;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
+import io.github.ilyaandreev05.audiomatrix.graph.GainNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphConnection;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphRouteLibrary;
 import io.github.ilyaandreev05.audiomatrix.graph.MixerNode;
@@ -70,6 +72,39 @@ class GnomeQuickSettingsPinsTest {
         assertEquals(1.0, output.get("volume"));
     }
 
+    @Test void publishesDistinctGainReferencesForLogicalOutputsSharingOnePipeWireDevice() {
+        Map<String, Object> config = DefaultConfig.create();
+        AudioNode sink = new AudioNode(22, "alsa_output.family17h", "Family 17h", "Audio/Sink", "running",
+                "", "", "", 4, List.of(48000), .7, false, null);
+        config.put("devices", List.of(DefaultConfig.map("id", "family17h-surround", "selector",
+                DefaultConfig.map("kind", "name_equals", "value", sink.name()))));
+        GainNode greenGain = new GainNode("green-gain", "Green AUX level", STEREO, .25, false, "green-out");
+        GainNode blackGain = new GainNode("black-gain", "Black AUX level", STEREO, .65, false, "black-out");
+        OutputNode green = new OutputNode("green-out", "Green AUX", "device:family17h-surround", STEREO);
+        OutputNode black = new OutputNode("black-out", "Black AUX", "device:family17h-surround", STEREO,
+                new ChannelMatrix(STEREO, List.of("RL", "RR"), List.of(List.of(1.0, 0.0), List.of(0.0, 1.0))));
+        AudioGraph graph = new AudioGraph("family-route", "Family outputs", List.of(
+                new SourceNode("apps", "Applications", "application:unassigned", STEREO), greenGain, blackGain,
+                green, black), List.of(edge("apps-green", "apps", "green-gain", "in"),
+                edge("green-out", "green-gain", "green-out", "in"),
+                edge("apps-black", "apps", "black-gain", "in"), edge("black-out", "black-gain", "black-out", "in")));
+        GraphRouteLibrary.saveRoute(config, graph, "");
+        GraphRouteLibrary.activate(config, graph.id());
+        QuickSettingsConfig.pinNode(config, graph.id(), green.id(), "outputs", 0, "EXPANDED");
+        QuickSettingsConfig.pinNode(config, graph.id(), black.id(), "outputs", 1, "EXPANDED");
+        PipeWireBackend.Snapshot snapshot = new PipeWireBackend.Snapshot(true, "", List.of(sink), List.of(),
+                List.of(), List.of(), Map.of(), sink.id(), 0);
+        List<Map<String, Object>> outputs = List.of(DefaultConfig.map("id", "device:family17h-surround",
+                "name", sink.name(), "description", sink.description(), "volume", sink.volume(), "muted", false));
+
+        List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config, snapshot, List.of(), List.of(), outputs);
+
+        assertEquals("green-gain", ((Map<?, ?>) pin(pins, green.id()).get("output")).get("graphGainNodeId"));
+        assertEquals("black-gain", ((Map<?, ?>) pin(pins, black.id()).get("output")).get("graphGainNodeId"));
+        assertEquals(((Map<?, ?>) pin(pins, green.id()).get("output")).get("id"),
+                ((Map<?, ?>) pin(pins, black.id()).get("output")).get("id"));
+    }
+
     private static Map<String, Object> pin(List<Map<String, Object>> pins, String nodeId) {
         return pins.stream().filter(item -> nodeId.equals(item.get("nodeId"))).findFirst().orElseThrow();
     }
@@ -81,5 +116,9 @@ class GnomeQuickSettingsPinsTest {
     private static GraphConnection edge(String from, String to, String port) {
         String targetPort = "monitor-out".equals(to) ? "in" : port;
         return new GraphConnection(from + "-" + to, from, "out", to, targetPort, true, 1);
+    }
+
+    private static GraphConnection edge(String id, String from, String to, String port) {
+        return new GraphConnection(id, from, "out", to, port, true, 1);
     }
 }

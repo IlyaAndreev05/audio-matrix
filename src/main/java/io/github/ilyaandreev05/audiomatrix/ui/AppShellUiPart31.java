@@ -3,6 +3,9 @@ package io.github.ilyaandreev05.audiomatrix.ui;
 import io.github.ilyaandreev05.audiomatrix.ThemeManager;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.config.ConfigStore;
+import io.github.ilyaandreev05.audiomatrix.gnome.GnomeCommandRevision;
+import io.github.ilyaandreev05.audiomatrix.gnome.GnomeControlBridge;
+import io.github.ilyaandreev05.audiomatrix.gnome.GnomeGraphOutputGain;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
@@ -13,11 +16,41 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 abstract class AppShellUiPart31 extends AppShellUiPart30 {
     protected AppShellUiPart31(ConfigStore store, PipeWireBackend backend, ThemeManager themes) {
         super(store, backend, themes);
+    }
+
+    @Override
+    protected CompletableFuture<Void> handleGnomeCommand(GnomeControlBridge.Command command) {
+        if (!Set.of("set_graph_output_volume", "toggle_graph_output_mute").contains(command.name()))
+            return super.handleGnomeCommand(command);
+        if (GnomeCommandRevision.isStale(command, store.revision()))
+            return CompletableFuture.failedFuture(new IllegalStateException("GNOME command is based on an old Audio Matrix revision"));
+        return setGnomeGraphOutputLevel(command.value(), "toggle_graph_output_mute".equals(command.name()));
+    }
+
+    private CompletableFuture<Void> setGnomeGraphOutputLevel(String value, boolean toggleMute) {
+        String[] fields = value.split("\\t", -1);
+        if (fields.length != (toggleMute ? 3 : 4)
+                || fields[0].isBlank() || fields[1].isBlank() || fields[2].isBlank())
+            return CompletableFuture.failedFuture(new IllegalArgumentException("Graph output reference is malformed"));
+        Double level = null;
+        if (!toggleMute) {
+            try { level = Double.parseDouble(fields[3]); }
+            catch (NumberFormatException invalid) {
+                return CompletableFuture.failedFuture(new IllegalArgumentException("Graph output volume is invalid"));
+            }
+            if (!Double.isFinite(level))
+                return CompletableFuture.failedFuture(new IllegalArgumentException("Graph output volume is invalid"));
+        }
+        GnomeGraphOutputGain.Target target = new GnomeGraphOutputGain.Target(fields[0], fields[1], fields[2]);
+        Double requestedLevel = level;
+        return updateRouteConfigCommand(t("Изменить уровень выхода маршрута", "Change graph output level"),
+                config -> GnomeGraphOutputGain.set(config, target, requestedLevel, toggleMute));
     }
 
     @Override

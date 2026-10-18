@@ -12,7 +12,8 @@ export function menuStructureSignature(snapshot) {
             (pin.applications || []).map(application => [application.id, application.name,
                 (application.streams || []).map(stream => [stream.id, stream.name, stream.description])]),
             (pin.mixerInputs || []).map(input => [input.id, input.name]),
-            pin.output ? [pin.output.id, pin.output.name, pin.output.description, pin.output.available] : null,
+            pin.output ? [pin.output.id, pin.output.name, pin.output.description, pin.output.available,
+                pin.output.graphGainNodeId] : null,
             pin.sourceGain ? [pin.sourceGain.routeId, pin.sourceGain.sourceNodeId, pin.sourceGain.gainNodeId] : null,
         ]),
         controls: (state.quickControls || []).map(control => [

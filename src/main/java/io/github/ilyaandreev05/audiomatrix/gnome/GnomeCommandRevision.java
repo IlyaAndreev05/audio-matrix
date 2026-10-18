@@ -6,7 +6,8 @@ import java.util.Set;
 public final class GnomeCommandRevision {
     private static final Set<String> REVISIONED = Set.of(
             "select_route", "set_quick_group_collapsed", "set_quick_pin_view", "set_quick_control",
-            "toggle_quick_control", "set_quick_control_choice", "set_mode", "set_channel_map");
+            "toggle_quick_control", "set_quick_control_choice", "set_graph_output_volume",
+            "toggle_graph_output_mute", "set_mode", "set_channel_map");
 
     private GnomeCommandRevision() {}
 
