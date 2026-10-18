@@ -75,6 +75,7 @@ class GnomeControlBridgeTest {
 
         assertEquals("device:monitor-benq", output.get("id"));
         assertEquals(selected, GnomeOutputState.resolve(List.of(selected), "device:monitor-benq", devices));
+        assertEquals(selected, GnomeOutputState.resolve(List.of(selected), "monitor-benq", devices));
         assertEquals(selected, GnomeOutputState.resolve(List.of(selected), "name:" + selected.name(), List.of()));
     }
 
