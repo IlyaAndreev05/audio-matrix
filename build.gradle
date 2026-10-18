@@ -4,7 +4,7 @@ plugins {
 }
 
 group = 'io.github.ilyaandreev05'
-version = '0.3.2'
+version = '0.3.3'
 
 repositories { mavenCentral() }
 
@@ -71,6 +71,7 @@ tasks.named('test') {
 // Build a self-contained Debian package from the Gradle application distribution.
 tasks.register('packageDeb', Exec) {
     dependsOn tasks.installDist, tasks.named('verifyClassSize')
+    notCompatibleWithConfigurationCache('Debian package post-processing uses Gradle project file helpers')
     doFirst {
         def jdkHome = project.findProperty('packageJdkHome') ?: System.getProperty('java.home')
         def appLib = layout.buildDirectory.dir("install/${project.name}/lib").get().asFile
