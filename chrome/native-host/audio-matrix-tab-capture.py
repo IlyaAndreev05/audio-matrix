@@ -23,14 +23,14 @@ class Host:
         self.pwcat = pwcat or shutil.which("pw-cat")
         self.streams = {}
 
-    def command(self, tab_id):
+    def command(self, tab_id, title=""):
         if not self.pwcat:
             raise RuntimeError("pw-cat is unavailable; Audio Matrix tab capture is stopped.")
         properties = {
             "application.id": APP_ID,
             "application.name": APP_NAME,
             "application.process.binary": "audio-matrix-tab-capture",
-            "media.name": f"Chrome tab capture {tab_id}",
+            "media.name": f"Chrome · {valid_tab_title(title, tab_id)}",
             "target.object": SINK_NAME,
             "node.dont-fallback": True,
             "node.dont-reconnect": True,
@@ -44,7 +44,7 @@ class Host:
         if kind == "start":
             tab_id = valid_tab_id(message.get("tabId"))
             self.stop(tab_id)
-            process = self.popen(self.command(tab_id), stdin=subprocess.PIPE,
+            process = self.popen(self.command(tab_id, message.get("title")), stdin=subprocess.PIPE,
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, bufsize=0)
             time.sleep(0.025)
             if process.poll() is not None:
@@ -97,6 +97,14 @@ def valid_tab_id(value):
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise RuntimeError("The Chrome tab identifier is invalid.")
     return value
+
+
+def valid_tab_title(value, tab_id):
+    if not isinstance(value, str):
+        return f"Tab {tab_id}"
+    title = "".join(character for character in value.strip() if character >= " " and character != "\x7f")
+    title = title[:128]
+    return title or f"Tab {tab_id}"
 
 
 def read_message(stream):

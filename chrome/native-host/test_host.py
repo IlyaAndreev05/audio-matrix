@@ -49,12 +49,18 @@ class FakeProcess:
 
 class HostTest(unittest.TestCase):
     def test_pipewire_target_is_only_the_audio_matrix_virtual_sink(self):
-        command = HOST_MODULE.Host(pwcat="/usr/bin/pw-cat").command(17)
+        command = HOST_MODULE.Host(pwcat="/usr/bin/pw-cat").command(17, "YouTube · Music")
         self.assertIn("audiomatrix_system", command)
         self.assertIn("--target", command)
         properties = json.loads(next(value.split("=", 1)[1] for value in command if value.startswith("--properties=")))
         self.assertEqual(HOST_MODULE.APP_ID, properties["application.id"])
+        self.assertEqual("Chrome · YouTube · Music", properties["media.name"])
         self.assertTrue(properties["node.dont-fallback"])
+
+    def test_tab_title_is_bounded_and_control_characters_are_removed(self):
+        command = HOST_MODULE.Host(pwcat="/usr/bin/pw-cat").command(17, "  Music\nPlayer  ")
+        properties = json.loads(next(value.split("=", 1)[1] for value in command if value.startswith("--properties=")))
+        self.assertEqual("Chrome · MusicPlayer", properties["media.name"])
 
     def test_pcm_frames_are_validated_and_written_only_to_the_requested_stream(self):
         processes = []

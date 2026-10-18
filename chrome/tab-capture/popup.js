@@ -79,7 +79,7 @@ captureButton.addEventListener("click", async () => {
     } else {
       // This call is inside the user's popup-button gesture, as required by tabCapture.
       const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: currentTab.id });
-      const result = await send({ action: "start", tabId: currentTab.id, streamId });
+      const result = await send({ action: "start", tabId: currentTab.id, title: currentTab.title || "", streamId });
       if (!result?.ok) throw new Error(result?.error || "Could not start capture.");
       status.textContent = "Tab audio is routed into Audio Matrix.";
     }
