@@ -46,6 +46,13 @@ class AudioMatrixEventsServiceLiveSmokeTest {
             assertFalse(hasLinkFrom(graph, discard.path("id").asInt()),
                     "the discard side must remain unlinked when no explicit physical target exists");
             assertEquals(1, sinkCount(graph), "the private session should expose no physical or default sink");
+            try (PipeWireBackend backend = new PipeWireBackend()) {
+                PipeWireBackend.Snapshot snapshot = backend.refresh().get(8, TimeUnit.SECONDS);
+                assertTrue(snapshot.connected());
+                assertTrue(snapshot.sinks().isEmpty(), "the isolated event sink must not appear as a physical output");
+                assertTrue(snapshot.sources().stream().anyMatch(EventInputMonitor::isNode),
+                        "Audio Matrix must detect the event monitor so it can attach the graph source");
+            }
         } finally {
             stop(eventService);
             stop(wireplumber);

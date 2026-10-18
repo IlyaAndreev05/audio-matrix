@@ -23,7 +23,7 @@ public final class GraphPipeWireCompiler {
         for(GraphNode node:graph.nodes())if(node instanceof RouterNode&&node.type().equals("router"))
             throw new IllegalArgumentException("Legacy router node '"+node.name()+"' has no typed switching behavior; replace it with a Switch, MultiSwitch, Selector or Matrix node");
         List<Map<String,Object>> buses=new ArrayList<>(),routes=new ArrayList<>(),applications=new ArrayList<>();
-        List<String> activeBusIds=new ArrayList<>(),activeRouteIds=new ArrayList<>();
+        List<String> activeBusIds=new ArrayList<>(),activeRouteIds=new ArrayList<>(),eventInputBuses=new ArrayList<>();
         Map<String,Object> routeChains=new LinkedHashMap<>();Map<String,Map<String,Object>> outputLimiters=new LinkedHashMap<>();
         Set<String> sourceSelectors=new HashSet<>(),sourceOutputs=new HashSet<>();String defaultBus="";
         for(SourceNode source:sources){
@@ -35,6 +35,10 @@ public final class GraphPipeWireCompiler {
             if(selector.equals("application:unassigned")||selector.equals("application:*")){
                 if(!defaultBus.isBlank())throw new IllegalArgumentException("Only one catch-all application source is allowed");
                 defaultBus=source.id();
+            }else if(EventSoundStudioSource.SELECTOR.equals(selector)){
+                eventInputBuses.add(source.id());
+                Map<String,Object> rule=savedApplicationRule(baseConfig,"app_id",EventSoundStudioSource.APPLICATION_ID);
+                rule.put("id","graph-rule-"+source.id());rule.put("bus",source.id());rule.put("match",map("app_id",EventSoundStudioSource.APPLICATION_ID));applications.add(rule);
             }else if(selector.startsWith("application:")&&!selector.substring("application:".length()).isBlank()){
                 String appId=selector.substring("application:".length());Map<String,Object> rule=savedApplicationRule(baseConfig,"app_id",appId);rule.put("id","graph-rule-"+source.id());rule.put("bus",source.id());rule.put("match",map("app_id",appId));applications.add(rule);
             }else if(selector.startsWith("process:")&&!selector.substring("process:".length()).isBlank()){
@@ -47,7 +51,7 @@ public final class GraphPipeWireCompiler {
         }
         if(routes.isEmpty())throw new IllegalArgumentException("The graph has no enabled path from a source to an output");
         Map<String,Object> result=deep(baseConfig);
-        result.put("buses",buses);result.put("routes",routes);result.put("applications",applications);result.put("graph_default_bus",defaultBus);
+        result.put("buses",buses);result.put("routes",routes);result.put("applications",applications);result.put("event_input_buses",eventInputBuses);result.put("graph_default_bus",defaultBus);
         Map<String,Object> profile=activeProfile(result);profile.put("mode","multi-output");profile.put("active_buses",activeBusIds);profile.put("active_routes",activeRouteIds);
         Map<String,Object> dsp=object(result.get("dsp"));result.put("dsp",dsp);Map<String,Object> chains=object(dsp.get("route_chains"));dsp.put("route_chains",chains);chains.putAll(routeChains);
         Map<String,Object> encodedOutputLimiters=new LinkedHashMap<>();

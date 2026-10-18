@@ -3,6 +3,7 @@ import org.junit.jupiter.api.Test;
 import io.github.ilyaandreev05.audiomatrix.config.DefaultConfig;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
 import io.github.ilyaandreev05.audiomatrix.graph.FilterNode;
+import io.github.ilyaandreev05.audiomatrix.graph.EventSoundStudioSource;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphConnection;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphPipeWireCompiler;
 import io.github.ilyaandreev05.audiomatrix.graph.SwitchNode;
@@ -73,4 +74,24 @@ class PipeWireApplicationRoutingTest extends PipeWireRouteManagerTestSupport {
                 config);
         assertEquals(List.of("low_pass", "notch"), filters.stream().map(filter -> filter.get("type")).toList());
     }
+@Test
+void graphEventSourceUsesThePersistentSinkMonitorWithOrWithoutAnActivePulse() throws IOException {
+    Map<String,Object> config=DefaultConfig.create();
+    var events=new io.github.ilyaandreev05.audiomatrix.graph.SourceNode("events","Event effects",EventSoundStudioSource.SELECTOR,List.of("FL","FR"));
+    var output=new io.github.ilyaandreev05.audiomatrix.graph.OutputNode("output","Output","system_default",List.of("FL","FR"));
+    var graph=new AudioGraph("event-route","Event route",List.of(events,output),List.of(
+            new GraphConnection("event-output","events","out","output","in",true,1)));
+    Map<String,Object> compiled=GraphPipeWireCompiler.compile(graph,config);
+    AudioNode sink=sink(70,"default-sink","Default output");
+    AudioNode eventStream=new AudioNode(71,"pw-cat","Event effects","Stream/Output/Audio","running",
+            "Event Sound Studio","pw-cat",EventSoundStudioSource.APPLICATION_ID,2,List.of(48000),1.0,false,null);
+    PipeWireRouteManager manager=new PipeWireRouteManager();
+
+    var idle=manager.plan(compiled,snapshotWithStreams(List.of(sink),List.of(),sink.id()));
+    var pulsing=manager.plan(compiled,snapshotWithStreams(List.of(sink),List.of(eventStream),sink.id()));
+
+    assertEquals(List.of("audiomatrix_events"),idle.routedStreamNames());
+    assertEquals(List.of("audiomatrix_events"),pulsing.routedStreamNames());
+    assertEquals("events",pulsing.streams().getFirst().busId());
+}
 }
