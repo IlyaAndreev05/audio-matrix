@@ -64,6 +64,8 @@ rg -q 'quickControls' "$extension_source"
 rg -q 'controlPosition' "$extension_source/menu-renderer.js"
 rg -q "control.kind === 'range'" "$extension_source/menu-renderer.js"
 rg -q 'quickGroups' "$extension_source"
+rg -q 'hasAvailableMenuState' "$extension_source/menu-renderer.js"
+rg -q 'if \(!hasAvailableMenuState\(snapshot\)\) return;' "$extension_source/menu-renderer.js"
 rg -q 'PopupMenu\.PopupMenuSection' "$extension_source"
 rg -q 'St\.ScrollView' "$extension_source"
 rg -q 'updateMenuControls' "$extension_source"
@@ -112,7 +114,7 @@ gnome-extensions pack "$extension_source" --force --out-dir "$scratch" \
     --extra-source=menu-lease.js \
     --extra-source=volume-menu-adapter.js
 unzip -t "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip"
-unzip -p "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" metadata.json | rg '"version": 16'
+unzip -p "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" metadata.json | rg '"version": 17'
 for module in menu-text.js state-client.js menu-rows.js menu-applications.js menu-links.js menu-layout.js menu-control-scale.js menu-matrix.js menu-mixer.js menu-output.js menu-disclosure.js menu-renderer.js menu-state.js menu-lease.js volume-menu-adapter.js; do
     unzip -Z1 "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" | grep -Fxq "$module"
 done

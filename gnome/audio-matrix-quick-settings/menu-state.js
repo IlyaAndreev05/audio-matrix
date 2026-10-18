@@ -25,6 +25,10 @@ export function menuStructureSignature(snapshot) {
     });
 }
 
+export function hasAvailableMenuState(snapshot) {
+    return Boolean(snapshot?.available && snapshot?.state);
+}
+
 export function menuLevelRows(state) {
     const rows = new Map();
     for (const application of state.applications || []) {

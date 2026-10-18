@@ -8,7 +8,7 @@ import AudioMatrixMenuMatrix from './menu-matrix.js';
 import AudioMatrixMenuMixer from './menu-mixer.js';
 import AudioMatrixMenuOutput from './menu-output.js';
 import AudioMatrixMenuDisclosure from './menu-disclosure.js';
-import {menuLevelRows, menuStructureSignature} from './menu-state.js';
+import {hasAvailableMenuState, menuLevelRows, menuStructureSignature} from './menu-state.js';
 import {controlPosition, controlValueAt, formatControlValue} from './menu-control-scale.js';
 import {TEXT} from './menu-text.js';
 
@@ -118,6 +118,7 @@ export default class AudioMatrixMenuRenderer {
         if (!this._section) return;
         const structure = menuStructureSignature(snapshot);
         if (structure === this._structure) {
+            if (!hasAvailableMenuState(snapshot)) return;
             try {
                 updateMenuControls(this._levelRows, this._toggleRows, this._linkRows, this._matrixRows,
                     this._links, this._matrix, this._rows, snapshot.state, TEXT[snapshot.language]);
