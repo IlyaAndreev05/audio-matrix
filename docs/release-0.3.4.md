@@ -1,7 +1,9 @@
-# Audio Matrix 0.3.3 release checklist
+# Audio Matrix 0.3.4 release checklist
 
 ## Changes
 
+- Address a pinned output Gain by its active route, Output node, and endpoint Gain node IDs. Outputs that share one PipeWire device, such as Family 17h green and black AUX channel pairs, keep independent level and mute controls.
+- Reject stale output-level commands using the published config revision.
 - Keep GNOME mixer sliders and disclosures in place while live values or collapsed state change; do not rebuild the menu for those updates.
 - Render Chrome child audio streams directly inside its pinned source card when the source matches one browser application.
 - Keep pinned output-node level rows separate from physical sink rows so a hardware volume refresh cannot overwrite graph Gain state.
