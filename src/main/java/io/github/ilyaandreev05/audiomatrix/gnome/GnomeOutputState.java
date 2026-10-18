@@ -32,10 +32,14 @@ public final class GnomeOutputState {
     }
 
     public static AudioNode resolve(List<AudioNode> available, String reference, List<Map<String, Object>> configured) {
+        if (reference == null || reference.isBlank()) return null;
         if (reference.startsWith("device:"))
             return DeviceSelectorMatcher.resolve(available, reference.substring("device:".length()), configured);
-        String name = reference.startsWith("name:") ? reference.substring("name:".length()) : reference;
-        return available.stream().filter(node -> node.name().equals(name)).findFirst().orElse(null);
+        if (reference.startsWith("name:")) {
+            String name = reference.substring("name:".length());
+            return available.stream().filter(node -> node.name().equals(name)).findFirst().orElse(null);
+        }
+        return DeviceSelectorMatcher.resolve(available, reference, configured);
     }
 
     private static String commandId(AudioNode sink, List<Map<String, Object>> configured) {

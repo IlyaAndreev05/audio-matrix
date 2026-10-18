@@ -69,6 +69,8 @@ rg -q 'St\.ScrollView' "$extension_source"
 rg -q 'updateMenuControls' "$extension_source"
 rg -q 'set_graph_output_volume' "$extension_source/menu-output.js"
 rg -q 'graphGainNodeId' "$extension_source/menu-output.js"
+rg -q 't\.outputUnavailable' "$extension_source/menu-output.js"
+rg -q "outputUnavailable: 'Устройство вывода недоступно'" "$extension_source/menu-text.js"
 rg -q 'pin\.routeId' "$extension_source/menu-output.js"
 rg -q 'pin\.nodeId' "$extension_source/menu-output.js"
 rg -q 'Atk\.StateType\.EXPANDABLE' "$extension_source"
@@ -110,7 +112,7 @@ gnome-extensions pack "$extension_source" --force --out-dir "$scratch" \
     --extra-source=menu-lease.js \
     --extra-source=volume-menu-adapter.js
 unzip -t "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip"
-unzip -p "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" metadata.json | rg '"version": 15'
+unzip -p "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" metadata.json | rg '"version": 16'
 for module in menu-text.js state-client.js menu-rows.js menu-applications.js menu-links.js menu-layout.js menu-control-scale.js menu-matrix.js menu-mixer.js menu-output.js menu-disclosure.js menu-renderer.js menu-state.js menu-lease.js volume-menu-adapter.js; do
     unzip -Z1 "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" | grep -Fxq "$module"
 done

@@ -10,7 +10,7 @@ export default class AudioMatrixMenuOutput {
     render(pin, t, target) {
         const output = pin.output;
         if (!output?.available || !output.graphGainNodeId) {
-            target.addMenuItem(new PopupMenu.PopupMenuItem(t.unavailable, {reactive: false, can_focus: false}));
+            target.addMenuItem(new PopupMenu.PopupMenuItem(t.outputUnavailable, {reactive: false, can_focus: false}));
             return;
         }
         const graphTarget = `${pin.routeId}\t${pin.nodeId}\t${output.graphGainNodeId}`;
