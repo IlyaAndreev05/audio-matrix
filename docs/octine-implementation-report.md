@@ -32,6 +32,8 @@ Baseline saved on `main` and merged to `develop`: `df3e188` (workspace artifacts
 - Music test (100 Hz + 1 kHz tone): HDMI monitor showed both frequencies at comparable level; analog Vibro monitor showed 100 Hz and strongly attenuated 1 kHz, proving the Low-pass copy.
 - Event test: normalized Octine click pulses produced analog peaks around 11,143 s16; HDMI remained zero.
 - Notification continuity test: 25 event pulses continued through a visible GNOME notification with no multi-second gap.
+- Free profile 1→N: selecting HDMI and the USB DAC in the same Switch produced simultaneous PCM on HDMI, USB and the analog Vibro output; unselected outputs stayed silent.
+- The installed JavaFX editor opens against the running service and shows PipeWire connected; the Profiles page exposes the three Octine profiles and the shared Vibro controls.
 - Click-to-captured-PCM latency measured from evdev to analog monitor: approximately **0.38 s** (capture-monitor path included). The earlier multi-second delay was route reconstruction, not the event-to-PCM path.
 
 ## Known limitations / blockers
