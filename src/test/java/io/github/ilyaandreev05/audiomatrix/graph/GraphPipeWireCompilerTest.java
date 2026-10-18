@@ -31,6 +31,31 @@ class GraphPipeWireCompilerTest {
         assertFalse(compiled.toString().contains("node_id"));
     }
 
+    @Test void mixerInputGainAndMuteSurviveJsonRoundTripAndMuteOnlyTheirOwnBranch(){
+        SourceNode browser=new SourceNode("browser","Chrome","application:chrome",STEREO);
+        SourceNode music=new SourceNode("music","Music","application:music",STEREO);
+        MixerNode mixer=new MixerNode("mixer","App mixer",STEREO,Map.of("browser-in",.7,"music-in",.4),
+                Map.of("browser-in",true,"music-in",false));
+        OutputNode output=new OutputNode("monitor","Monitor","monitor",STEREO);
+        AudioGraph graph=new AudioGraph("route-mixer","Mixer route",List.of(browser,music,mixer,output),List.of(
+                link("browser","out","mixer","browser-in"),link("music","out","mixer","music-in"),
+                link("mixer","out","monitor","in")));
+
+        AudioGraph decoded=GraphCodec.fromMap(GraphCodec.toMap(graph));
+        MixerNode decodedMixer=(MixerNode)decoded.nodes().stream().filter(MixerNode.class::isInstance).findFirst().orElseThrow();
+        @SuppressWarnings("unchecked") List<Map<String,Object>> routes=(List<Map<String,Object>>)
+                GraphPipeWireCompiler.compile(decoded,DefaultConfig.create()).get("routes");
+        Map<String,Object> browserRoute=routes.stream().filter(route->"browser".equals(route.get("from"))).findFirst().orElseThrow();
+        Map<String,Object> musicRoute=routes.stream().filter(route->"music".equals(route.get("from"))).findFirst().orElseThrow();
+
+        assertEquals(Map.of("browser-in",.7,"music-in",.4),decodedMixer.inputGains());
+        assertEquals(Map.of("browser-in",true,"music-in",false),decodedMixer.inputMutes());
+        assertEquals(0.0,browserRoute.get("volume"));
+        assertEquals(true,browserRoute.get("mute"));
+        assertEquals(.4,musicRoute.get("volume"));
+        assertEquals(false,musicRoute.get("mute"));
+    }
+
     @Test void compilesPeakLimiterAsOutputStageAfterRouteFilters(){
         SourceNode source=new SourceNode("source-main","Applications","application:unassigned",STEREO);
         FilterNode lowPass=new FilterNode("filter-low","Low pass",STEREO,"low_pass",true,Map.of("frequency_hz",100.0,"slope_db_oct",24.0));

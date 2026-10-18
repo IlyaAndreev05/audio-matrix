@@ -130,7 +130,7 @@ abstract class AppShellUiPart05 extends AppShellUiPart04 {
                 GraphNode prior=nodes.stream().filter(node->node.id().equals(occupied)).findFirst().orElse(null);
                 if(prior instanceof MixerNode mixer){
                     String inputId="in-"+UUID.randomUUID().toString().substring(0,8);Map<String,Double> gains=new LinkedHashMap<>(mixer.inputGains());gains.put(inputId,1.0);
-                    nodes.set(nodes.indexOf(mixer),new MixerNode(mixer.id(),mixer.name(),mixer.outputs().getFirst().channels(),gains));
+                    nodes.set(nodes.indexOf(mixer),new MixerNode(mixer.id(),mixer.name(),mixer.outputs().getFirst().channels(),gains,mixer.inputMutes()));
                     edges.add(new GraphConnection("link-"+UUID.randomUUID(),source.id(),"out",mixer.id(),inputId,true,1));
                 }else{
                     String mixerId="mixer-"+UUID.randomUUID();Map<String,Double> gains=Map.of("in-a",1.0,"in-b",1.0);
@@ -149,7 +149,9 @@ abstract class AppShellUiPart05 extends AppShellUiPart04 {
                 List<GraphConnection> mixerInputs=edges.stream().filter(edge->edge.toNode().equals(mixer.id())).toList();
                 if(mixerInputs.size()<=1){if(!mixerInputs.isEmpty()){GraphConnection last=mixerInputs.getFirst();edges.removeIf(edge->edge.fromNode().equals(mixer.id())&&edge.toNode().equals(output.id()));edges.add(new GraphConnection("link-"+UUID.randomUUID(),last.fromNode(),last.fromPort(),output.id(),"in",true,last.gain()));}edges.removeIf(edge->edge.toNode().equals(mixer.id())||edge.fromNode().equals(mixer.id()));nodes.remove(mixer);}
                 else{
-                    Map<String,Double> gains=new LinkedHashMap<>();mixerInputs.forEach(edge->gains.put(edge.toPort(),1.0));nodes.set(nodes.indexOf(mixer),new MixerNode(mixer.id(),mixer.name(),mixer.outputs().getFirst().channels(),gains));
+                    Map<String,Double> gains=new LinkedHashMap<>();mixerInputs.forEach(edge->gains.put(edge.toPort(),mixer.inputGains().getOrDefault(edge.toPort(),1.0)));
+                    Map<String,Boolean> mutes=new LinkedHashMap<>();mixerInputs.forEach(edge->mutes.put(edge.toPort(),mixer.inputMuted(edge.toPort())));
+                    nodes.set(nodes.indexOf(mixer),new MixerNode(mixer.id(),mixer.name(),mixer.outputs().getFirst().channels(),gains,mutes));
                 }
             }
         }

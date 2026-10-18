@@ -77,9 +77,11 @@ abstract class AppShellContract01 extends AppShellBase {
     protected abstract boolean graphNodePinned(String routeId,String nodeId);
     protected abstract void toggleGraphNodePin(String routeId,GraphNode node,boolean pinned);
     protected abstract CompletableFuture<Void> setGnomeQuickPinView(String value);
+    protected abstract CompletableFuture<Void> setGnomeMatrixView(String value);
     protected abstract void updateGraph(String routeId,Consumer<List<GraphNode>> nodeChange);
     protected abstract void saveGraph(String routeId,AudioGraph graph);
     protected abstract void updateGraphNodeParameters(String routeId,String nodeId,Consumer<Map<String,Object>> change);
+    protected abstract void updateGraphMixerInput(String routeId,String nodeId,String port,Double gain,Boolean muted);
     protected abstract void removeGraphNode(String routeId,String nodeId);
     protected abstract void connectGraphNodes(String routeId,GraphNode source,AudioPort sourcePort,GraphNode target,AudioPort targetPort);
     protected abstract void setGraphConnectionEnabled(String routeId,String connectionId,boolean enabled);
@@ -150,6 +152,7 @@ abstract class AppShellContract01 extends AppShellBase {
     protected abstract CompletableFuture<Void> setGnomeOutputLevel(String value,boolean toggleMute);
     protected abstract CompletableFuture<Void> setGnomeApplicationLevel(String value,boolean toggleMute);
     protected abstract CompletableFuture<Void> setGnomeStreamLevel(String value,boolean toggleMute);
+    protected abstract CompletableFuture<Void> setGnomeMixerInputLevel(String value,boolean toggleMute);
     protected abstract Map<String,Object> ensureGnomeApplicationRule(Map<String,Object> config,String groupId);
     protected abstract CompletableFuture<Void> setGnomeChannelMap(String value);
     protected abstract AudioNode routeOutputNode(Map<String, Object> config, Map<String, Object> route);

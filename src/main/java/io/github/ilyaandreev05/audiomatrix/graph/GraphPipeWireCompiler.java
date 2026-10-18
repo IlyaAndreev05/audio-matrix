@@ -102,7 +102,7 @@ public final class GraphPipeWireCompiler {
             }else{
                 Map<String,Object> encoded=new LinkedHashMap<>(filter.parameters());encoded.remove("processor");encoded.remove("enabled");encoded.put("type",filter.processor());encoded.putIfAbsent("enabled",true);path.filters.add(encoded);
             }
-        }else if(node instanceof MixerNode mixer){path.gain*=mixer.inputGains().getOrDefault(incomingPort,0.0);}
+        }else if(node instanceof MixerNode mixer){path.gain*=mixer.inputGains().getOrDefault(incomingPort,0.0);path.muted|=mixer.inputMuted(incomingPort);}
         else throw new IllegalArgumentException("Unsupported processing node "+node.type()+" '"+node.name()+"'");
         List<GraphConnection> next=outgoing(graph,nodeId);
         if(next.isEmpty())throw new IllegalArgumentException("Node '"+node.name()+"' has no connection to an output");

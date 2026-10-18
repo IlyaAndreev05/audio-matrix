@@ -23,7 +23,8 @@ final class GraphNodeCopies {
             case "selector" -> new SelectorNode(id, node.name(), channels, inputIds(node), links(node));
             case "multi_selector" -> new MultiSelectorNode(id, node.name(), channels, inputIds(node), links(node));
             case "matrix" -> new MatrixNode(id, node.name(), channels, inputIds(node), outputIds(node), links(node));
-            case "mixer" -> new MixerNode(id, node.name(), channels, ((MixerNode) node).inputGains());
+            case "mixer" -> new MixerNode(id, node.name(), channels, ((MixerNode) node).inputGains(),
+                    ((MixerNode) node).inputMutes());
             case "filter" -> copyFilter(node, id, channels);
             default -> throw new IllegalArgumentException("Unsupported graph node type: " + node.type());
         };

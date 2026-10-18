@@ -4,16 +4,27 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Collections;
 
 /** Explicit many-to-one summing point with a gain for every input. */
 public final class MixerNode extends GraphNode {
     private final Map<String, Double> inputGains;
+    private final Map<String, Boolean> inputMutes;
     public MixerNode(String id, String name, List<String> channels, Map<String, Double> inputGains) {
+        this(id, name, channels, inputGains, Map.of());
+    }
+    public MixerNode(String id, String name, List<String> channels, Map<String, Double> inputGains,
+                     Map<String, Boolean> inputMutes) {
         super(id, name, ports(channels, inputGains));
-        this.inputGains = Map.copyOf(new LinkedHashMap<>(inputGains));
+        this.inputGains = Collections.unmodifiableMap(new LinkedHashMap<>(inputGains));
         for (Map.Entry<String, Double> entry : this.inputGains.entrySet())
             if (entry.getValue() == null || !Double.isFinite(entry.getValue()) || entry.getValue() < 0 || entry.getValue() > 1)
                 throw new IllegalArgumentException("Mixer input gains must be between 0 and 1");
+        if (!this.inputGains.keySet().containsAll(inputMutes.keySet()))
+            throw new IllegalArgumentException("Mixer input mutes must reference an existing input");
+        Map<String, Boolean> mutes = new LinkedHashMap<>();
+        this.inputGains.keySet().forEach(port -> mutes.put(port, Boolean.TRUE.equals(inputMutes.get(port))));
+        this.inputMutes = Collections.unmodifiableMap(mutes);
     }
     private static List<AudioPort> ports(List<String> channels, Map<String, Double> gains) {
         if (gains == null || gains.size() < 2) throw new IllegalArgumentException("A mixer needs at least two named inputs");
@@ -23,6 +34,13 @@ public final class MixerNode extends GraphNode {
         return ports;
     }
     public Map<String, Double> inputGains() { return inputGains; }
+    public Map<String, Boolean> inputMutes() { return inputMutes; }
+    public boolean inputMuted(String port) { return inputMutes.getOrDefault(port, false); }
     @Override public String type() { return "mixer"; }
-    @Override public Map<String, Object> parameters() { return new LinkedHashMap<>(inputGains); }
+    @Override public Map<String, Object> parameters() {
+        Map<String, Object> parameters = new LinkedHashMap<>();
+        parameters.put("input_gains", inputGains);
+        parameters.put("input_mutes", inputMutes);
+        return parameters;
+    }
 }
