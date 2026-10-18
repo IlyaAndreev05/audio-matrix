@@ -35,7 +35,7 @@ class GnomeQuickSettingsPinsTest {
                 new SourceNode("other-apps", "Other apps", "application:*", STEREO),
                 new MixerNode("mixer-1", "Application mixer", STEREO,
                         Map.of("chrome-in", .7, "telegram-in", .3), Map.of("telegram-in", true)),
-                new OutputNode("monitor-out", "Monitor", "device:monitor", STEREO)), List.of(
+                new OutputNode("monitor-out", "Monitor", "monitor", STEREO)), List.of(
                 edge("chrome", "mixer-1", "chrome-in"), edge("other-apps", "mixer-1", "telegram-in"),
                 edge("mixer-1", "monitor-out", "in")));
         GraphRouteLibrary.saveRoute(config, graph, "");
