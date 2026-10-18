@@ -34,8 +34,8 @@ public final class GnomeControlBridge implements AutoCloseable {
     public static final int API_VERSION=3;
     private static final java.util.Set<String> SUPPORTED_COMMANDS=java.util.Set.of("open","select_output","toggle_mute",
             "set_output_volume","toggle_output_mute","set_app_volume","toggle_app_mute","set_stream_volume",
-            "toggle_stream_mute","set_quick_control","toggle_quick_control","set_quick_control_choice",
-            "set_quick_group_collapsed","set_quick_pin_view","select_route","set_mode","set_channel_map");
+            "toggle_stream_mute","set_mixer_input_volume","toggle_mixer_input_mute","set_quick_control","toggle_quick_control","set_quick_control_choice",
+            "set_quick_group_collapsed","set_quick_pin_view","set_quick_matrix_view","select_route","set_mode","set_channel_map");
     private final PipeWireBackend backend;
     private final Function<Command,CompletableFuture<Void>> commands;
     private final ObjectMapper json=new ObjectMapper();
@@ -77,7 +77,8 @@ public final class GnomeControlBridge implements AutoCloseable {
         for(Map<String,Object> control:maps(config.get("quick_controls"))){if(!active.equals(String.valueOf(control.getOrDefault("route_id",active))))continue;
             String nodeId=String.valueOf(control.getOrDefault("node_id","")),parameter=String.valueOf(control.getOrDefault("parameter_id",""));GraphNode node=graph.nodes().stream().filter(candidate->candidate.id().equals(nodeId)).findFirst().orElse(null);if(node==null)continue;
             String kind=controlKind(node.type(),parameter);if(kind.isBlank())continue;Object value=node.parameters().get(parameter);if(value==null)continue;
-            Map<String,Object> item=new LinkedHashMap<>();item.put("id",control.get("id"));item.put("nodeId",nodeId);item.put("parameterId",parameter);item.put("label",control.getOrDefault("label",node.name()));item.put("section",control.getOrDefault("section","Audio Matrix"));item.put("order",control.getOrDefault("order",0));item.put("kind",kind);item.put("value",value);
+            Map<String,Object> item=new LinkedHashMap<>();item.put("id",control.get("id"));item.put("nodeId",nodeId);item.put("nodeType",node.type());item.put("parameterId",parameter);item.put("label",control.getOrDefault("label",node.name()));item.put("section",control.getOrDefault("section","Audio Matrix"));item.put("order",control.getOrDefault("order",0));item.put("kind",kind);item.put("value",value);
+            item.put("view",control.getOrDefault("view","MATRIX"));
             item.put("groupId",control.getOrDefault("group_id",control.getOrDefault("section","routing")));
             if("gain".equals(node.type())&&"gain".equals(parameter))item.put("muted",Boolean.TRUE.equals(node.parameters().get("muted")));
             if("links".equals(kind)&&node instanceof RouterNode router){

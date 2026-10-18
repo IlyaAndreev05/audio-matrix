@@ -8,6 +8,7 @@ import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
 import io.github.ilyaandreev05.audiomatrix.graph.GainNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphConnection;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphRouteLibrary;
+import io.github.ilyaandreev05.audiomatrix.graph.MatrixNode;
 import io.github.ilyaandreev05.audiomatrix.graph.OutputNode;
 import io.github.ilyaandreev05.audiomatrix.graph.SourceNode;
 import io.github.ilyaandreev05.audiomatrix.graph.SwitchNode;
@@ -168,6 +169,26 @@ class GnomeControlBridgeTest {
 
         List<Map<String,Object>> controls=GnomeControlBridge.quickControls(config);
 
-        assertEquals(1,controls.size());Map<String,Object> control=controls.getFirst();assertEquals("links",control.get("kind"));assertEquals(List.of("in->monitor"),control.get("value"));assertEquals(List.of(Map.of("id","in->monitor","label","in → monitor"),Map.of("id","in->aux","label","in → aux")),control.get("options"));assertEquals(false,control.get("multiple"));
+        assertEquals(1,controls.size());Map<String,Object> control=controls.getFirst();assertEquals("links",control.get("kind"));assertEquals("switch",control.get("nodeType"));assertEquals(List.of("in->monitor"),control.get("value"));assertEquals(List.of(Map.of("id","in->monitor","label","in → monitor"),Map.of("id","in->aux","label","in → aux")),control.get("options"));assertEquals(false,control.get("multiple"));
+    }
+
+    @Test void publishesMatrixViewAndIndependentLinksForPinnedMatrixNode(){
+        Map<String,Object> config=DefaultConfig.create();List<String> stereo=List.of("FL","FR");
+        AudioGraph graph=new AudioGraph("route-matrix","Matrix route",List.of(
+                new SourceNode("source","Apps","application:unassigned",stereo),
+                new MatrixNode("matrix","Output matrix",stereo,List.of("apps"),List.of("monitor","aux"),List.of("apps->monitor")),
+                new OutputNode("monitor-output","Monitor","monitor-id",stereo),
+                new OutputNode("aux-output","AUX","aux-id",stereo)),List.of(
+                new GraphConnection("source-matrix","source","out","matrix","apps",true,1),
+                new GraphConnection("matrix-monitor","matrix","monitor","monitor-output","in",true,1),
+                new GraphConnection("matrix-aux","matrix","aux","aux-output","in",true,1)));
+        GraphRouteLibrary.saveRoute(config,graph,"");GraphRouteLibrary.activate(config,graph.id());
+        config.put("quick_controls",List.of(Map.of("id","matrix-control","route_id",graph.id(),"node_id","matrix",
+                "parameter_id","active_links","label","Outputs","view","ARROWS")));
+
+        Map<String,Object> control=GnomeControlBridge.quickControls(config).getFirst();
+
+        assertEquals("matrix",control.get("nodeType"));assertEquals(true,control.get("multiple"));
+        assertEquals("ARROWS",control.get("view"));assertEquals(List.of("apps->monitor"),control.get("value"));
     }
 }

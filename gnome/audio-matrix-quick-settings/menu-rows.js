@@ -6,7 +6,6 @@ import St from 'gi://St';
 import {TEXT} from './menu-text.js';
 
 const LEVEL_ROW_STATE = new WeakMap();
-const GRAPH_LINK_STATE = new WeakMap();
 
 export default class AudioMatrixMenuRows {
     constructor({section, getLanguage, send, queueSliderCommand, onOpen, onDragBegin, onDragEnd}) {
@@ -191,33 +190,4 @@ export default class AudioMatrixMenuRows {
         return 'audio-x-generic-symbolic';
     }
 
-    addGraphLinks(control, target = this._section) {
-        const selected = new Set(Array.isArray(control.value) ? control.value : []);
-        const options = control.options || [];
-        const submenu = new PopupMenu.PopupSubMenuMenuItem(
-            `${control.label || control.parameterId} (${selected.size}/${options.length})`, false);
-        const rows = [];
-        for (const option of options) {
-            const item = new PopupMenu.PopupSwitchMenuItem(option.label || option.id, selected.has(option.id));
-            const signalId = item.connect('toggled', () => this._send('set_quick_control_choice', `${control.id}\t${option.id}`));
-            item.connect('activate', () => item.stop_emission_by_name('activate'));
-            rows.push({id: option.id, item, signalId});
-            submenu.menu.addMenuItem(item);
-        }
-        GRAPH_LINK_STATE.set(submenu, rows);
-        target.addMenuItem(submenu);
-        return submenu;
-    }
-
-    updateGraphLinks(submenu, control) {
-        const rows = GRAPH_LINK_STATE.get(submenu);
-        if (!rows) return;
-        const selected = new Set(Array.isArray(control.value) ? control.value : []);
-        for (const row of rows) {
-            row.item.block_signal_handler(row.signalId);
-            row.item.state = selected.has(row.id);
-            row.item.unblock_signal_handler(row.signalId);
-        }
-        submenu.label.text = `${control.label || control.parameterId} (${selected.size}/${rows.length})`;
-    }
 }

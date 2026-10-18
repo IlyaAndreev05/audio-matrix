@@ -3,6 +3,10 @@ import Atk from 'gi://Atk';
 import St from 'gi://St';
 import AudioMatrixMenuRows from './menu-rows.js';
 import AudioMatrixMenuApplications from './menu-applications.js';
+import AudioMatrixMenuLinks from './menu-links.js';
+import AudioMatrixMenuMatrix from './menu-matrix.js';
+import AudioMatrixMenuMixer from './menu-mixer.js';
+import AudioMatrixMenuOutput from './menu-output.js';
 import {TEXT} from './menu-text.js';
 
 function structureSignature(snapshot) {
@@ -15,14 +19,16 @@ function structureSignature(snapshot) {
         pins: (state.quickPins || []).map(pin => [
             pin.id, pin.routeId, pin.nodeId, pin.name, pin.nodeType, pin.groupId, pin.order, pin.view,
             (pin.controls || []).map(control => [control.id, control.parameterId, control.label, control.kind,
-                control.multiple, (control.options || []).map(option => [option.id, option.label])]),
+                control.nodeType, control.multiple, (control.options || []).map(option => [option.id, option.label])]),
             (pin.applications || []).map(application => [application.id, application.name,
                 (application.streams || []).map(stream => [stream.id, stream.name, stream.description])]),
+            (pin.mixerInputs || []).map(input => [input.id, input.name]),
             pin.output ? [pin.output.id, pin.output.name, pin.output.description, pin.output.available] : null,
         ]),
         controls: (state.quickControls || []).map(control => [
             control.id, control.nodeId, control.parameterId, control.label, control.section,
             control.groupId, control.order, control.kind, control.multiple,
+            control.nodeType,
             (control.options || []).map(option => [option.id, option.label]),
         ]),
     });
@@ -46,7 +52,7 @@ function createScrollableGroups(section) {
     return column;
 }
 
-function updateMenuControls(rows, toggles, links, menuRows, state, t) {
+function updateMenuControls(rows, toggles, linkRows, matrixRows, linkRenderer, matrixRenderer, menuRows, state, t) {
     if (!state) return;
     for (const application of state.applications || []) {
         updateLevelRow(rows, menuRows, `app:${application.id}`, application, t);
@@ -55,6 +61,9 @@ function updateMenuControls(rows, toggles, links, menuRows, state, t) {
     }
     for (const output of state.outputs || [])
         updateLevelRow(rows, menuRows, `output:${output.id || output.name}`, output, t);
+    for (const pin of state.quickPins || [])
+        for (const input of pin.mixerInputs || [])
+            updateLevelRow(rows, menuRows, `mixer:${pin.nodeId}:${input.id}`, input, t);
     for (const control of state.quickControls || []) {
         if (control.kind === 'slider')
             updateLevelRow(rows, menuRows, `graph:${control.id}`, control, t);
@@ -65,8 +74,11 @@ function updateMenuControls(rows, toggles, links, menuRows, state, t) {
             entry.item.state = Boolean(control.value);
             entry.item.unblock_signal_handler(entry.signalId);
         }
-        if (control.kind === 'links')
-            menuRows.updateGraphLinks(links.get(String(control.id)), control);
+        if (control.kind === 'links') {
+            const id = String(control.id);
+            if (control.nodeType === 'matrix') matrixRenderer.update(matrixRows.get(id), control);
+            else linkRenderer.update(linkRows.get(id), control);
+        }
     }
 }
 
@@ -76,6 +88,19 @@ function updateLevelRow(rows, menuRows, id, source, t) {
         muted: Boolean(source.muted),
         mutedLabel: source.muted ? t.unmute : t.mute,
     });
+}
+
+function addRoutePicker(section, state, t, send) {
+    const routes = state.routes || [];
+    if (routes.length < 2) return;
+    const name = state.activeRoute || routes.find(route => route.id === state.activeRouteId)?.name || '—';
+    const picker = new PopupMenu.PopupSubMenuMenuItem(`${t.route}: ${name}`, false);
+    for (const route of routes) {
+        const item = new PopupMenu.PopupMenuItem(route.name || route.id);
+        item.connect('activate', () => send('select_route', route.id));
+        picker.menu.addMenuItem(item);
+    }
+    section.addMenuItem(picker);
 }
 
 export default class AudioMatrixMenuRenderer {
@@ -102,19 +127,33 @@ export default class AudioMatrixMenuRenderer {
             rows: this._rows,
             send: (name, value) => this._send(name, value),
         });
+        this._links = new AudioMatrixMenuLinks((name, value) => this._send(name, value));
+        this._matrix = new AudioMatrixMenuMatrix((name, value) => this._send(name, value));
+        this._matrixRows = new Map();
+        this._mixer = new AudioMatrixMenuMixer({
+            addLevelRow: (options, target) => this._addLevelRow(options, target),
+            send: (name, value) => this._send(name, value),
+        });
+        this._output = new AudioMatrixMenuOutput({
+            addLevelRow: (options, target) => this._addLevelRow(options, target),
+            outputIcon: output => this._rows.outputIcon(output),
+            send: (name, value) => this._send(name, value),
+        });
     }
 
     render(snapshot = this._getSnapshot()) {
         if (!this._section) return;
         const structure = structureSignature(snapshot);
         if (structure === this._structure) {
-            updateMenuControls(this._levelRows, this._toggleRows, this._linkRows, this._rows, snapshot.state, TEXT[snapshot.language]);
+            updateMenuControls(this._levelRows, this._toggleRows, this._linkRows, this._matrixRows,
+                this._links, this._matrix, this._rows, snapshot.state, TEXT[snapshot.language]);
             return;
         }
         this._structure = structure;
         this._levelRows.clear();
         this._toggleRows.clear();
         this._linkRows.clear();
+        this._matrixRows.clear();
         const {state, available, language, commandError} = snapshot;
         const t = TEXT[language];
         this._section.removeAll();
@@ -127,7 +166,7 @@ export default class AudioMatrixMenuRenderer {
             this._rows.addAction(t.open, () => this._onOpen(false), 'preferences-system-symbolic');
             return;
         }
-        this._addRoutePicker(state, t);
+        addRoutePicker(this._section, state, t, (name, value) => this._send(name, value));
         this._column = createScrollableGroups(this._section);
         const groups = state.quickGroups || [];
         for (const group of groups)
@@ -138,19 +177,6 @@ export default class AudioMatrixMenuRenderer {
         this._pinViewState = new Map((state.quickPins || []).map(pin => [String(pin.id), String(pin.view || 'DEFAULT')]));
         this._section.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._rows.addAction(t.open, () => this._onOpen(true), 'preferences-system-symbolic');
-    }
-
-    _addRoutePicker(state, t) {
-        const routes = state.routes || [];
-        if (routes.length < 2) return;
-        const name = state.activeRoute || routes.find(route => route.id === state.activeRouteId)?.name || '—';
-        const picker = new PopupMenu.PopupSubMenuMenuItem(`${t.route}: ${name}`, false);
-        for (const route of routes) {
-            const item = new PopupMenu.PopupMenuItem(route.name || route.id);
-            item.connect('activate', () => this._send('select_route', route.id));
-            picker.menu.addMenuItem(item);
-        }
-        this._section.addMenuItem(picker);
     }
 
     _renderGroup(group, pins, t) {
@@ -202,9 +228,11 @@ export default class AudioMatrixMenuRenderer {
         const content = new PopupMenu.PopupMenuSection();
         if (pin.nodeType === 'source')
             this._applications.render(pin.applications || [], t, content);
+        if (pin.nodeType === 'mixer')
+            this._mixer.render(pin.routeId, pin.nodeId, pin.mixerInputs || [], t, content);
         if (pin.nodeType === 'output')
-            this._renderPinnedOutput(pin, t, content);
-        this._renderControls(pin.controls || [], content);
+            this._output.render(pin, t, content);
+        this._renderControls(pin.controls || [], t, content);
         target.addMenuItem(header);
         target.addMenuItem(content);
         content.actor.visible = open;
@@ -225,28 +253,14 @@ export default class AudioMatrixMenuRenderer {
         });
     }
 
-    _renderPinnedOutput(pin, t, target) {
-        const output = pin.output;
-        if (!output?.available) {
-            target.addMenuItem(new PopupMenu.PopupMenuItem(t.unavailable, {reactive: false, can_focus: false}));
-            return;
-        }
-        this._addLevelRow({
-            id: 'output:' + (output.id || output.name), name: output.description || output.name,
-            icon: this._rows.outputIcon(output), value: output.volume, muted: output.muted,
-            mutedLabel: output.muted ? t.unmute : t.mute,
-            onValue: value => this._send('set_output_volume',
-                (output.id || output.name) + '\t' + value.toFixed(3)),
-            onMute: () => this._send('toggle_output_mute', output.id || output.name),
-        }, target);
-    }
-
-    _renderControls(controls, target) {
+    _renderControls(controls, t, target) {
         for (const control of controls) {
             if (control.kind === 'slider') this._renderSliderControl(control, target);
             else if (control.kind === 'toggle') this._renderToggleControl(control, target);
+            else if (control.kind === 'links' && control.nodeType === 'matrix')
+                this._matrixRows.set(String(control.id), this._matrix.render(control, t, target));
             else if (control.kind === 'links')
-                this._linkRows.set(String(control.id), this._rows.addGraphLinks(control, target));
+                this._linkRows.set(String(control.id), this._links.render(control, target));
         }
     }
 
@@ -280,9 +294,14 @@ export default class AudioMatrixMenuRenderer {
         this._section = null;
         this._rows = null;
         this._applications = null;
+        this._links = null;
+        this._matrix = null;
+        this._mixer = null;
+        this._output = null;
         this._levelRows.clear();
         this._toggleRows.clear();
         this._linkRows.clear();
+        this._matrixRows.clear();
         this._pinOpenState.clear();
         this._pinViewState.clear();
     }

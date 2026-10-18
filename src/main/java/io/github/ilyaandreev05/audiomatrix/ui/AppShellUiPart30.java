@@ -35,13 +35,23 @@ abstract class AppShellUiPart30 extends AppShellUiPart29 {
         }
         Map<String, Object> config = store.snapshot();
         List<Map<String, Object>> groups = QuickSettingsConfig.groups(config);
-        String suggested = node.type().equals("source") ? "Источники" : "Выходные устройства";
+        String suggested = switch(node.type()){
+            case "source" -> "Источники";
+            case "output" -> "Выходные устройства";
+            case "mixer" -> "Коммутация и управление";
+            default -> "Обработка звука";
+        };
         String order = Integer.toString(QuickSettingsConfig.pins(config).stream()
                 .filter(pin -> routeId.equals(pin.get("route_id"))).mapToInt(pin -> number(pin.get("order"), -1))
                 .max().orElse(-1) + 1);
+        String defaultGroupId=switch(node.type()){
+            case "source" -> "sources";
+            case "output" -> "outputs";
+            case "mixer" -> "routing";
+            default -> "effects";
+        };
         Map<String, Object> defaultGroup = groups.stream()
-                .filter(group -> ("sources".equals(group.get("id")) && node.type().equals("source"))
-                        || ("outputs".equals(group.get("id")) && node.type().equals("output")))
+                .filter(group -> defaultGroupId.equals(group.get("id")))
                 .findFirst().orElse(null);
         TextField groupName = new TextField(defaultGroup == null ? suggested : String.valueOf(defaultGroup.get("name")));
         TextField orderField = new TextField(order);

@@ -22,6 +22,7 @@ abstract class AppShellUiPart29 extends AppShellUiPart28 {
             case "select_route" -> updateRouteConfigCommand(t("Выбран маршрут из GNOME", "Route selected from GNOME"), config -> GraphRouteLibrary.activate(config, command.value()));
             case "set_quick_group_collapsed" -> setGnomeQuickGroupCollapsed(command.value());
             case "set_quick_pin_view" -> setGnomeQuickPinView(command.value());
+            case "set_quick_matrix_view" -> setGnomeMatrixView(command.value());
             case "select_output" -> { Platform.runLater(() -> setNotice(t("Выходы выбираются в графе маршрутов.", "Output routing is selected in the route graph."), false)); yield CompletableFuture.completedFuture(null); }
             case "toggle_mute" -> { AudioNode node=activeOutputNode(); if(node==null)yield CompletableFuture.failedFuture(new IllegalStateException("No active physical output")); boolean muted=!node.muted(); yield backend.setMute(node.id(),muted).thenCompose(ignored->store.updateAsync(config->{Map<String,Object> device=ensureDevice(config,node);device.put("mute",muted);})).thenRun(this::refreshBackend); }
             case "set_output_volume" -> setGnomeOutputLevel(command.value(),false);
@@ -30,6 +31,8 @@ abstract class AppShellUiPart29 extends AppShellUiPart28 {
             case "toggle_app_mute" -> setGnomeApplicationLevel(command.value(),true);
             case "set_stream_volume" -> setGnomeStreamLevel(command.value(),false);
             case "toggle_stream_mute" -> setGnomeStreamLevel(command.value(),true);
+            case "set_mixer_input_volume" -> setGnomeMixerInputLevel(command.value(),false);
+            case "toggle_mixer_input_mute" -> setGnomeMixerInputLevel(command.value(),true);
             case "set_quick_control" -> setGnomeQuickControl(command.value(),false);
             case "toggle_quick_control" -> setGnomeQuickControl(command.value(),true);
             case "set_quick_control_choice" -> setGnomeQuickControlChoice(command.value());

@@ -4,8 +4,10 @@ import io.github.ilyaandreev05.audiomatrix.audio.AudioNode;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.config.QuickSettingsConfig;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphConnection;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
+import io.github.ilyaandreev05.audiomatrix.graph.MixerNode;
 import io.github.ilyaandreev05.audiomatrix.graph.OutputNode;
 import io.github.ilyaandreev05.audiomatrix.graph.SourceNode;
 import java.util.ArrayList;
@@ -40,6 +42,8 @@ final class GnomeQuickSettingsPins {
                 state.put("applications", applicationsFor(source, applications, graph));
             if (node instanceof OutputNode output)
                 state.put("output", outputFor(output, snapshot, config, outputs));
+            if (node instanceof MixerNode mixer)
+                state.put("mixerInputs", mixerInputs(graph, mixer));
             result.add(state);
         }
         result.sort(java.util.Comparator.comparingInt(item -> number(item.get("order"), 0)));
@@ -63,6 +67,24 @@ final class GnomeQuickSettingsPins {
                                                           List<Map<String, Object>> controls) {
         Set<String> ids = strings(pin.get("control_ids"));
         return controls.stream().filter(control -> ids.contains(String.valueOf(control.get("id")))).toList();
+    }
+
+    private static List<Map<String, Object>> mixerInputs(AudioGraph graph, MixerNode mixer) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Map.Entry<String, Double> input : mixer.inputGains().entrySet()) {
+            GraphConnection connection = graph.connections().stream().filter(GraphConnection::enabled)
+                    .filter(edge -> mixer.id().equals(edge.toNode()) && input.getKey().equals(edge.toPort()))
+                    .findFirst().orElse(null);
+            GraphNode source = connection == null ? null : graph.nodes().stream()
+                    .filter(node -> node.id().equals(connection.fromNode())).findFirst().orElse(null);
+            Map<String, Object> state = new LinkedHashMap<>();
+            state.put("id", input.getKey());
+            state.put("name", source == null ? input.getKey() : source.name());
+            state.put("volume", input.getValue());
+            state.put("muted", mixer.inputMuted(input.getKey()));
+            result.add(state);
+        }
+        return List.copyOf(result);
     }
 
     private static List<Map<String, Object>> applicationsFor(SourceNode source,
