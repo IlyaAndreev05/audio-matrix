@@ -50,6 +50,10 @@ export default class AudioMatrixMenuGroups {
     }
 
     _renderPin(pin, t, target) {
+        if (pin.nodeType === 'source' && !pin.sourceGain && !(pin.applications || []).length)
+            return;
+        if (pin.nodeType === 'mixer' && !(pin.mixerInputs || []).length)
+            return;
         const id = String(pin.id);
         const open = this._disclosures.pinOpen(pin);
         const header = new PopupMenu.PopupImageMenuItem(
