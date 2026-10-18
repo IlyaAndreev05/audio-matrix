@@ -34,6 +34,20 @@ class RouteInputSignatureTest {
     }
 
     @Test
+    void retriesWhenTheIsolatedEventSinkAppearsAfterTheRoute(){
+        Map<String,Object> config=Map.of("active_route","desktop","engine",Map.of("apply_on_start",true));
+        List<AudioNode> sinks=List.of(sink(69,"alsa_output.hdmi-stereo"));
+        PipeWireBackend.Snapshot withoutEventInput=new PipeWireBackend.Snapshot(true,"",sinks,List.of(),List.of(),
+                List.of(),Map.of(),69,0);
+        AudioNode eventInput=EventInputMonitor.sourceView(sink(203,EventInputMonitor.NODE_NAME));
+        PipeWireBackend.Snapshot withEventInput=new PipeWireBackend.Snapshot(true,"",sinks,List.of(eventInput),List.of(),
+                List.of(),Map.of(),69,1);
+
+        assertNotEquals(RouteInputSignature.create(config,withoutEventInput,1),
+                RouteInputSignature.create(config,withEventInput,1));
+    }
+
+    @Test
     void stillChangesWhenAPhysicalOutputChanges() {
         Map<String, Object> config = Map.of("active_route", "desktop", "engine", Map.of("apply_on_start", true));
         String hdmi = signature(config, List.of(sink(69, "alsa_output.hdmi-stereo")), List.of());

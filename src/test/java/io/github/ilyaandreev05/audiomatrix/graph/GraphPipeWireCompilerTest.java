@@ -108,6 +108,20 @@ class GraphPipeWireCompilerTest {
         assertEquals("multi-output",((Map<?,?>)((List<?>)compiled.get("profiles")).getFirst()).get("mode"));
     }
 
+    @Test void compilesEventSoundStudioAsAnIsolatedMonitorInput(){
+        SourceNode events=new SourceNode("events","Event effects",EventSoundStudioSource.SELECTOR,STEREO);
+        OutputNode output=new OutputNode("output","Vibration output","vibration",STEREO);
+        AudioGraph graph=new AudioGraph("route-events","Event route",List.of(events,output),List.of(
+                link("events","out","output","in")));
+
+        Map<String,Object> compiled=GraphPipeWireCompiler.compile(graph,DefaultConfig.create());
+
+        assertEquals(List.of("events"),compiled.get("event_input_buses"));
+        @SuppressWarnings("unchecked") Map<String,Object> eventRule=(Map<String,Object>)((List<?>)compiled.get("applications")).getFirst();
+        assertEquals(Map.of("app_id",EventSoundStudioSource.APPLICATION_ID),eventRule.get("match"));
+        assertEquals("events",eventRule.get("bus"));
+    }
+
     @Test void compilesSelectedManyToManyMatrixCellAndIgnoresDisabledCells(){
         SourceNode source=new SourceNode("source","Apps","application:unassigned",STEREO);
         MatrixNode matrix=new MatrixNode("matrix","Routing matrix",STEREO,List.of("in-a","in-b"),List.of("out-a","out-b"),List.of("in-a->out-b"));

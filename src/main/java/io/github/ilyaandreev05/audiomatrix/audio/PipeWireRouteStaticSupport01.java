@@ -3,6 +3,7 @@ package io.github.ilyaandreev05.audiomatrix.audio;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.ilyaandreev05.audiomatrix.config.ChannelMatrix;
+import io.github.ilyaandreev05.audiomatrix.graph.EventSoundStudioSource;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -29,7 +30,7 @@ import java.util.concurrent.TimeUnit;
 /** Applies explicitly requested Audio Matrix routing by owning PipeWire loopback nodes and links. */
 
 abstract class PipeWireRouteStaticSupport01 extends PipeWireRouteTypes {
-    static final String EVENT_SOUND_STUDIO_APPLICATION_ID = "io.github.ilyaandreev05.eventsoundstudio";
+    static final String EVENT_SOUND_STUDIO_APPLICATION_ID = EventSoundStudioSource.APPLICATION_ID;
     protected static final Duration COMMAND_TIMEOUT = Duration.ofSeconds(3);
     protected static final int START_ATTEMPTS = 30;
     protected static final long START_WAIT_MS = 100;
