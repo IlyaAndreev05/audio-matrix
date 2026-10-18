@@ -35,6 +35,7 @@ Baseline saved on `main` and merged to `develop`: `df3e188` (workspace artifacts
 - Free profile 1→N: selecting HDMI and the USB DAC in the same Switch produced simultaneous PCM on HDMI, USB and the analog Vibro output; unselected outputs stayed silent.
 - The installed JavaFX editor opens against the running service and shows PipeWire connected; the Profiles page exposes the three Octine profiles and the shared Vibro controls.
 - GNOME Quick Settings now publishes eight pinned nodes for the active Monitor route, including Main Source, Monitor output, Main Mixer, Vibro Mixer/Gain/Limiter/Output and Event Sound Studio. Streams whose PipeWire level is unavailable are shown at 100% instead of a misleading 0%.
+- After restarting `pipewire.service` and `wireplumber.service`, `audiomatrix-events.service` now restarts with PipeWire and both `audiomatrix_events` and `eventsoundstudio_pcm` reappear automatically; the Monitor profile and eight quick pins are retained.
 - Click-to-captured-PCM latency measured from evdev to analog monitor was approximately **0.38 s**, but that probe also included capture-process startup; exact event-to-PCM latency with a pre-armed capture is still being measured and is not claimed as verified.
 
 ## Known limitations / blockers
