@@ -38,6 +38,7 @@ Baseline saved on `main` and merged to `develop`: `df3e188` (workspace artifacts
 
 - HDMI disappeared intermittently while the monitor/card was unavailable. The profile correctly reported the output unavailable; physical HDMI acceptance requires the display/card to stay present.
 - Bluetooth headphones were not connected during verification; the Headphones profile was not physically tested.
+- `AudioMatrix --quit` / the service `ExecStop` currently times out (the launcher starts a JavaFX instance instead of returning after the control request), so `systemctl --user stop audiomatrix.service` reaches its 25 s timeout before termination. The service starts and runs normally; clean-stop must be fixed before release packaging.
 - Physical transducer loudness and the 25 W/4 Ω power limit require the installed amplifier and a safe listening check. Digital gain is not a power guarantee.
 - Continuous installed-system run: 25 minutes, 375 event pulses and a looping 100 Hz/1 kHz music tone. `pw-top` reported **0** errors for analog and HDMI at every sampled minute; no route/service restart occurred. The run was stopped at user request before the 30-minute mark, so AC-06 is **not** fully closed.
 - Installed packages: Audio Matrix `0.3.9` and Event Sound Studio `0.2.2` were installed on 2026-10-18; the installed user services are active.
