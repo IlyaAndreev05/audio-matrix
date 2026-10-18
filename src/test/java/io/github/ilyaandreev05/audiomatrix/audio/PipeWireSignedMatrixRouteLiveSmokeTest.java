@@ -102,10 +102,14 @@ class PipeWireSignedMatrixRouteLiveSmokeTest extends PipeWireChannelMatrixRouteL
 
             PipeWireBackend.Snapshot after = backend.refresh().get(5, TimeUnit.SECONDS);
             assertEquals(before.defaultSinkId(), after.defaultSinkId());
-            AudioNode defaultAfter = after.sinks().stream().filter(node -> node.id() == after.defaultSinkId()).findFirst().orElseThrow();
-            if (originalDefault != null && Double.isFinite(originalDefault.volume()) && Double.isFinite(defaultAfter.volume()))
-                assertEquals(originalDefault.volume(), defaultAfter.volume(), 0.01, "Physical default sink volume must remain unchanged");
-            if (originalDefault != null) assertEquals(originalDefault.muted(), defaultAfter.muted());
+            if (originalDefault != null) {
+                AudioNode defaultAfter = after.sinks().stream().filter(node -> node.id() == after.defaultSinkId())
+                        .findFirst().orElseThrow(() -> new AssertionError("The existing default sink disappeared"));
+                if (Double.isFinite(originalDefault.volume()) && Double.isFinite(defaultAfter.volume()))
+                    assertEquals(originalDefault.volume(), defaultAfter.volume(), 0.01,
+                            "The default sink volume must remain unchanged");
+                assertEquals(originalDefault.muted(), defaultAfter.muted());
+            }
         } finally {
             try { manager.closeAsync().get(10, TimeUnit.SECONDS); }
             finally {

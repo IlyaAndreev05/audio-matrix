@@ -13,6 +13,7 @@
 - `bash scripts/test-gnome-quick-settings.sh`
 - `bash scripts/test-chrome-tab-capture.sh`
 - `python3 scripts/system-sink-config-smoke.py`
+- `python3 scripts/pipewire-route-smoke.py`
 - `python3 scripts/pipewire-reconnect-smoke.py`
 - `python3 scripts/check_class_size.py`
 - `git diff --check`
