@@ -26,7 +26,7 @@ class GraphSubgraphLibraryTest {
         assertEquals(2, ports.size());
         assertTrue(ports.stream().anyMatch(port -> port.direction() == GraphSubgraph.Direction.INPUT && port.nodeId().equals("gain-a")));
         assertTrue(ports.stream().anyMatch(port -> port.direction() == GraphSubgraph.Direction.OUTPUT && port.nodeId().equals("gain-b")));
-        assertEquals(4, GraphCodec.fromMap(route(config)).nodes().size());
+        assertEquals(6, GraphCodec.fromMap(route(config)).nodes().size());
         assertTrue(ConfigValidator.validate(config).isEmpty());
     }
 
@@ -69,11 +69,12 @@ class GraphSubgraphLibraryTest {
     @Test void expansionStateCanChangeWithoutChangingAudioGraph() {
         Map<String,Object> config = DefaultConfig.create();
         AudioGraph graph = graph();
+        AudioGraph normalized = GraphEndpointGainFactory.ensure(graph);
         GraphRouteLibrary.saveRoute(config, graph, "");
         GraphSubgraph group = GraphSubgraphLibrary.create(config, graph, "Processing", List.of("gain-a", "gain-b"));
         GraphSubgraphLibrary.setCollapsed(config, graph.id(), group.id(), false);
         assertFalse(GraphSubgraphLibrary.forRoute(config, graph.id()).getFirst().collapsed());
-        assertEquals(GraphCodec.toMap(graph), GraphCodec.toMap(GraphCodec.fromMap(route(config))));
+        assertEquals(GraphCodec.toMap(normalized), GraphCodec.toMap(GraphCodec.fromMap(route(config))));
     }
 
     private static AudioGraph graph() {

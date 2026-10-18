@@ -1,6 +1,7 @@
 package io.github.ilyaandreev05.audiomatrix.graph;
 
 import io.github.ilyaandreev05.audiomatrix.config.QuickSettingsConfig;
+import io.github.ilyaandreev05.audiomatrix.config.GraphMatrixViewSettings;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -32,6 +33,7 @@ final class GraphSavedCopyLibrary {
         copy.put("ui_layout", GraphRouteLibrary.deep(GraphRouteLibrary.map(layouts.get(routeId))));
         Object scale = GraphRouteLibrary.mutableMap(config, "graph_ui_scale").get(routeId);
         if (scale instanceof Number) copy.put("ui_scale", scale);
+        copy.put("ui_matrix_views", GraphMatrixViewSettings.copyForRoute(config, routeId));
     }
 
     private static void copySubgraphs(Map<String, Object> config, String routeId, Map<String, Object> copy) {
@@ -58,15 +60,16 @@ final class GraphSavedCopyLibrary {
         Map<String, Object> layouts = GraphRouteLibrary.mutableMap(config, "graph_ui_layout");
         Map<String, Object> scales = GraphRouteLibrary.mutableMap(config, "graph_ui_scale");
         Map<String, Object> subgraphs = GraphRouteLibrary.mutableMap(config, "graph_ui_subgraphs");
+        Map<String, Object> matrixViews = GraphRouteLibrary.mutableMap(config, "graph_ui_matrix_views");
         List<Map<String, Object>> controls = GraphRouteLibrary.mutableList(config, "quick_controls");
-        restoreUi(copy, temporaryId, layouts, scales, subgraphs);
+        restoreUi(copy, temporaryId, layouts, scales, subgraphs, matrixViews);
         Map<String, String> controlIds = restoreControls(copy, temporaryId, controls);
         QuickSettingsConfig.restorePinsFromCopy(config, copy.get("quick_pins"), temporaryId, controlIds);
         try {
             String name = newName == null || newName.isBlank() ? graph.name() + " (копия)" : newName;
             return GraphRouteLibrary.duplicateRoute(config, temporaryId, name, profileId, groupId);
         } finally {
-            cleanupTemporary(config, temporaryId, routes, layouts, scales, subgraphs, controls);
+            cleanupTemporary(config, temporaryId, routes, layouts, scales, subgraphs, matrixViews, controls);
             QuickSettingsConfig.removeRoute(config, temporaryId);
         }
     }
@@ -103,11 +106,14 @@ final class GraphSavedCopyLibrary {
     }
 
     private static void restoreUi(Map<String, Object> copy, String id, Map<String, Object> layouts,
-                                  Map<String, Object> scales, Map<String, Object> subgraphs) {
+                                  Map<String, Object> scales, Map<String, Object> subgraphs,
+                                  Map<String, Object> matrixViews) {
         Map<String, Object> savedLayout = GraphRouteLibrary.map(copy.get("ui_layout"));
         if (!savedLayout.isEmpty()) layouts.put(id, GraphRouteLibrary.deep(savedLayout));
         if (copy.get("ui_scale") instanceof Number scale) scales.put(id, scale);
         if (copy.get("ui_subgraphs") instanceof List<?> list) subgraphs.put(id, GraphRouteLibrary.deepValue(list));
+        Map<String, Object> savedViews = GraphRouteLibrary.map(copy.get("ui_matrix_views"));
+        if (!savedViews.isEmpty()) matrixViews.put(id, savedViews);
     }
 
     private static Map<String, String> restoreControls(Map<String, Object> copy, String routeId,
@@ -131,11 +137,13 @@ final class GraphSavedCopyLibrary {
     private static void cleanupTemporary(Map<String, Object> config, String id,
                                          List<Map<String, Object>> routes, Map<String, Object> layouts,
                                          Map<String, Object> scales, Map<String, Object> subgraphs,
+                                         Map<String, Object> matrixViews,
                                          List<Map<String, Object>> controls) {
         routes.removeIf(route -> id.equals(route.get("id")));
         layouts.remove(id);
         scales.remove(id);
         subgraphs.remove(id);
+        matrixViews.remove(id);
         controls.removeIf(control -> id.equals(control.get("route_id")));
     }
 

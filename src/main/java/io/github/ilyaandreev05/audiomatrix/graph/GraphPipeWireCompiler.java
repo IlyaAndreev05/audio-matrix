@@ -61,7 +61,8 @@ public final class GraphPipeWireCompiler {
                              Map<String,Map<String,Object>> outputLimiters,Set<String> sourceOutputs){
         if(!visiting.add(nodeId))throw new IllegalArgumentException("Feedback cycle reached during graph compilation");
         GraphNode node=nodes.get(nodeId);if(node==null)throw new IllegalArgumentException("Connection references missing node "+nodeId);
-        if(path.outputLimiter!=null&&!(node instanceof OutputNode)&&!(node instanceof RouterNode))
+        boolean endpointGain=node instanceof GainNode gain&&!gain.endpointNodeId().isBlank();
+        if(path.outputLimiter!=null&&!(node instanceof OutputNode)&&!(node instanceof RouterNode)&&!endpointGain)
             throw new IllegalArgumentException("Peak limiter nodes must be the final processor before an output; move '"+node.name()+"' before the limiter");
         if(node instanceof RouterNode router){
             boolean protectMix = node instanceof MultiSelectorNode && activeInputCount(router, graph) > 1;

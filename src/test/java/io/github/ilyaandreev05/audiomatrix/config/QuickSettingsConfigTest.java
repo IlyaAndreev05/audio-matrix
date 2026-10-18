@@ -25,7 +25,7 @@ class QuickSettingsConfigTest {
         String groupId = String.valueOf(control.get("group_id"));
         Map<String, Object> group = QuickSettingsConfig.groups(config).stream()
                 .filter(candidate -> groupId.equals(candidate.get("id"))).findFirst().orElse(null);
-        assertEquals(5, config.get("schema_version"));
+        assertEquals(6, config.get("schema_version"));
         assertNotNull(group);
         assertEquals("Bass and events", group.get("name"));
         assertEquals("Bass and events", control.get("section"));
@@ -60,8 +60,8 @@ class QuickSettingsConfigTest {
         ConfigMigration.upgradeConfig(config);
 
         List<Map<String, Object>> pins = QuickSettingsConfig.pins(config);
-        assertEquals(5, config.get("schema_version"));
-        assertEquals(3, pins.size());
+        assertEquals(6, config.get("schema_version"));
+        assertEquals(4, pins.size());
         assertTrue(pins.stream().anyMatch(pin -> "source-1".equals(pin.get("node_id"))
                 && "sources".equals(pin.get("group_id"))));
         assertTrue(pins.stream().anyMatch(pin -> "out-1".equals(pin.get("node_id"))

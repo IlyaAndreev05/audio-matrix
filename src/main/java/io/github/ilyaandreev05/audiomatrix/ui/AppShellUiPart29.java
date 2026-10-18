@@ -83,7 +83,11 @@ abstract class AppShellUiPart29 extends AppShellUiPart28 {
         if (fields[0].isBlank()) return CompletableFuture.failedFuture(new IllegalArgumentException("Output name is missing"));
         AudioNode node = GnomeOutputState.resolve(physicalSinks(), fields[0], maps(store.snapshot().get("devices")));
         if (node == null) return CompletableFuture.failedFuture(new IllegalArgumentException("Output is unavailable"));
+        GnomeGraphOutputGain.Target graphTarget = GnomeGraphOutputGain.find(store.snapshot(), snapshot, node);
         if (toggleMute) {
+            if (graphTarget != null) return updateRouteConfigCommand(
+                    t("Изменить громкость выхода в графе", "Change graph output level"),
+                    config -> GnomeGraphOutputGain.set(config, graphTarget, null, true));
             boolean muted = !node.muted();
             return backend.setMute(node.id(), muted).thenCompose(ignored -> store.updateAsync(config -> {
                 ensureDevice(config, node).put("mute", muted);
@@ -95,6 +99,9 @@ abstract class AppShellUiPart29 extends AppShellUiPart28 {
         catch (NumberFormatException invalid) { return CompletableFuture.failedFuture(new IllegalArgumentException("Output volume is invalid")); }
         if (!Double.isFinite(level)) return CompletableFuture.failedFuture(new IllegalArgumentException("Output volume is invalid"));
         double target = Math.max(0, Math.min(1, level));
+        if (graphTarget != null) return updateRouteConfigCommand(
+                t("Изменить громкость выхода в графе", "Change graph output level"),
+                config -> GnomeGraphOutputGain.set(config, graphTarget, target, false));
         CompletableFuture<Void> unmute = node.muted() ? backend.setMute(node.id(), false) : CompletableFuture.completedFuture(null);
         return unmute.thenCompose(ignored -> backend.setVolume(node.id(), target)).thenCompose(ignored -> store.updateAsync(config -> {
             Map<String, Object> device = ensureDevice(config, node);

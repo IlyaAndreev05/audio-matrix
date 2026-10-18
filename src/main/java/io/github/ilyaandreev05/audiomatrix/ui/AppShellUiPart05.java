@@ -110,8 +110,10 @@ abstract class AppShellUiPart05 extends AppShellUiPart04 {
         for(int row=0;row<sources.size();row++){
             SourceNode source=sources.get(row);grid.add(label(source.name(),""),0,row+1);
             for(int col=0;col<outputs.size();col++){
-                OutputNode output=outputs.get(col);boolean connected=graph.connections().stream().anyMatch(edge->edge.enabled()&&edge.fromNode().equals(source.id())&&edge.toNode().equals(output.id()));
+                OutputNode output=outputs.get(col);boolean connected=GraphMatrixRouting.connected(graph,source,output);
                 CheckBox cell=new CheckBox();cell.setSelected(connected);cell.setAccessibleText(source.name()+" → "+output.name());
+                cell.setDisable(!GraphMatrixRouting.canToggle(graph,source,output));
+                if(cell.isDisabled())cell.setTooltip(new Tooltip(t("Изменяй обработанный маршрут в редакторе графа.","Edit processed paths in the graph editor.")));
                 cell.setOnAction(event->setDirectMatrixConnection(graph.id(),source,output,cell.isSelected()));grid.add(cell,col+1,row+1);
             }
         }
@@ -120,43 +122,8 @@ abstract class AppShellUiPart05 extends AppShellUiPart04 {
 
     protected void setDirectMatrixConnection(String routeId,SourceNode source,OutputNode output,boolean enabled){
         Map<String,Object> config=store.snapshot();Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->routeId.equals(item.get("id"))).findFirst().orElse(null);if(route==null)return;
-        AudioGraph old=GraphCodec.fromMap(route);List<GraphNode> nodes=new ArrayList<>(old.nodes());List<GraphConnection> edges=new ArrayList<>(old.connections());
-        if(enabled){
-            GraphConnection existing=edges.stream().filter(edge->edge.enabled()&&edge.fromNode().equals(source.id())&&edge.toNode().equals(output.id())).findFirst().orElse(null);
-            if(existing!=null)return;
-            String occupied=edges.stream().filter(GraphConnection::enabled).filter(edge->edge.toNode().equals(output.id())).map(GraphConnection::fromNode).findFirst().orElse(null);
-            if(occupied==null)edges.add(new GraphConnection("link-"+UUID.randomUUID(),source.id(),"out",output.id(),"in",true,1));
-            else{
-                GraphNode prior=nodes.stream().filter(node->node.id().equals(occupied)).findFirst().orElse(null);
-                if(prior instanceof MixerNode mixer){
-                    String inputId="in-"+UUID.randomUUID().toString().substring(0,8);Map<String,Double> gains=new LinkedHashMap<>(mixer.inputGains());gains.put(inputId,1.0);
-                    nodes.set(nodes.indexOf(mixer),new MixerNode(mixer.id(),mixer.name(),mixer.outputs().getFirst().channels(),gains,mixer.inputMutes()));
-                    edges.add(new GraphConnection("link-"+UUID.randomUUID(),source.id(),"out",mixer.id(),inputId,true,1));
-                }else{
-                    String mixerId="mixer-"+UUID.randomUUID();Map<String,Double> gains=Map.of("in-a",1.0,"in-b",1.0);
-                    MixerNode mixer=new MixerNode(mixerId,t("Сумма ","Mix ")+output.name(),source.outputs().getFirst().channels(),gains);nodes.add(mixer);
-                    edges.removeIf(edge->edge.toNode().equals(output.id()));
-                    edges.add(new GraphConnection("link-"+UUID.randomUUID(),prior.id(),"out",mixerId,"in-a",true,1));
-                    edges.add(new GraphConnection("link-"+UUID.randomUUID(),source.id(),"out",mixerId,"in-b",true,1));
-                    edges.add(new GraphConnection("link-"+UUID.randomUUID(),mixerId,"out",output.id(),"in",true,1));
-                }
-            }
-        }else{
-            edges.removeIf(edge->edge.enabled()&&edge.fromNode().equals(source.id())&&edge.toNode().equals(output.id()));
-            GraphNode mixerNode=nodes.stream().filter(MixerNode.class::isInstance).filter(node->edges.stream().anyMatch(edge->edge.toNode().equals(node.id()))&&edges.stream().anyMatch(edge->edge.fromNode().equals(node.id())&&edge.toNode().equals(output.id()))).findFirst().orElse(null);
-            if(mixerNode instanceof MixerNode mixer){
-                edges.removeIf(edge->edge.toNode().equals(mixer.id())&&edge.fromNode().equals(source.id()));
-                List<GraphConnection> mixerInputs=edges.stream().filter(edge->edge.toNode().equals(mixer.id())).toList();
-                if(mixerInputs.size()<=1){if(!mixerInputs.isEmpty()){GraphConnection last=mixerInputs.getFirst();edges.removeIf(edge->edge.fromNode().equals(mixer.id())&&edge.toNode().equals(output.id()));edges.add(new GraphConnection("link-"+UUID.randomUUID(),last.fromNode(),last.fromPort(),output.id(),"in",true,last.gain()));}edges.removeIf(edge->edge.toNode().equals(mixer.id())||edge.fromNode().equals(mixer.id()));nodes.remove(mixer);}
-                else{
-                    Map<String,Double> gains=new LinkedHashMap<>();mixerInputs.forEach(edge->gains.put(edge.toPort(),mixer.inputGains().getOrDefault(edge.toPort(),1.0)));
-                    Map<String,Boolean> mutes=new LinkedHashMap<>();mixerInputs.forEach(edge->mutes.put(edge.toPort(),mixer.inputMuted(edge.toPort())));
-                    nodes.set(nodes.indexOf(mixer),new MixerNode(mixer.id(),mixer.name(),mixer.outputs().getFirst().channels(),gains,mutes));
-                }
-            }
-        }
-        AudioGraph candidate=new AudioGraph(old.id(),old.name(),nodes,edges);List<String> errors=GraphValidator.validate(candidate);
-        if(!errors.isEmpty()){setNotice(String.join("; ",errors),true);showPage(Page.GRAPH);return;}
-        saveGraph(routeId,candidate);
+        AudioGraph old=GraphCodec.fromMap(route);
+        try{saveGraph(routeId,GraphMatrixRouting.setDirect(old,source,output,enabled));}
+        catch(IllegalArgumentException invalid){setNotice(invalid.getMessage(),true);showPage(Page.GRAPH);}
     }
 }

@@ -1,6 +1,7 @@
 package io.github.ilyaandreev05.audiomatrix.graph;
 
 import io.github.ilyaandreev05.audiomatrix.config.QuickSettingsConfig;
+import io.github.ilyaandreev05.audiomatrix.config.GraphEndpointGainQuickControls;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -22,6 +23,18 @@ public final class GraphRouteLibrary {
     }
 
     public static String saveRoute(Map<String,Object> config,AudioGraph graph,String groupId,String profileId) {
+        AudioGraph originalGraph = graph;
+        Map<String, Object> previous = find(maps(config.get("route_library")), graph.id());
+        Set<String> oldNodeIds = previous == null ? Set.of() : nodeIds(previous);
+        Set<String> newEndpoints = graph.nodes().stream()
+                .filter(node -> node instanceof SourceNode || node instanceof OutputNode)
+                .filter(node -> GraphEndpointGainFactory.gainFor(originalGraph, node) == null)
+                .map(GraphNode::id).collect(java.util.stream.Collectors.toSet());
+        Set<String> freshEndpoints = newEndpoints.stream().filter(nodeId -> !oldNodeIds.contains(nodeId))
+                .collect(java.util.stream.Collectors.toSet());
+        Set<String> migratedEndpoints = newEndpoints.stream().filter(oldNodeIds::contains)
+                .collect(java.util.stream.Collectors.toSet());
+        graph = GraphEndpointGainFactory.ensure(graph);
         requireValid(graph);
         requireProfile(config,profileId);
         if(groupId!=null&&!groupId.isBlank())requireGroupInProfile(config,groupId,profileId);
@@ -31,7 +44,13 @@ public final class GraphRouteLibrary {
         encoded.put("profile_id",profileId);
         int index = indexOf(routes, graph.id());
         if (index >= 0) routes.set(index, encoded); else routes.add(encoded);
+        GraphEndpointGainQuickControls.ensure(config, graph, freshEndpoints, migratedEndpoints);
         return graph.id();
+    }
+
+    private static Set<String> nodeIds(Map<String, Object> route) {
+        try { return GraphCodec.fromMap(route).nodes().stream().map(GraphNode::id).collect(java.util.stream.Collectors.toSet()); }
+        catch (RuntimeException invalid) { return Set.of(); }
     }
 
     public static void activate(Map<String, Object> config, String routeId) {
@@ -66,17 +85,20 @@ public final class GraphRouteLibrary {
         String newRouteId = id("route");
         Map<String, String> nodeIds = new HashMap<>();
         original.nodes().forEach(node -> nodeIds.put(node.id(), id(node.type())));
-        List<GraphNode> nodes = original.nodes().stream().map(node -> GraphNodeCopies.copy(node, nodeIds.get(node.id()))).toList();
+        List<GraphNode> nodes = original.nodes().stream()
+                .map(node -> GraphNodeCopies.copy(node, nodeIds.get(node.id()), nodeIds)).toList();
         List<GraphConnection> edges = original.connections().stream().map(edge -> new GraphConnection(
                 id("link"), nodeIds.get(edge.fromNode()), edge.fromPort(), nodeIds.get(edge.toNode()), edge.toPort(), edge.enabled(), edge.gain())).toList();
         AudioGraph copy = new AudioGraph(newRouteId, newName == null || newName.isBlank() ? original.name() + " (копия)" : newName, nodes, edges);
-        saveRoute(config, copy, targetGroupId,targetProfileId);
         Map<String,Object> layouts=mutableMap(config,"graph_ui_layout");Map<String,Object> sourceLayout=map(layouts.get(routeId));Map<String,Object> copiedLayout=new LinkedHashMap<>();
         sourceLayout.forEach((oldNode,value)->{String newNode=nodeIds.get(oldNode);if(newNode!=null)copiedLayout.put(newNode,deepValue(value));});
         if(!copiedLayout.isEmpty())layouts.put(newRouteId,copiedLayout);
+        io.github.ilyaandreev05.audiomatrix.config.GraphMatrixViewSettings.duplicateRoute(
+                config, routeId, newRouteId, nodeIds);
         Map<String,Object> scales=mutableMap(config,"graph_ui_scale");Object scale=scales.get(routeId);if(scale instanceof Number)scales.put(newRouteId,scale);
         GraphSubgraphLibrary.duplicateRoute(config, routeId, newRouteId, nodeIds);
         GraphQuickControls.duplicate(config,routeId,newRouteId,nodeIds);
+        saveRoute(config, copy, targetGroupId, targetProfileId);
         return copy;
     }
 
@@ -97,6 +119,7 @@ public final class GraphRouteLibrary {
         routes.removeIf(route -> routeId.equals(route.get("id")));
         QuickSettingsConfig.removeRoute(config, routeId);
         mutableMap(config,"graph_ui_layout").remove(routeId);
+        io.github.ilyaandreev05.audiomatrix.config.GraphMatrixViewSettings.removeRoute(config, routeId);
         mutableMap(config,"graph_ui_scale").remove(routeId);
         mutableMap(config,"graph_ui_subgraphs").remove(routeId);
         if(!active){

@@ -5,7 +5,7 @@
   "type": "object",
   "required": ["schema_version", "app", "active_profile", "ui", "mixer", "quick_settings", "engine", "devices", "applications", "buses", "routes", "dsp", "profiles", "calibrations"],
   "properties": {
-    "schema_version": {"const": 5},
+    "schema_version": {"const": 6},
     "app": {"const": "audio-matrix"},
     "active_profile": {"type": "string", "minLength": 1},
     "ui": {"$ref": "#/$defs/ui"},
@@ -24,6 +24,7 @@
     "route_library": {"type": "array", "items": {"type": "object", "required": ["id", "name", "profile_id", "nodes", "connections"], "properties": {"id": {"type": "string"}, "name": {"type": "string", "minLength": 1}, "profile_id": {"type": "string", "minLength": 1}, "group_id": {"type": "string"}, "nodes": {"type": "array", "items": {"type": "object"}}, "connections": {"type": "array", "items": {"type": "object"}}}, "additionalProperties": true}},
     "saved_copies": {"type": "array", "items": {"type": "object", "required": ["id", "name", "route", "active"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "route": {"type": "object"}, "active": {"const": false}, "ui_layout": {"type": "object"}, "ui_scale": {"type": "number", "minimum": 0.5, "maximum": 2}}, "additionalProperties": false}},
     "graph_ui_layout": {"type": "object", "additionalProperties": {"type": "object", "additionalProperties": {"type": "object", "properties": {"x": {"type": "number", "minimum": 0, "maximum": 10000}, "y": {"type": "number", "minimum": 0, "maximum": 10000}}, "required": ["x", "y"], "additionalProperties": false}}},
+    "graph_ui_matrix_views": {"type": "object", "additionalProperties": {"type": "object", "additionalProperties": {"enum": ["MATRIX", "ARROWS"]}}},
     "graph_ui_scale": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0.5, "maximum": 2}},
     "quick_controls": {"type": "array", "items": {"type": "object", "required": ["id", "node_id", "parameter_id", "group_id"], "properties": {"id": {"type": "string"}, "route_id": {"type": "string"}, "node_id": {"type": "string"}, "parameter_id": {"type": "string"}, "label": {"type": "string"}, "section": {"type": "string"}, "group_id": {"type": "string"}, "order": {"type": "integer"}}, "additionalProperties": false}},
     "export": {"type": "object", "additionalProperties": true}

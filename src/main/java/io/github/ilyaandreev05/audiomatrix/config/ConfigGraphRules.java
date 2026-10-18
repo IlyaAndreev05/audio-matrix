@@ -73,6 +73,7 @@ final class ConfigGraphRules {
         }
         ConfigPinnedNodeRules.validate(config, graphs, controls, errors);
         validateGraphLayouts(config,graphs,routeIds,errors);
+        ConfigGraphMatrixViewRules.validate(config, graphs, routeIds, errors);
         validateGraphUiScales(config,routeIds,errors);
         validateGraphSubgraphs(config,graphs,routeIds,errors);
     }

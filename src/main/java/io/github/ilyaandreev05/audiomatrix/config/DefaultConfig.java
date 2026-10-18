@@ -6,15 +6,17 @@ import java.util.List;
 import java.util.Map;
 
 public final class DefaultConfig {
+    public static final int SCHEMA_VERSION = 6;
     private DefaultConfig() {}
 
     public static Map<String, Object> create() {
         Map<String, Object> root = map();
-        root.put("schema_version", 5);
+        root.put("schema_version", SCHEMA_VERSION);
         root.put("route_groups", new ArrayList<>());
         root.put("route_library", new ArrayList<>());
         root.put("saved_copies", new ArrayList<>());
         root.put("graph_ui_layout", map());
+        root.put("graph_ui_matrix_views", map());
         root.put("graph_ui_scale", map());
         root.put("graph_ui_subgraphs", map());
         root.put("quick_controls", new ArrayList<>());

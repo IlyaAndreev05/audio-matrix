@@ -16,6 +16,7 @@ import javafx.scene.shape.CubicCurve;
 
 import java.util.List;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 /** Synchronized table and flow views over one Matrix node's active links. */
 final class GraphMatrixViews {
@@ -26,7 +27,8 @@ final class GraphMatrixViews {
     private GraphMatrixViews() {}
 
     static TabPane create(MatrixNode matrix, String tableTitle, String arrowsTitle, String tableLabel,
-                          BiConsumer<String, Boolean> changeLink) {
+                          String selectedView, BiConsumer<String, Boolean> changeLink,
+                          Consumer<String> saveView) {
         TabPane tabs = new TabPane();
         Tab table = new Tab(tableTitle, matrixTable(matrix, tableLabel, changeLink));
         Tab arrows = new Tab(arrowsTitle, arrowView(matrix, tableLabel, changeLink));
@@ -34,6 +36,9 @@ final class GraphMatrixViews {
         arrows.setClosable(false);
         tabs.getTabs().setAll(table, arrows);
         tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+        tabs.getSelectionModel().select("ARROWS".equals(selectedView) ? arrows : table);
+        tabs.getSelectionModel().selectedIndexProperty().addListener((observable, oldIndex, index) ->
+                saveView.accept(index.intValue() == 1 ? "ARROWS" : "MATRIX"));
         return tabs;
     }
 

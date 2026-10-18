@@ -7,6 +7,7 @@ import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphConnection;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
+import io.github.ilyaandreev05.audiomatrix.graph.GainNode;
 import io.github.ilyaandreev05.audiomatrix.graph.MixerNode;
 import io.github.ilyaandreev05.audiomatrix.graph.OutputNode;
 import io.github.ilyaandreev05.audiomatrix.graph.SourceNode;
@@ -41,7 +42,7 @@ final class GnomeQuickSettingsPins {
             if (node instanceof SourceNode source)
                 state.put("applications", applicationsFor(source, applications, graph));
             if (node instanceof OutputNode output)
-                state.put("output", outputFor(output, snapshot, config, outputs));
+                state.put("output", outputFor(output, graph, snapshot, config, outputs));
             if (node instanceof MixerNode mixer)
                 state.put("mixerInputs", mixerInputs(graph, mixer));
             result.add(state);
@@ -77,6 +78,9 @@ final class GnomeQuickSettingsPins {
                     .findFirst().orElse(null);
             GraphNode source = connection == null ? null : graph.nodes().stream()
                     .filter(node -> node.id().equals(connection.fromNode())).findFirst().orElse(null);
+            if (source instanceof GainNode gain && !gain.endpointNodeId().isBlank())
+                source = graph.nodes().stream().filter(node -> node.id().equals(gain.endpointNodeId()))
+                        .findFirst().orElse(source);
             Map<String, Object> state = new LinkedHashMap<>();
             state.put("id", input.getKey());
             state.put("name", source == null ? input.getKey() : source.name());
@@ -110,16 +114,24 @@ final class GnomeQuickSettingsPins {
         return false;
     }
 
-    private static Map<String, Object> outputFor(OutputNode output, PipeWireBackend.Snapshot snapshot,
+    private static Map<String, Object> outputFor(OutputNode output, AudioGraph graph,
+                                                  PipeWireBackend.Snapshot snapshot,
                                                   Map<String, Object> config, List<Map<String, Object>> outputs) {
         List<Map<String, Object>> devices = maps(config.get("devices"));
         AudioNode resolved = output.deviceId().equals("system_default")
                 ? snapshot.sinks().stream().filter(node -> node.id() == snapshot.defaultSinkId()).findFirst().orElse(null)
                 : GnomeOutputState.resolve(snapshot.sinks(), output.deviceId(), devices);
         if (resolved == null) return Map.of("available", false, "id", output.deviceId(), "name", output.name());
-        return outputs.stream().filter(item -> resolved.name().equals(item.get("name"))).findFirst()
-                .map(item -> withAvailability(item, true))
-                .orElseGet(() -> Map.of("available", false, "id", output.deviceId(), "name", output.name()));
+        Map<String, Object> state = outputs.stream().filter(item -> resolved.name().equals(item.get("name")))
+                .findFirst().map(item -> withAvailability(item, true))
+                .orElseGet(() -> new LinkedHashMap<>(Map.of("available", false,
+                        "id", output.deviceId(), "name", output.name())));
+        GainNode gain = GnomeGraphOutputGain.forOutput(graph, output);
+        if (gain == null) return state;
+        state.put("volume", gain.gain());
+        state.put("muted", gain.muted());
+        state.put("graphGainNodeId", gain.id());
+        return state;
     }
 
     private static Map<String, Object> withAvailability(Map<String, Object> value, boolean available) {

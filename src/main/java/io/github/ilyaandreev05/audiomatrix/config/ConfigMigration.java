@@ -15,7 +15,7 @@ final class ConfigMigration {
     private static final TypeReference<LinkedHashMap<String, Object>> MAP_TYPE = new TypeReference<>() {};
 
     static void backupBeforeSchemaUpgrade(Path file) throws IOException {
-        backupBeforeSchemaUpgrade(file, 5);
+        backupBeforeSchemaUpgrade(file, DefaultConfig.SCHEMA_VERSION);
     }
 
     static void backupBeforeSchemaUpgrade(Path file, int targetSchema) throws IOException {
@@ -36,7 +36,7 @@ final class ConfigMigration {
             throw new ConfigStore.ConfigValidationException(List.of("Legacy YAML could not be read; it was left untouched: " + error.getMessage()));
         }
         int version = parsed.get("schema_version") instanceof Number number ? number.intValue() : -1;
-        if (version < 5) upgradeConfig(parsed);
+        if (version < DefaultConfig.SCHEMA_VERSION) upgradeConfig(parsed);
         List<String> errors = ConfigValidator.validate(parsed);
         if (!errors.isEmpty()) throw new ConfigStore.ConfigValidationException(errors);
         Path backup = legacy.resolveSibling("config.yaml.before-json");
@@ -125,6 +125,12 @@ final class ConfigMigration {
             QuickSettingsConfig.migrate(config);
             QuickSettingsConfig.migrateNodePins(config);
             config.put("schema_version", 5);
+            schema = 5;
+        }
+        if (schema < DefaultConfig.SCHEMA_VERSION) {
+            config.putIfAbsent("graph_ui_matrix_views", new LinkedHashMap<>());
+            GraphEndpointGainMigration.migrate(config);
+            config.put("schema_version", DefaultConfig.SCHEMA_VERSION);
         }
     }
 

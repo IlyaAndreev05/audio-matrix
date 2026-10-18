@@ -54,7 +54,7 @@ class GnomeQuickSettingsPinsTest {
 
         List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config, snapshot, List.of(), applications, outputs);
 
-        assertEquals(4, pins.size());
+        assertEquals(6, pins.size());
         Map<String, Object> chromePin = pin(pins, "chrome");
         Map<String, Object> fallbackPin = pin(pins, "other-apps");
         assertEquals(List.of("chrome-stream"), ids(chromePin.get("applications")));
@@ -66,7 +66,7 @@ class GnomeQuickSettingsPinsTest {
                 .findFirst().orElseThrow().get("muted"));
         Map<?, ?> output = (Map<?, ?>) pin(pins, "monitor-out").get("output");
         assertTrue(Boolean.TRUE.equals(output.get("available")));
-        assertEquals(.7, output.get("volume"));
+        assertEquals(1.0, output.get("volume"));
     }
 
     private static Map<String, Object> pin(List<Map<String, Object>> pins, String nodeId) {

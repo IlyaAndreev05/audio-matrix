@@ -8,14 +8,14 @@ import java.util.Map;
 final class GraphNodeCopies {
     private GraphNodeCopies() {}
 
-    static GraphNode copy(GraphNode node, String id) {
+    static GraphNode copy(GraphNode node, String id, Map<String, String> nodeIds) {
         List<String> channels = node.outputs().isEmpty()
                 ? node.inputs().getFirst().channels()
                 : node.outputs().getFirst().channels();
         return switch (node.type()) {
             case "source" -> new SourceNode(id, node.name(), ((SourceNode) node).selector(), channels);
             case "output" -> copyOutput(node, id, channels);
-            case "gain" -> copyGain(node, id, channels);
+            case "gain" -> copyGain(node, id, channels, nodeIds);
             case "gate" -> copyGate(node, id, channels);
             case "router" -> copyRouter(node, id, channels);
             case "switch" -> new SwitchNode(id, node.name(), channels, outputIds(node), links(node));
@@ -35,9 +35,11 @@ final class GraphNodeCopies {
         return new OutputNode(id, node.name(), output.deviceId(), channels, output.channelMatrix());
     }
 
-    private static GraphNode copyGain(GraphNode node, String id, List<String> channels) {
+    private static GraphNode copyGain(GraphNode node, String id, List<String> channels,
+                                      Map<String, String> nodeIds) {
         GainNode gain = (GainNode) node;
-        return new GainNode(id, node.name(), channels, gain.gain(), gain.muted());
+        return new GainNode(id, node.name(), channels, gain.gain(), gain.muted(),
+                nodeIds.getOrDefault(gain.endpointNodeId(), gain.endpointNodeId()));
     }
 
     private static GraphNode copyGate(GraphNode node, String id, List<String> channels) {

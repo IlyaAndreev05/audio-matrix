@@ -188,7 +188,8 @@ public final class ConfigStore implements AutoCloseable {
             diagnostic = "Configuration could not be parsed: " + e.getMessage();
             throw new ConfigValidationException(List.of(diagnostic));
         }
-        boolean upgraded = parsed.get("schema_version") instanceof Number version && version.intValue() < 5;
+        boolean upgraded = parsed.get("schema_version") instanceof Number version
+                && version.intValue() < DefaultConfig.SCHEMA_VERSION;
         if (upgraded) upgradeConfig(parsed);
         List<String> errors = ConfigValidator.validate(parsed);
         if (!errors.isEmpty()) {
@@ -196,7 +197,7 @@ public final class ConfigStore implements AutoCloseable {
             throw new ConfigValidationException(errors);
         }
         if (upgraded) {
-            backupBeforeSchemaUpgrade(5);
+            backupBeforeSchemaUpgrade(DefaultConfig.SCHEMA_VERSION);
             bytes = mapper.writeValueAsBytes(parsed);
             atomicWrite(bytes);
         }

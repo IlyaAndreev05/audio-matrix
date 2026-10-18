@@ -87,7 +87,9 @@ abstract class AppShellUiPart06 extends AppShellUiPart05 {
                 if(node instanceof MatrixNode matrix){
                     routerControls.getChildren().add(GraphMatrixViews.create(matrix,
                             t("Матрица","Matrix"),t("Стрелки","Arrows"),t("Вход ↓ / выход →","Input ↓ / output →"),
-                            (link,enabled)->setRouterLink(graph.id(),node.id(),link,enabled)));
+                            GraphMatrixViewSettings.get(store.snapshot(), graph.id(), node.id()),
+                            (link,enabled)->setRouterLink(graph.id(),node.id(),link,enabled),
+                            view->saveGraphMatrixView(graph.id(),node.id(),view)));
                 }else{
                     GridPane table=new GridPane();table.setHgap(8);table.setVgap(4);
                     table.add(label(t("Вход ↓ / выход →","Input ↓ / output →"),"muted"),0,0);
@@ -202,6 +204,14 @@ abstract class AppShellUiPart06 extends AppShellUiPart05 {
             else links.remove(link);
             parameters.put("active_links",links);
         });
+    }
+
+    private void saveGraphMatrixView(String routeId, String nodeId, String view) {
+        store.updateAsync(config -> GraphMatrixViewSettings.set(config, routeId, nodeId, view))
+                .whenComplete((ignored, error) -> {
+                    if (error != null) Platform.runLater(() -> setNotice(
+                            t("Вид Matrix не сохранён: ", "Matrix view was not saved: ") + rootMessage(error), true));
+                });
     }
 
     protected void addRouterPort(String routeId,GraphNode node,String direction){

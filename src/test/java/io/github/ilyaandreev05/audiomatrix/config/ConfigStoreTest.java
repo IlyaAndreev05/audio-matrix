@@ -19,7 +19,7 @@ class ConfigStoreTest {
         Map<String,Object> old=DefaultConfig.create();old.put("schema_version",1);
         byte[] original=new ObjectMapper(new YAMLFactory()).writeValueAsBytes(old);Files.write(legacy,original);
         try(ConfigStore store=new ConfigStore(json,legacy)){
-            assertEquals(5,((Number)store.snapshot().get("schema_version")).intValue());
+            assertEquals(6,((Number)store.snapshot().get("schema_version")).intValue());
             assertTrue(Files.readString(json).startsWith("{"));
             assertTrue(java.util.Arrays.equals(original,Files.readAllBytes(temp.resolve("config.yaml.before-json"))));
             store.updateAsync(config->((Map<String,Object>)config.get("mixer")).put("global_volume",0.37)).join();
@@ -42,12 +42,12 @@ class ConfigStoreTest {
 
         try(ConfigStore store=new ConfigStore(file)) {
             Map<String,Object> migrated=store.snapshot();
-            assertEquals(5,((Number)migrated.get("schema_version")).intValue());
+            assertEquals(6,((Number)migrated.get("schema_version")).intValue());
             assertEquals("desk",groups(migrated).getFirst().get("profile_id"));
             assertEquals("desk",routes(migrated).getFirst().get("profile_id"));
             assertEquals(route.id(),profile(migrated).get("selected_route_id"));
             assertEquals(java.util.List.of(),ConfigValidator.validate(migrated));
-            assertTrue(java.util.Arrays.equals(schemaTwo,Files.readAllBytes(temp.resolve("config.json.before-schema-5"))));
+            assertTrue(java.util.Arrays.equals(schemaTwo,Files.readAllBytes(temp.resolve("config.json.before-schema-6"))));
         }
     }
 
