@@ -37,7 +37,7 @@ with tempfile.TemporaryDirectory(prefix="audio-matrix-pw-reconnect-", dir="/tmp"
                 "./gradlew",
                 "test",
                 "--tests",
-                "io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackendReconnectLiveSmokeTest",
+                "io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackendRestartLiveSmokeTest",
                 "--no-configuration-cache",
                 "--no-daemon",
                 "--rerun-tasks",
