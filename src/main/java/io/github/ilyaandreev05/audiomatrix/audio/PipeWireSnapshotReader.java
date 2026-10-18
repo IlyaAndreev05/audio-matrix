@@ -34,16 +34,17 @@ final class PipeWireSnapshotReader {
             throw new IOException("pw-dump or wpctl is not installed");
     }
 
-    private static void readNodes(JsonNode root, Map<Integer, JsonNode> clients,
-                                  Map<Integer, PipeWireBackend.LevelState> levels,
-                                  List<AudioNode> sinks, List<AudioNode> sources, List<AudioNode> streams) {
+    static void readNodes(JsonNode root, Map<Integer, JsonNode> clients,
+                          Map<Integer, PipeWireBackend.LevelState> levels,
+                          List<AudioNode> sinks, List<AudioNode> sources, List<AudioNode> streams) {
         for (JsonNode object : root) {
             JsonNode info = object.path("info"), props = info.path("props");
             String mediaClass = props.path("media.class").asText("");
             String name = props.path("node.name").asText("");
             if (!isSnapshotAudioNode(mediaClass, name)) continue;
             AudioNode node = audioNode(object, info, props, mediaClass, name, clients, levels);
-            addNode(node, mediaClass, sinks, sources, streams);
+            if (EventInputMonitor.isSink(mediaClass, name)) sources.add(EventInputMonitor.sourceView(node));
+            else addNode(node, mediaClass, sinks, sources, streams);
         }
     }
 
@@ -131,7 +132,8 @@ final class PipeWireSnapshotReader {
         if (mediaClass == null || name == null || name.isBlank()) return false;
         if (!(mediaClass.startsWith("Audio/Sink") || mediaClass.startsWith("Audio/Source")
                 || mediaClass.startsWith("Stream/Output/Audio"))) return false;
-        return !name.startsWith("audiomatrix_") || PipeWireBackend.SYSTEM_MIXER_SINK_NAME.equals(name);
+        return !name.startsWith("audiomatrix_") || PipeWireBackend.SYSTEM_MIXER_SINK_NAME.equals(name)
+                || EventInputMonitor.isSink(mediaClass, name);
     }
 
     static int defaultSinkId(String status) {

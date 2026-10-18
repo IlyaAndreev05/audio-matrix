@@ -168,8 +168,10 @@ abstract class PipeWireRoutePart04 extends PipeWireRoutePart03 {
         }
         List<StreamPlan> streams = new ArrayList<>();
         if (!profileOff && !routes.isEmpty()) {
+            List<String> eventInputBuses = EventInputStreamPlanner.append(config, buses, streams, this::applicationFilters);
             for (AudioNode stream : snapshot.streams()) {
                 boolean eventStream = isEventSoundStudioStream(stream);
+                if (eventStream && !eventInputBuses.isEmpty()) continue;
                 Map<String, Object> rule = eventStream
                         ? explicitEventApplicationRule(maps(config.get("applications")))
                         : ApplicationRuleMatcher.find(maps(config.get("applications")), stream);
