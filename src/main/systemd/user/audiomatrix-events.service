@@ -1,11 +1,12 @@
 [Unit]
 Description=Audio Matrix isolated Event Sound Studio input
 After=pipewire.service
+PartOf=pipewire.service
 
 [Service]
 Type=simple
 ExecStart=/opt/audiomatrix/lib/systemd/user/audiomatrix-events-loopback.sh
-Restart=on-failure
+Restart=always
 RestartSec=1s
 
 [Install]
