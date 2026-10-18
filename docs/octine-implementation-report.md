@@ -39,7 +39,7 @@ Baseline saved on `main` and merged to `develop`: `df3e188` (workspace artifacts
 - HDMI disappeared intermittently while the monitor/card was unavailable. The profile correctly reported the output unavailable; physical HDMI acceptance requires the display/card to stay present.
 - Bluetooth headphones were not connected during verification; the Headphones profile was not physically tested.
 - Physical transducer loudness and the 25 W/4 Ω power limit require the installed amplifier and a safe listening check. Digital gain is not a power guarantee.
-- A 30-minute continuous music + event run is in progress (started 2026-10-18 17:53 MSK); its result will be appended to this report.
+- Continuous installed-system run: 25 minutes, 375 event pulses and a looping 100 Hz/1 kHz music tone. `pw-top` reported **0** errors for analog and HDMI at every sampled minute; no route/service restart occurred. The run was stopped at user request before the 30-minute mark, so AC-06 is **not** fully closed.
 - Installed packages: Audio Matrix `0.3.9` and Event Sound Studio `0.2.2` were installed on 2026-10-18; the installed user services are active.
 - Feature commit: `c304ee7`; merge into `develop`: `e4f8fdc`; branch pushed to `origin/feat/octine-haptics-event-routing`.
 - A 30-minute continuous run was started on 2026-10-18 17:53 MSK; its result is appended below when finished.
