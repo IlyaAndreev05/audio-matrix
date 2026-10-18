@@ -2,14 +2,17 @@ package io.github.ilyaandreev05.audiomatrix.graph;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
-/** Creates one unity Gain after each source and before each output. */
+/** Creates endpoint Gain nodes and migrates legacy connection levels into explicit Gain nodes. */
 public final class GraphEndpointGainFactory {
     private GraphEndpointGainFactory() {}
 
     public static AudioGraph ensure(AudioGraph graph) {
+        graph = normalizeConnectionGains(graph);
         List<GraphNode> nodes = new ArrayList<>(graph.nodes());
         List<GraphConnection> links = new ArrayList<>(graph.connections());
         for (GraphNode endpoint : List.copyOf(nodes)) {
@@ -26,6 +29,52 @@ public final class GraphEndpointGainFactory {
             }
         }
         return new AudioGraph(graph.id(), graph.name(), nodes, links);
+    }
+
+    private static AudioGraph normalizeConnectionGains(AudioGraph graph) {
+        List<GraphNode> nodes = new ArrayList<>(graph.nodes());
+        List<GraphConnection> connections = new ArrayList<>();
+        Set<String> nodeIds = new HashSet<>();
+        Set<String> connectionIds = new HashSet<>();
+        nodes.forEach(node -> nodeIds.add(node.id()));
+        graph.connections().forEach(edge -> connectionIds.add(edge.id()));
+        for (GraphConnection edge : graph.connections()) {
+            if (edge.gain() == 1.0) {
+                connections.add(edge);
+                continue;
+            }
+            GraphNode source = nodes.stream().filter(node -> node.id().equals(edge.fromNode())).findFirst().orElse(null);
+            AudioPort port = source == null ? null : source.outputs().stream()
+                    .filter(candidate -> candidate.id().equals(edge.fromPort())).findFirst().orElse(null);
+            if (port == null) {
+                connections.add(edge);
+                continue;
+            }
+            String seed = graph.id() + "\0" + edge.id();
+            String gainId = uniqueNodeId("connection-gain", seed, nodeIds);
+            nodeIds.add(gainId);
+            nodes.add(new GainNode(gainId, "Gain · " + edge.fromNode() + " → " + edge.toNode(),
+                    port.channels(), edge.gain(), false));
+            connections.add(new GraphConnection(edge.id(), edge.fromNode(), edge.fromPort(), gainId,
+                    "in", edge.enabled(), 1.0));
+            String outputLink = uniqueConnectionId(graph.id(), edge.id(), connectionIds);
+            connectionIds.add(outputLink);
+            connections.add(new GraphConnection(outputLink, gainId, "out", edge.toNode(), edge.toPort(), true, 1.0));
+        }
+        return new AudioGraph(graph.id(), graph.name(), nodes, connections);
+    }
+
+    private static String uniqueNodeId(String prefix, String seed, Set<String> ids) {
+        String id = stableId(prefix, seed);
+        for (int suffix = 1; ids.contains(id); suffix++) id = stableId(prefix, seed + "\0" + suffix);
+        return id;
+    }
+
+    private static String uniqueConnectionId(String graphId, String edgeId, Set<String> ids) {
+        String seed = graphId + "\0" + edgeId + "\0gain-out";
+        String id = stableId("connection-link", seed);
+        for (int suffix = 1; ids.contains(id); suffix++) id = stableId("connection-link", seed + "\0" + suffix);
+        return id;
     }
 
     public static GainNode gainFor(AudioGraph graph, GraphNode endpoint) {

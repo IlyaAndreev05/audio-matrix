@@ -85,7 +85,6 @@ abstract class AppShellContract01 extends AppShellBase {
     protected abstract void removeGraphNode(String routeId,String nodeId);
     protected abstract void connectGraphNodes(String routeId,GraphNode source,AudioPort sourcePort,GraphNode target,AudioPort targetPort);
     protected abstract void setGraphConnectionEnabled(String routeId,String connectionId,boolean enabled);
-    protected abstract void setGraphConnectionGain(String routeId,String connectionId,double gain);
     protected abstract void removeGraphConnection(String routeId,String connectionId);
     protected abstract void mutateGraphConnection(String routeId,String connectionId,java.util.function.Function<GraphConnection,GraphConnection> mutate);
     protected abstract void createGraphGroup();

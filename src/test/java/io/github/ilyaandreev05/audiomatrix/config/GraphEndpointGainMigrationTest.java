@@ -36,13 +36,35 @@ class GraphEndpointGainMigrationTest {
             @SuppressWarnings("unchecked") Map<String, Object> active =
                     (Map<String, Object>) ((List<?>) compiled.get("routes")).getFirst();
 
-            assertEquals(6, migrated.get("schema_version"));
+            assertEquals(7, migrated.get("schema_version"));
             assertTrue(java.util.Arrays.equals(oldBytes,
-                    Files.readAllBytes(temp.resolve("config.json.before-schema-6"))));
-            assertEquals(2, graph.nodes().stream().filter(GainNode.class::isInstance).count());
+                    Files.readAllBytes(temp.resolve("config.json.before-schema-7"))));
+            assertEquals(3, graph.nodes().stream().filter(GainNode.class::isInstance).count());
             assertEquals(0.37, active.get("volume"));
+            assertTrue(graph.connections().stream().allMatch(edge -> edge.gain() == 1.0));
+            assertTrue(graph.nodes().stream().filter(GainNode.class::isInstance).map(GainNode.class::cast)
+                    .anyMatch(gain -> gain.endpointNodeId().isBlank() && gain.gain() == 0.37));
             assertTrue(((List<?>) migrated.get("quick_controls")).stream().anyMatch(item ->
                     item.toString().contains("endpoint-gain") && item.toString().contains("gain")));
+            assertEquals(List.of(), ConfigValidator.validate(migrated));
+        }
+    }
+
+    @Test void schemaSixConfigMigrationPreservesLegacyConnectionLevelsInGainNodes() throws Exception {
+        Path file = temp.resolve("config-v6.json");
+        Map<String, Object> old = schemaFiveConfig();
+        old.put("schema_version", 6);
+        byte[] oldBytes = new ObjectMapper().writeValueAsBytes(old);
+        Files.write(file, oldBytes);
+
+        try (ConfigStore store = new ConfigStore(file)) {
+            Map<String, Object> migrated = store.snapshot();
+            AudioGraph graph = GraphCodec.fromMap(route(migrated));
+            assertEquals(7, migrated.get("schema_version"));
+            assertTrue(java.util.Arrays.equals(oldBytes, Files.readAllBytes(temp.resolve("config-v6.json.before-schema-7"))));
+            assertTrue(graph.connections().stream().allMatch(edge -> edge.gain() == 1.0));
+            assertTrue(graph.nodes().stream().filter(GainNode.class::isInstance).map(GainNode.class::cast)
+                    .anyMatch(gain -> gain.endpointNodeId().isBlank() && gain.gain() == 0.37));
             assertEquals(List.of(), ConfigValidator.validate(migrated));
         }
     }

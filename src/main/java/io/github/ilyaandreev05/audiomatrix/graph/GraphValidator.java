@@ -23,6 +23,8 @@ public final class GraphValidator {
         Map<String, Set<String>> adjacency = new HashMap<>();
         for (GraphConnection edge : graph.connections()) {
             if (!connectionIds.add(edge.id())) errors.add("Duplicate connection id: " + edge.id());
+            if (edge.gain() != 1.0)
+                errors.add("Connection " + edge.id() + " has a level; insert a Gain node instead");
             if (edge.enabled()) {
                 String endpoints=edge.fromNode()+"."+edge.fromPort()+"->"+edge.toNode()+"."+edge.toPort();
                 if(!enabledEndpointPairs.add(endpoints))errors.add("Duplicate enabled connection: "+endpoints);

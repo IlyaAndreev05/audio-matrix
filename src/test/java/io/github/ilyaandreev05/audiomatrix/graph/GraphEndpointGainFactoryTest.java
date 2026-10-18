@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class GraphEndpointGainFactoryTest {
     private static final List<String> STEREO = List.of("FL", "FR");
 
-    @Test void insertsUnityEndpointGainsIdempotentlyAndPreservesTheExistingRouteLevel() {
+    @Test void convertsLegacyConnectionLevelToAGainNodeAndInsertsEndpointGainsIdempotently() {
         AudioGraph original = new AudioGraph("route-a", "Desk", List.of(
                 new SourceNode("source-a", "Chrome", "application:chrome", STEREO),
                 new OutputNode("output-a", "Monitor", "monitor", STEREO)),
@@ -26,13 +26,27 @@ class GraphEndpointGainFactoryTest {
         @SuppressWarnings("unchecked") Map<String, Object> route =
                 (Map<String, Object>) ((List<?>) compiled.get("routes")).getFirst();
 
-        assertEquals(2, repeated.nodes().stream().filter(GainNode.class::isInstance).count());
-        assertEquals(3, repeated.connections().size());
+        assertEquals(3, repeated.nodes().stream().filter(GainNode.class::isInstance).count());
+        assertEquals(4, repeated.connections().size());
         assertEquals(0.42, route.get("volume"));
+        assertEquals(0.42, repeated.nodes().stream().filter(GainNode.class::isInstance)
+                .map(GainNode.class::cast).mapToDouble(GainNode::gain).filter(gain -> gain != 1.0).findFirst().orElseThrow());
+        assertTrue(repeated.connections().stream().allMatch(edge -> edge.gain() == 1.0));
         assertTrue(repeated.nodes().stream().filter(GainNode.class::isInstance)
-                .map(GainNode.class::cast).allMatch(gain -> gain.gain() == 1.0 && !gain.muted()));
+                .map(GainNode.class::cast).filter(gain -> gain.endpointNodeId().isBlank())
+                .allMatch(gain -> gain.muted() || gain.gain() == 0.42));
         assertTrue(GraphValidator.validate(repeated).isEmpty());
         assertFalse(GraphCodec.toMap(repeated).toString().contains("pipewire_node_id"));
+    }
+
+    @Test void graphValidatorRejectsNewPerConnectionLevels() {
+        AudioGraph graph = new AudioGraph("route-legacy-level", "Legacy level", List.of(
+                new SourceNode("source", "Chrome", "application:chrome", STEREO),
+                new OutputNode("output", "Monitor", "monitor", STEREO)),
+                List.of(new GraphConnection("link", "source", "out", "output", "in", true, 0.5)));
+
+        assertTrue(GraphValidator.validate(graph).stream().anyMatch(message -> message.contains("insert a Gain node")));
+        assertTrue(GraphValidator.validate(GraphEndpointGainFactory.ensure(graph)).isEmpty());
     }
 
     @Test void postLimiterEndpointGainRemainsAnAttenuatingOutputControl() {

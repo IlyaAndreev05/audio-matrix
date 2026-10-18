@@ -30,7 +30,7 @@ class ConfigArchiveTest {
         assertEquals(3, ((Number) current.get("version")).intValue());
         assertEquals("config.json",current.get("config_entry"));
         assertEquals("audio-matrix", current.get("app"));
-        assertEquals(6, ((Number) current.get("config_schema_version")).intValue());
+        assertEquals(7, ((Number) current.get("config_schema_version")).intValue());
         assertEquals("full", current.get("kind"));
 
         Path legacy = temp.resolve("legacy.amx.zip");
@@ -49,7 +49,7 @@ class ConfigArchiveTest {
         assertThrows(ConfigArchive.ArchiveException.class, () -> ConfigArchive.prepare(future));
 
         Path mismatch = temp.resolve("schema-mismatch.amx.zip");
-        rewriteManifest(archive, mismatch, manifest -> manifest.put("config_schema_version", 7));
+        rewriteManifest(archive, mismatch, manifest -> manifest.put("config_schema_version", 6));
         assertThrows(ConfigArchive.ArchiveException.class, () -> ConfigArchive.prepare(mismatch));
     }
 

@@ -145,8 +145,7 @@ abstract class AppShellUiPart06 extends AppShellUiPart05 {
         for(GraphConnection edge:graph.connections()){
             GraphNode source=graph.nodes().stream().filter(node->node.id().equals(edge.fromNode())).findFirst().orElse(null),target=graph.nodes().stream().filter(node->node.id().equals(edge.toNode())).findFirst().orElse(null);if(source==null||target==null)continue;
             CheckBox enabled=new CheckBox(source.name()+"."+edge.fromPort()+" → "+target.name()+"."+edge.toPort());enabled.setSelected(edge.enabled());enabled.setOnAction(e->setGraphConnectionEnabled(graph.id(),edge.id(),enabled.isSelected()));
-            Slider gain=new Slider(0,1,edge.gain());gain.setPrefWidth(140);gain.setOnMouseReleased(e->setGraphConnectionGain(graph.id(),edge.id(),gain.getValue()));
-            box.getChildren().add(new HBox(10,enabled,gain,actionButton(t("Удалить","Delete"),()->removeGraphConnection(graph.id(),edge.id()))));
+            box.getChildren().add(new HBox(10,enabled,actionButton(t("Удалить","Delete"),()->removeGraphConnection(graph.id(),edge.id()))));
         }
         return box;
     }
@@ -250,8 +249,6 @@ abstract class AppShellUiPart06 extends AppShellUiPart05 {
     protected void connectGraphNodes(String routeId,GraphNode source,AudioPort sourcePort,GraphNode target,AudioPort targetPort){if(source==null||target==null||sourcePort==null||targetPort==null)return;Map<String,Object> config=store.snapshot();Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->routeId.equals(item.get("id"))).findFirst().orElse(null);if(route==null)return;AudioGraph old=GraphCodec.fromMap(route);GraphConnection edge=new GraphConnection("link-"+UUID.randomUUID(),source.id(),sourcePort.id(),target.id(),targetPort.id(),true,1);List<GraphConnection> edges=new ArrayList<>(old.connections());edges.add(edge);AudioGraph next=new AudioGraph(old.id(),old.name(),old.nodes(),edges);List<String> errors=GraphValidator.validate(next);if(!errors.isEmpty()){setNotice(String.join("; ",errors),true);showPage(Page.GRAPH);return;}saveGraph(routeId,next);}
 
     protected void setGraphConnectionEnabled(String routeId,String connectionId,boolean enabled){mutateGraphConnection(routeId,connectionId,edge->new GraphConnection(edge.id(),edge.fromNode(),edge.fromPort(),edge.toNode(),edge.toPort(),enabled,edge.gain()));}
-
-    protected void setGraphConnectionGain(String routeId,String connectionId,double gain){mutateGraphConnection(routeId,connectionId,edge->new GraphConnection(edge.id(),edge.fromNode(),edge.fromPort(),edge.toNode(),edge.toPort(),edge.enabled(),gain));}
 
     protected void removeGraphConnection(String routeId,String connectionId){Map<String,Object> route=maps(store.snapshot().get("route_library")).stream().filter(item->routeId.equals(item.get("id"))).findFirst().orElse(null);if(route==null)return;AudioGraph old=GraphCodec.fromMap(route);saveGraph(routeId,new AudioGraph(old.id(),old.name(),old.nodes(),old.connections().stream().filter(edge->!connectionId.equals(edge.id())).toList()));}
 
