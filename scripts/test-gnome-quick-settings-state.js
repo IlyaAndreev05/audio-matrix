@@ -1,4 +1,4 @@
-import {menuLevelRows, menuStructureSignature} from '../gnome/audio-matrix-quick-settings/menu-state.js';
+import {hasAvailableMenuState, menuLevelRows, menuStructureSignature} from '../gnome/audio-matrix-quick-settings/menu-state.js';
 
 function assert(condition, message) {
     if (!condition)
@@ -27,6 +27,11 @@ const snapshot = {
 };
 
 const firstSignature = menuStructureSignature(snapshot);
+assert(hasAvailableMenuState(snapshot), 'Connected mixer state should be renderable');
+assert(!hasAvailableMenuState({available: false, state: null}),
+    'The initial empty bridge state must not be rendered as connected controls');
+assert(!hasAvailableMenuState({available: true, state: null}),
+    'A missing state payload must not reach disclosure rendering');
 const clone = value => JSON.parse(JSON.stringify(value));
 const changedPresentation = clone(snapshot);
 changedPresentation.state.quickGroups[0].collapsed = true;
