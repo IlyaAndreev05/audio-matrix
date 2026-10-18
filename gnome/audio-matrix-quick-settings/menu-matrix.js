@@ -1,6 +1,7 @@
 import Clutter from 'gi://Clutter';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import St from 'gi://St';
+import {boxLayout} from './menu-layout.js';
 
 const MATRIX_STATE = new WeakMap();
 
@@ -18,13 +19,13 @@ export default class AudioMatrixMenuMatrix {
 
     _create(control, t) {
         const item = new PopupMenu.PopupBaseMenuItem({reactive: false, activate: false, can_focus: false});
-        const root = new St.BoxLayout({vertical: true, spacing: 7, x_expand: true});
+        const root = boxLayout({vertical: true, spacing: 7, x_expand: true});
         const count = new St.Label({x_expand: true});
-        const tabs = new St.BoxLayout({spacing: 6, x_expand: true});
+        const tabs = boxLayout({spacing: 6, x_expand: true});
         const matrixTab = this._tab(t.matrix, tabs);
         const arrowsTab = this._tab(t.arrows, tabs);
-        const matrixPage = new St.BoxLayout({vertical: true, spacing: 5, x_expand: true});
-        const arrowPage = new St.BoxLayout({vertical: true, spacing: 5, x_expand: true});
+        const matrixPage = boxLayout({vertical: true, spacing: 5, x_expand: true});
+        const arrowPage = boxLayout({vertical: true, spacing: 5, x_expand: true});
         const state = {item, control, count, matrixTab, arrowsTab, matrixPage, arrowPage,
             selected: new Set(Array.isArray(control.value) ? control.value : []), controls: new Map(), lines: new Map(), t};
         this._buildMatrix(state);

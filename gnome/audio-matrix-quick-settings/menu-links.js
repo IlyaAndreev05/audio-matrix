@@ -9,11 +9,10 @@ export default class AudioMatrixMenuLinks {
     }
 
     render(control, target) {
-        const selected = new Set(Array.isArray(control.value) ? control.value : []);
+        const selected = selection(control.value);
         const options = control.options || [];
         const multiple = Boolean(control.multiple ?? control.nodeType === 'matrix');
-        const submenu = new PopupMenu.PopupSubMenuMenuItem(
-            `${control.label || control.parameterId} (${selected.size}/${options.length})`, false);
+        const submenu = new PopupMenu.PopupSubMenuMenuItem(summary(control, selected, options), false);
         const rows = options.map(option => this._createOption(control, option, selected, multiple, submenu));
         LINK_ROWS.set(submenu, {rows, multiple, optionCount: options.length});
         target.addMenuItem(submenu);
@@ -44,7 +43,7 @@ export default class AudioMatrixMenuLinks {
     update(submenu, control) {
         const state = LINK_ROWS.get(submenu);
         if (!state) return;
-        const selected = new Set(Array.isArray(control.value) ? control.value : []);
+        const selected = selection(control.value);
         for (const row of state.rows) {
             if (state.multiple) {
                 row.item.block_signal_handler(row.signalId);
@@ -55,6 +54,17 @@ export default class AudioMatrixMenuLinks {
                     ? PopupMenu.Ornament.DOT : PopupMenu.Ornament.NO_DOT);
             }
         }
-        submenu.label.text = `${control.label || control.parameterId} (${selected.size}/${state.optionCount})`;
+        submenu.label.text = summary(control, selected, control.options || []);
     }
+}
+
+function selection(value) {
+    return new Set(Array.isArray(value) ? value.map(String) : value == null ? [] : [String(value)]);
+}
+
+function summary(control, selected, options) {
+    const title = control.label || control.parameterId;
+    if (control.kind !== 'choice') return `${title} (${selected.size}/${options.length})`;
+    const active = options.find(option => selected.has(String(option.id)));
+    return `${title}: ${active?.label || [...selected][0] || '—'}`;
 }

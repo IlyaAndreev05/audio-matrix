@@ -52,4 +52,17 @@ changedGainReference.state.quickPins[0].output.graphGainNodeId = 'new-green-gain
 assert(menuStructureSignature(changedGainReference) !== firstSignature,
     'Replacing a pinned output Gain must rebuild the command target');
 
-print('GNOME mixer state tests passed (in-place updates, graph output gain binding, structural rebuilds)');
+const range = clone(snapshot);
+range.state.quickControls = [{id: 'cutoff', nodeId: 'low-pass', parameterId: 'frequency_hz',
+    label: 'Cutoff', kind: 'range', minimum: 20, maximum: 20000, scale: 'log', unit: 'Hz', precision: 0, value: 120}];
+const rangeSignature = menuStructureSignature(range);
+const movedCutoff = clone(range);
+movedCutoff.state.quickControls[0].value = 180;
+assert(menuStructureSignature(movedCutoff) === rangeSignature,
+    'Moving a filter slider must update its row without rebuilding the menu');
+const changedRange = clone(range);
+changedRange.state.quickControls[0].maximum = 10000;
+assert(menuStructureSignature(changedRange) !== rangeSignature,
+    'Changing a filter control range must rebuild its slider');
+
+print('GNOME mixer state tests passed (in-place volume/filter updates, graph output gain binding, structural rebuilds)');

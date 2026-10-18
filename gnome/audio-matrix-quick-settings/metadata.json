@@ -2,6 +2,6 @@
   "uuid": "audio-matrix-quick-settings@ilyaandreev05",
   "name": "Audio Matrix Quick Settings",
   "description": "Replaces GNOME's sound-output submenu with the Audio Matrix mixer.",
-  "version": 14,
+  "version": 15,
   "shell-version": ["50"]
 }

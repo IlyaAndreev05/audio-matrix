@@ -15,6 +15,20 @@ export class MenuItemsLease {
         }
     }
 
+    commit(menu, section) {
+        if (!menu || !section)
+            return;
+        if (section.actor)
+            section.actor.visible = true;
+        this.hide(menu, section);
+    }
+
+    rollback(section) {
+        this.restore();
+        if (section?.actor)
+            section.actor.visible = false;
+    }
+
     restore() {
         for (const [actor, visible] of this._originalVisibility) {
             try {

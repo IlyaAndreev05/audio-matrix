@@ -35,6 +35,10 @@ fi
 rg -q '_volumeOutput' "$extension_source"
 rg -q '_getMenuItems' "$extension_source"
 rg -q 'this\._menuItemsLease\.restore' "$extension_source/volume-menu-adapter.js"
+rg -q 'this\._menuItemsLease\.commit' "$extension_source/volume-menu-adapter.js"
+rg -q 'this\._menuItemsLease\.rollback' "$extension_source/volume-menu-adapter.js"
+rg -q 'this\._adapter\?\.commit\(\)' "$main_source"
+rg -q 'this\._adapter\?\.rollback\(\)' "$main_source"
 rg -q '\.restore\(\)' "$extension_source/volume-menu-adapter.js"
 rg -q 'removeMenuItem\(this\._section\)' "$extension_source/volume-menu-adapter.js"
 # PopupMenu.removeMenuItem() owns destruction of an inserted PopupMenuSection.
@@ -47,11 +51,18 @@ rg -q 'MenuItemsLease' "$extension_source/volume-menu-adapter.js"
 rg -q 'MenuButtonLease' "$extension_source/volume-menu-adapter.js"
 rg -q "import \* as Slider from 'resource:///org/gnome/shell/ui/slider.js';" "$extension_source"
 rg -q 'new Slider\.Slider' "$extension_source"
+rg -q 'actor\.set_style\(`spacing: \$\{spacing\}px;`\)' "$extension_source/menu-layout.js"
+if rg -q 'new St\.BoxLayout\(\{[^}]*spacing\s*:' "$extension_source"; then
+    echo 'St.BoxLayout spacing must be set through its GNOME theme style, not as a GObject property' >&2
+    exit 1
+fi
 rg -q 'audio-volume-muted-symbolic' "$extension_source"
 rg -q "new PopupMenu\.PopupSwitchMenuItem" "$extension_source"
 rg -q 'drag-end' "$extension_source"
 rg -q '_renderPending' "$extension_source"
 rg -q 'quickControls' "$extension_source"
+rg -q 'controlPosition' "$extension_source/menu-renderer.js"
+rg -q "control.kind === 'range'" "$extension_source/menu-renderer.js"
 rg -q 'quickGroups' "$extension_source"
 rg -q 'PopupMenu\.PopupMenuSection' "$extension_source"
 rg -q 'St\.ScrollView' "$extension_source"
@@ -81,12 +92,15 @@ rg -q "'Result'" "$extension_source"
 for source_file in "$extension_source"/*.js; do node --check "$source_file"; done
 gjs -m "$repo_root/scripts/test-gnome-quick-settings-state.js"
 node "$repo_root/scripts/test-volume-menu-lease.mjs"
+node "$repo_root/scripts/test-menu-control-scale.mjs"
 gnome-extensions pack "$extension_source" --force --out-dir "$scratch" \
     --extra-source=menu-text.js \
     --extra-source=state-client.js \
     --extra-source=menu-rows.js \
     --extra-source=menu-applications.js \
     --extra-source=menu-links.js \
+    --extra-source=menu-layout.js \
+    --extra-source=menu-control-scale.js \
     --extra-source=menu-matrix.js \
     --extra-source=menu-mixer.js \
     --extra-source=menu-output.js \
@@ -96,8 +110,8 @@ gnome-extensions pack "$extension_source" --force --out-dir "$scratch" \
     --extra-source=menu-lease.js \
     --extra-source=volume-menu-adapter.js
 unzip -t "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip"
-unzip -p "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" metadata.json | rg '"version": 14'
-for module in menu-text.js state-client.js menu-rows.js menu-applications.js menu-links.js menu-matrix.js menu-mixer.js menu-output.js menu-disclosure.js menu-renderer.js menu-state.js menu-lease.js volume-menu-adapter.js; do
+unzip -p "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" metadata.json | rg '"version": 15'
+for module in menu-text.js state-client.js menu-rows.js menu-applications.js menu-links.js menu-layout.js menu-control-scale.js menu-matrix.js menu-mixer.js menu-output.js menu-disclosure.js menu-renderer.js menu-state.js menu-lease.js volume-menu-adapter.js; do
     unzip -Z1 "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" | grep -Fxq "$module"
 done
 

@@ -20,6 +20,7 @@ export function menuStructureSignature(snapshot) {
             control.id, control.nodeId, control.parameterId, control.label, control.section,
             control.groupId, control.order, control.kind, control.multiple, control.nodeType,
             (control.options || []).map(option => [option.id, option.label]),
+            control.minimum, control.maximum, control.scale, control.unit, control.precision,
         ]),
     });
 }
@@ -38,10 +39,6 @@ export function menuLevelRows(state) {
             rows.set(`graph-output:${pin.nodeId}`, pin.output);
         for (const input of pin.mixerInputs || [])
             rows.set(`mixer:${pin.nodeId}:${input.id}`, input);
-    }
-    for (const control of state.quickControls || []) {
-        if (control.kind === 'slider')
-            rows.set(`graph:${control.id}`, control);
     }
     return rows;
 }

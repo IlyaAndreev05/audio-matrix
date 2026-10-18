@@ -9,6 +9,7 @@ import AudioMatrixMenuMixer from './menu-mixer.js';
 import AudioMatrixMenuOutput from './menu-output.js';
 import AudioMatrixMenuDisclosure from './menu-disclosure.js';
 import {menuLevelRows, menuStructureSignature} from './menu-state.js';
+import {controlPosition, controlValueAt, formatControlValue} from './menu-control-scale.js';
 import {TEXT} from './menu-text.js';
 
 function createScrollableGroups(section) {
@@ -34,6 +35,14 @@ function updateMenuControls(rows, toggles, linkRows, matrixRows, linkRenderer, m
     for (const [id, source] of menuLevelRows(state))
         updateLevelRow(rows, menuRows, id, source, t);
     for (const control of state.quickControls || []) {
+        if (control.kind === 'slider' || control.kind === 'range') {
+            const range = control.kind === 'range';
+            menuRows.updateLevelRow(rows.get(`graph:${control.id}`), {
+                value: range ? controlPosition(control) : control.value,
+                muted: Boolean(control.muted),
+                displayValue: range ? formatControlValue(control, control.value) : undefined,
+            });
+        }
         if (control.kind === 'toggle') {
             const entry = toggles.get(String(control.id));
             if (!entry) continue;
@@ -41,7 +50,7 @@ function updateMenuControls(rows, toggles, linkRows, matrixRows, linkRenderer, m
             entry.item.state = Boolean(control.value);
             entry.item.unblock_signal_handler(entry.signalId);
         }
-        if (control.kind === 'links') {
+        if (control.kind === 'links' || control.kind === 'choice') {
             const id = String(control.id);
             if (control.nodeType === 'matrix') matrixRenderer.update(matrixRows.get(id), control);
             else linkRenderer.update(linkRows.get(id), control);
@@ -109,12 +118,17 @@ export default class AudioMatrixMenuRenderer {
         if (!this._section) return;
         const structure = menuStructureSignature(snapshot);
         if (structure === this._structure) {
-            updateMenuControls(this._levelRows, this._toggleRows, this._linkRows, this._matrixRows,
-                this._links, this._matrix, this._rows, snapshot.state, TEXT[snapshot.language]);
-            this._disclosures.sync(snapshot.state);
-            return;
+            try {
+                updateMenuControls(this._levelRows, this._toggleRows, this._linkRows, this._matrixRows,
+                    this._links, this._matrix, this._rows, snapshot.state, TEXT[snapshot.language]);
+                this._disclosures.sync(snapshot.state);
+                return;
+            } catch (error) {
+                this._structure = null;
+                throw error;
+            }
         }
-        this._structure = structure;
+        this._structure = null;
         this._levelRows.clear();
         this._toggleRows.clear();
         this._linkRows.clear();
@@ -130,6 +144,7 @@ export default class AudioMatrixMenuRenderer {
         if (!available) {
             this._rows.addStatus(state ? t.unavailable : t.connecting, 'dialog-information-symbolic');
             this._rows.addAction(t.open, () => this._onOpen(false), 'preferences-system-symbolic');
+            this._structure = structure;
             return;
         }
         addRoutePicker(this._section, state, t, (name, value) => this._send(name, value));
@@ -140,6 +155,7 @@ export default class AudioMatrixMenuRenderer {
         this._disclosures.retain(state);
         this._section.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._rows.addAction(t.open, () => this._onOpen(true), 'preferences-system-symbolic');
+        this._structure = structure;
     }
 
     _renderGroup(group, pins, t) {
@@ -201,22 +217,33 @@ export default class AudioMatrixMenuRenderer {
 
     _renderControls(controls, t, target) {
         for (const control of controls) {
-            if (control.kind === 'slider') this._renderSliderControl(control, target);
+            if (control.kind === 'slider' || control.kind === 'range') this._renderSliderControl(control, target);
             else if (control.kind === 'toggle') this._renderToggleControl(control, target);
             else if (control.kind === 'links' && control.nodeType === 'matrix')
                 this._matrixRows.set(String(control.id), this._matrix.render(control, t, target));
-            else if (control.kind === 'links')
+            else if (control.kind === 'links' || control.kind === 'choice')
                 this._linkRows.set(String(control.id), this._links.render(control, target));
         }
     }
 
     _renderSliderControl(control, target) {
-        this._addLevelRow({
+        const range = control.kind === 'range';
+        const options = {
             id: `graph:${control.id}`, name: control.label || control.parameterId,
-            icon: this._rows.controlIcon(control), value: control.value, muted: control.muted,
-            onMute: () => this._send('toggle_quick_control', control.id),
-            onValue: value => this._send('set_quick_control', `${control.id}\t${value.toFixed(3)}`),
-        }, target);
+            icon: this._rows.controlIcon(control), value: range ? controlPosition(control) : control.value,
+            muted: Boolean(control.muted),
+            onValue: value => {
+                const next = range ? controlValueAt(control, value) : value;
+                this._send('set_quick_control', `${control.id}\t${next.toFixed(3)}`);
+            },
+        };
+        if (range) {
+            options.displayValue = formatControlValue(control, control.value);
+            options.formatValue = value => formatControlValue(control, controlValueAt(control, value));
+        } else {
+            options.onMute = () => this._send('toggle_quick_control', control.id);
+        }
+        this._addLevelRow(options, target);
     }
 
     _addLevelRow(options, target) {

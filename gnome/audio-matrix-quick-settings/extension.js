@@ -24,13 +24,19 @@ export default class AudioMatrixQuickSettingsExtension extends Extension {
         this._client.start();
         this._retryId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 1, () => {
             if (this._adapter.attach())
-                this._renderer.render(this._client.snapshot());
+                this._render(this._client.snapshot());
             return GLib.SOURCE_CONTINUE;
         });
     }
 
     _render(snapshot) {
-        this._renderer?.render(snapshot);
+        try {
+            this._renderer?.render(snapshot);
+            this._adapter?.commit();
+        } catch (error) {
+            console.error(`Audio Matrix menu render failed; restoring GNOME items: ${error}`);
+            this._adapter?.rollback();
+        }
     }
 
     _openApplication(bridgeConnected) {

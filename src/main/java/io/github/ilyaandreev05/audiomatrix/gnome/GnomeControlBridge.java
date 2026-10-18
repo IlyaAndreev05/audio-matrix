@@ -76,8 +76,8 @@ public final class GnomeControlBridge implements AutoCloseable {
         List<Map<String,Object>> result=new ArrayList<>();
         for(Map<String,Object> control:maps(config.get("quick_controls"))){if(!active.equals(String.valueOf(control.getOrDefault("route_id",active))))continue;
             String nodeId=String.valueOf(control.getOrDefault("node_id","")),parameter=String.valueOf(control.getOrDefault("parameter_id",""));GraphNode node=graph.nodes().stream().filter(candidate->candidate.id().equals(nodeId)).findFirst().orElse(null);if(node==null)continue;
-            String kind=controlKind(node.type(),parameter);if(kind.isBlank())continue;Object value=node.parameters().get(parameter);if(value==null)continue;
-            Map<String,Object> item=new LinkedHashMap<>();item.put("id",control.get("id"));item.put("nodeId",nodeId);item.put("nodeType",node.type());item.put("parameterId",parameter);item.put("label",control.getOrDefault("label",node.name()));item.put("section",control.getOrDefault("section","Audio Matrix"));item.put("order",control.getOrDefault("order",0));item.put("kind",kind);item.put("value",value);
+            Map<String,Object> metadata=GnomeQuickControlParameter.describe(node,parameter,language(config));if(metadata==null)continue;String kind=String.valueOf(metadata.get("kind"));
+            Map<String,Object> item=new LinkedHashMap<>();item.put("id",control.get("id"));item.put("nodeId",nodeId);item.put("nodeType",node.type());item.put("parameterId",parameter);item.put("label",control.getOrDefault("label",node.name()));item.put("section",control.getOrDefault("section","Audio Matrix"));item.put("order",control.getOrDefault("order",0));item.putAll(metadata);
             item.put("view",control.getOrDefault("view","MATRIX"));
             item.put("groupId",control.getOrDefault("group_id",control.getOrDefault("section","routing")));
             if("gain".equals(node.type())&&"gain".equals(parameter))item.put("muted",Boolean.TRUE.equals(node.parameters().get("muted")));
@@ -90,7 +90,7 @@ public final class GnomeControlBridge implements AutoCloseable {
         }
         result.sort(java.util.Comparator.comparingInt(item->item.get("order") instanceof Number number?number.intValue():0));return List.copyOf(result);
     }
-    static String controlKind(String nodeType,String parameter){if("gain".equals(nodeType)&&"gain".equals(parameter))return "slider";if("gain".equals(nodeType)&&"muted".equals(parameter))return "toggle";if("gate".equals(nodeType)&&"open".equals(parameter))return "toggle";if("filter".equals(nodeType)&&"enabled".equals(parameter))return "toggle";if(List.of("switch","multi_switch","selector","multi_selector","matrix").contains(nodeType)&&"active_links".equals(parameter))return "links";return "";}
+    static String controlKind(String nodeType,String parameter){if("gain".equals(nodeType)&&"gain".equals(parameter))return "slider";if("gain".equals(nodeType)&&"muted".equals(parameter))return "toggle";if("gate".equals(nodeType)&&"open".equals(parameter))return "toggle";if("filter".equals(nodeType)&&"enabled".equals(parameter))return "toggle";if("filter".equals(nodeType)&&parameter.endsWith("_hz"))return "range";if("filter".equals(nodeType)&&parameter.endsWith("_ms"))return "range";if("filter".equals(nodeType)&&parameter.endsWith("_db"))return "range";if("filter".equals(nodeType)&&("slope_db_oct".equals(parameter)||parameter.endsWith(".type")))return "choice";if(List.of("switch","multi_switch","selector","multi_selector","matrix").contains(nodeType)&&"active_links".equals(parameter))return "links";return "";}
     private void reemitLatestState(){String payload=lastState;if(!closed.get()&&!payload.isBlank())emit("State",payload);}
     static List<Map<String,Object>> channelRoutes(PipeWireBackend.Snapshot snapshot,Map<String,Object> config,Map<String,Object> profile,AudioNode selected,int defaultId,List<Map<String,Object>> devices){
         if(selected==null)return List.of();

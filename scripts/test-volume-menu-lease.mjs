@@ -19,6 +19,13 @@ assert.equal(visible.visible, true);
 assert.equal(hidden.visible, false);
 assert.equal(replacement.actor.visible, true);
 
+visibility.commit(menu, section);
+assert.equal(visible.visible, false);
+assert.equal(section.actor.visible, true);
+visibility.rollback(section);
+assert.equal(visible.visible, true);
+assert.equal(section.actor.visible, false);
+
 const output = {
     deviceCount: 1,
     menuEnabled: false,

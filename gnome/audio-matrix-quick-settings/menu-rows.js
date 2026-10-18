@@ -3,6 +3,7 @@ import * as Slider from 'resource:///org/gnome/shell/ui/slider.js';
 import Pango from 'gi://Pango';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
+import {boxLayout} from './menu-layout.js';
 import {TEXT} from './menu-text.js';
 
 const LEVEL_ROW_STATE = new WeakMap();
@@ -21,9 +22,9 @@ export default class AudioMatrixMenuRows {
     addHeader(state, available) {
         const t = TEXT[this._getLanguage()];
         const item = new PopupMenu.PopupBaseMenuItem({reactive: false, activate: false, can_focus: false});
-        const row = new St.BoxLayout({spacing: 12, x_expand: true, y_expand: true});
+        const row = boxLayout({spacing: 12, x_expand: true, y_expand: true});
         row.add_child(new St.Icon({icon_name: 'audio-x-generic-symbolic', style_class: 'popup-menu-icon'}));
-        const labels = new St.BoxLayout({vertical: true, spacing: 2, x_expand: true, y_expand: true});
+        const labels = boxLayout({vertical: true, spacing: 2, x_expand: true, y_expand: true});
         labels.add_child(new St.Label({text: t.title, y_expand: true}));
         const subtitle = new St.Label({
             text: state?.activeRoute || state?.profile || (available ? '—' : t.unavailable),
@@ -39,7 +40,7 @@ export default class AudioMatrixMenuRows {
 
     addStatus(text, iconName) {
         const item = new PopupMenu.PopupBaseMenuItem({reactive: false, activate: false, can_focus: false});
-        const row = new St.BoxLayout({spacing: 10, x_expand: true});
+        const row = boxLayout({spacing: 10, x_expand: true});
         row.add_child(new St.Icon({icon_name: iconName, style_class: 'popup-menu-icon'}));
         const label = new St.Label({text, x_expand: true, y_expand: true, style_class: 'popup-status-menu-item'});
         label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
@@ -70,7 +71,7 @@ export default class AudioMatrixMenuRows {
 
     createLevelRow(options) {
         const item = new PopupMenu.PopupBaseMenuItem({reactive: false, activate: false, can_focus: false});
-        const row = new St.BoxLayout({spacing: 9, x_expand: true, y_expand: true});
+        const row = boxLayout({spacing: 9, x_expand: true, y_expand: true});
         const icon = options.icon || 'audio-x-generic-symbolic';
         row.add_child(typeof icon === 'string'
             ? new St.Icon({icon_name: icon, style_class: 'popup-menu-icon'})
@@ -85,7 +86,7 @@ export default class AudioMatrixMenuRows {
         slider.x_expand = true;
         slider.accessible_name = `${options.name || ''} — ${TEXT[this._getLanguage()].percent}`;
         row.add_child(slider);
-        const percentage = new St.Label({text: `${Math.round(initial * 100)}%`, style_class: 'popup-status-menu-item'});
+        const percentage = new St.Label({text: options.displayValue || `${Math.round(initial * 100)}%`, style_class: 'popup-status-menu-item'});
         percentage.set_width(36);
         row.add_child(percentage);
         const valueSignalId = this._connectSlider(slider, percentage, options);
@@ -110,7 +111,7 @@ export default class AudioMatrixMenuRows {
         state.slider.block_signal_handler(state.valueSignalId);
         state.slider.value = initial;
         state.slider.unblock_signal_handler(state.valueSignalId);
-        state.percentage.text = `${Math.round(initial * 100)}%`;
+        state.percentage.text = options.displayValue || `${Math.round(initial * 100)}%`;
         if (!state.muteButton) return;
         const muted = Boolean(options.muted);
         const t = TEXT[this._getLanguage()];
@@ -124,7 +125,7 @@ export default class AudioMatrixMenuRows {
         slider.connect('drag-begin', () => this._onDragBegin());
         const valueSignalId = slider.connect('notify::value', () => {
             const value = Math.max(0, Math.min(1, Number(slider.value) || 0));
-            percentage.text = `${Math.round(value * 100)}%`;
+            percentage.text = options.formatValue ? options.formatValue(value) : `${Math.round(value * 100)}%`;
             if (typeof options.onValue === 'function')
                 this._queueSliderCommand(key, value, options.onValue);
         });

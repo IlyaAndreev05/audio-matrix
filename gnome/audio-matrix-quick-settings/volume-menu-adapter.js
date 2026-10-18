@@ -21,7 +21,6 @@ export default class AudioMatrixVolumeMenuAdapter {
                 this._output = output;
                 this._menuButtonLease = new MenuButtonLease(output);
             }
-            this._menuItemsLease.hide(menu, this._section);
             const items = menu._getMenuItems?.() || menu._items || [];
             if (!items.includes(this._section))
                 menu.addMenuItem(this._section);
@@ -31,9 +30,16 @@ export default class AudioMatrixVolumeMenuAdapter {
         this._output = output;
         this._menuButtonLease = new MenuButtonLease(output);
         this._menu = menu;
-        this._menuItemsLease.hide(menu, this._section);
         this._menu.addMenuItem(this._section);
         return true;
+    }
+
+    commit() {
+        this._menuItemsLease.commit(this._menu, this._section);
+    }
+
+    rollback() {
+        this._menuItemsLease.rollback(this._section);
     }
 
     detach() {
