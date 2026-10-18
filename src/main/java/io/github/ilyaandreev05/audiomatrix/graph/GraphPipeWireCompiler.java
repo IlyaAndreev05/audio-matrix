@@ -87,7 +87,7 @@ public final class GraphPipeWireCompiler {
             String targetChannels=channelMatrix==null?String.join(",",output.inputs().getFirst().channels()):String.join(",",channelMatrix.outputs());
             String targetKey=path.sourceId+"\u0000"+output.deviceId()+"\u0000"+targetChannels;
             if(path.selected&&!sourceOutputs.add(targetKey))throw new IllegalArgumentException("Multiple paths from source '"+path.sourceId+"' are selected for the same channels of output '"+output.deviceId()+"'; route alternatives through a Switch or Matrix node");
-            String id=stableRouteId(path,output);boolean muted=path.muted||!path.selected;Map<String,Object> route=map("id",id,"name",path.sourceId+" → "+output.name(),"from",path.sourceId,"to",output.deviceId(),"volume",muted?0:Math.max(0,Math.min(1,path.gain)),"gain_db",0,"mute",muted,"channel_map","stereo","enabled",true);
+            String id=stableRouteId(path,output);boolean muted=path.muted||!path.selected;Map<String,Object> route=map("id",id,"name",path.sourceId+" → "+output.name(),"from",path.sourceId,"to",output.deviceId(),"volume",muted?0:Math.max(0,Math.min(1,path.gain)),"gain_db",0,"delay_ms",path.delayMs,"mute",muted,"channel_map","stereo","enabled",true);
             route.put("channel_map",layout(output.inputs().getFirst().channels()));
             if(channelMatrix!=null)route.put("channel_matrix",channelMatrix.toMap());
             if(!path.filters.isEmpty()){String chainId="graph-chain-"+id;route.put("filters_ref","dsp.route_chains."+chainId);routeChains.put(chainId,map("enabled",true,"filters",List.copyOf(path.filters)));}
@@ -100,8 +100,11 @@ public final class GraphPipeWireCompiler {
                 if(path.outputLimiter!=null)throw new IllegalArgumentException("A path can contain only one post-mix peak limiter");
                 Map<String,Object> limiter=new LinkedHashMap<>(filter.parameters());limiter.remove("processor");limiter.remove("enabled");
                 limiter.put("enabled",true);path.outputLimiter=Map.copyOf(limiter);
+            }else if("delay".equals(filter.processor())){
+                path.delayMs+=GraphFilterCompiler.delayMs(filter);
+                if(path.delayMs>5000.0)throw new IllegalArgumentException("Combined graph delay must not exceed 5000 ms");
             }else{
-                Map<String,Object> encoded=new LinkedHashMap<>(filter.parameters());encoded.remove("processor");encoded.remove("enabled");encoded.put("type",filter.processor());encoded.putIfAbsent("enabled",true);path.filters.add(encoded);
+                path.filters.addAll(GraphFilterCompiler.routeFilters(filter));
             }
         }else if(node instanceof MixerNode mixer){path.gain*=mixer.inputGains().getOrDefault(incomingPort,0.0);path.muted|=mixer.inputMuted(incomingPort);}
         else throw new IllegalArgumentException("Unsupported processing node "+node.type()+" '"+node.name()+"'");
@@ -143,5 +146,5 @@ public final class GraphPipeWireCompiler {
     private static Map<String,Object> map(Object...pairs){Map<String,Object> result=new LinkedHashMap<>();for(int i=0;i<pairs.length;i+=2)result.put((String)pairs[i],pairs[i+1]);return result;}
     @SuppressWarnings("unchecked") private static Map<String,Object> deep(Map<String,Object> value){Map<String,Object> result=new LinkedHashMap<>();value.forEach((key,item)->result.put(key,copy(item)));return result;}
     private static Object copy(Object value){if(value instanceof Map<?,?> map){Map<String,Object> result=new LinkedHashMap<>();map.forEach((key,item)->result.put(String.valueOf(key),copy(item)));return result;}if(value instanceof List<?> list)return list.stream().map(GraphPipeWireCompiler::copy).toList();return value;}
-    private static final class PathState{final String sourceId;double gain;boolean muted;boolean selected;boolean protectMixedOutput;final List<Map<String,Object>> filters;final List<String> edgeIds;Map<String,Object> outputLimiter;PathState(String sourceId,double gain,boolean muted,boolean selected,List<Map<String,Object>> filters,List<String> edgeIds){this.sourceId=sourceId;this.gain=gain;this.muted=muted;this.selected=selected;this.filters=filters;this.edgeIds=edgeIds;}PathState copy(){PathState copy=new PathState(sourceId,gain,muted,selected,new ArrayList<>(filters),new ArrayList<>(edgeIds));copy.outputLimiter=outputLimiter;copy.protectMixedOutput=protectMixedOutput;return copy;}}
+    private static final class PathState{final String sourceId;double gain;double delayMs;boolean muted;boolean selected;boolean protectMixedOutput;final List<Map<String,Object>> filters;final List<String> edgeIds;Map<String,Object> outputLimiter;PathState(String sourceId,double gain,boolean muted,boolean selected,List<Map<String,Object>> filters,List<String> edgeIds){this.sourceId=sourceId;this.gain=gain;this.muted=muted;this.selected=selected;this.filters=filters;this.edgeIds=edgeIds;}PathState copy(){PathState copy=new PathState(sourceId,gain,muted,selected,new ArrayList<>(filters),new ArrayList<>(edgeIds));copy.delayMs=delayMs;copy.outputLimiter=outputLimiter;copy.protectMixedOutput=protectMixedOutput;return copy;}}
 }
