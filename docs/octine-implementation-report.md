@@ -34,7 +34,8 @@ Baseline saved on `main` and merged to `develop`: `df3e188` (workspace artifacts
 - Notification continuity test: 25 event pulses continued through a visible GNOME notification with no multi-second gap.
 - Free profile 1→N: selecting HDMI and the USB DAC in the same Switch produced simultaneous PCM on HDMI, USB and the analog Vibro output; unselected outputs stayed silent.
 - The installed JavaFX editor opens against the running service and shows PipeWire connected; the Profiles page exposes the three Octine profiles and the shared Vibro controls.
-- Click-to-captured-PCM latency measured from evdev to analog monitor: approximately **0.38 s** (capture-monitor path included). The earlier multi-second delay was route reconstruction, not the event-to-PCM path.
+- GNOME Quick Settings now publishes eight pinned nodes for the active Monitor route, including Main Source, Monitor output, Main Mixer, Vibro Mixer/Gain/Limiter/Output and Event Sound Studio. Streams whose PipeWire level is unavailable are shown at 100% instead of a misleading 0%.
+- Click-to-captured-PCM latency measured from evdev to analog monitor was approximately **0.38 s**, but that probe also included capture-process startup; exact event-to-PCM latency with a pre-armed capture is still being measured and is not claimed as verified.
 
 ## Known limitations / blockers
 
