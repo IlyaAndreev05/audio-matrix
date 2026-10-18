@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import ast
+import io
 import re
 import sys
+import tokenize
 from pathlib import Path
 
 MAX_LINES = 200
@@ -106,6 +109,40 @@ def class_ranges(masked: str, declaration: re.Pattern[str]) -> list[tuple[int, i
     return ranges
 
 
+def mask_python_non_code(source: str) -> str:
+    """Blank comments and string literals while preserving line boundaries."""
+    chars = list(source)
+    lines = source.splitlines(keepends=True)
+    starts = [0]
+    starts.extend(index + 1 for index, char in enumerate(source) if char == "\n")
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        if token.type not in {tokenize.COMMENT, tokenize.STRING}:
+            continue
+        start_line, start_column = token.start
+        end_line, end_column = token.end
+        for line in range(start_line, end_line + 1):
+            first = starts[line - 1] + (start_column if line == start_line else 0)
+            last = starts[line - 1] + (end_column if line == end_line else len(lines[line - 1]))
+            for offset in range(first, min(last, len(chars))):
+                if chars[offset] != "\n":
+                    chars[offset] = " "
+    return "".join(chars)
+
+
+def python_class_ranges(source: str) -> list[tuple[int, int, str]]:
+    tree = ast.parse(source)
+    line_starts = [0]
+    line_starts.extend(index + 1 for index, char in enumerate(source) if char == "\n")
+    ranges = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef) or node.end_lineno is None:
+            continue
+        start = line_starts[node.lineno - 1]
+        end = line_starts[node.end_lineno] if node.end_lineno < len(line_starts) else len(source)
+        ranges.append((start, end, f"class {node.name}"))
+    return ranges
+
+
 def count_code_lines(masked: str, start: int, end: int) -> int:
     return sum(bool(line.strip()) for line in masked[start:end].splitlines())
 
@@ -113,10 +150,20 @@ def count_code_lines(masked: str, start: int, end: int) -> int:
 def violations(paths: list[Path]) -> list[str]:
     failures = []
     for path in paths:
-        javascript = path.suffix == ".js"
-        masked = mask_non_code(path.read_text(encoding="utf-8"), javascript)
-        declaration = JS_DECLARATION if javascript else JAVA_DECLARATION
-        for start, end, name in class_ranges(masked, declaration):
+        source = path.read_text(encoding="utf-8")
+        if path.suffix == ".py":
+            try:
+                ranges = python_class_ranges(source)
+                masked = mask_python_non_code(source)
+            except (IndentationError, SyntaxError, tokenize.TokenError) as invalid:
+                failures.append(f"{path}: could not inspect Python classes: {invalid}")
+                continue
+        else:
+            javascript = path.suffix == ".js"
+            masked = mask_non_code(source, javascript)
+            declaration = JS_DECLARATION if javascript else JAVA_DECLARATION
+            ranges = class_ranges(masked, declaration)
+        for start, end, name in ranges:
             lines = count_code_lines(masked, start, end)
             if lines > MAX_LINES:
                 line = masked.count("\n", 0, start) + 1
@@ -125,17 +172,17 @@ def violations(paths: list[Path]) -> list[str]:
 
 
 def main(arguments: list[str]) -> int:
-    roots = [Path(arg) for arg in arguments] or [Path("src"), Path("gnome"), Path("chrome")]
+    roots = [Path(arg) for arg in arguments] or [Path("src"), Path("gnome"), Path("chrome"), Path("scripts")]
     files = sorted({
         file for root in roots if root.exists()
-        for suffix in ("*.java", "*.js")
+        for suffix in ("*.java", "*.js", "*.py")
         for file in root.rglob(suffix)
     })
     failures = violations(files)
     if failures:
         print("Class size limit exceeded:", *failures, sep="\n", file=sys.stderr)
         return 1
-    print(f"Checked {len(files)} Java/GJS source files; no class exceeds {MAX_LINES} code lines.")
+    print(f"Checked {len(files)} Java/GJS/Python source files; no class exceeds {MAX_LINES} code lines.")
     return 0
 
 

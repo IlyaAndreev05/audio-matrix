@@ -4,7 +4,7 @@ plugins {
 }
 
 group = 'io.github.ilyaandreev05'
-version = '0.3.1'
+version = '0.3.2'
 
 repositories { mavenCentral() }
 
@@ -36,6 +36,7 @@ tasks.register('verifyClassSize', Exec) {
     commandLine 'python3', 'scripts/check_class_size.py'
 }
 tasks.named('test') { dependsOn tasks.named('verifyClassSize') }
+tasks.named('check') { dependsOn tasks.named('verifyClassSize') }
 
 def limiterSource = file('src/main/native/audiomatrix_limiter.c')
 def limiterHeader = file('src/main/native/ladspa_abi.h')
@@ -69,7 +70,7 @@ tasks.named('test') {
 
 // Build a self-contained Debian package from the Gradle application distribution.
 tasks.register('packageDeb', Exec) {
-    dependsOn tasks.installDist
+    dependsOn tasks.installDist, tasks.named('verifyClassSize')
     doFirst {
         def jdkHome = project.findProperty('packageJdkHome') ?: System.getProperty('java.home')
         def appLib = layout.buildDirectory.dir("install/${project.name}/lib").get().asFile
