@@ -152,13 +152,17 @@ class GnomeControlBridgeTest {
 
     @Test void publishesOrderedGroupsAndRoutesForTheActiveProfile() {
         Map<String, Object> config = DefaultConfig.create();
+        config.put("route_library", new java.util.ArrayList<>());
+        config.put("quick_settings", DefaultConfig.map("groups", List.of(
+                DefaultConfig.map("id", "custom-sources", "name", "My arbitrary sources", "order", 0),
+                DefaultConfig.map("id", "custom-outputs", "name", "My arbitrary outputs", "order", 1))));
         List<Map<String, Object>> groups = QuickSettingsConfig.groups(config);
         groups.getFirst().put("order", 2);
         groups.getLast().put("order", 0);
         AudioGraph route = new AudioGraph("desk-route", "Desk route", List.of(), List.of());
         GraphRouteLibrary.saveRoute(config, route, "");
 
-        assertEquals("effects", GnomeQuickSettingsState.groups(config).getFirst().get("id"));
+        assertEquals("custom-outputs", GnomeQuickSettingsState.groups(config).getFirst().get("id"));
         assertEquals(List.of(Map.of("id", "desk-route", "name", "Desk route")), GnomeQuickSettingsState.routes(config));
     }
 
@@ -170,7 +174,7 @@ class GnomeControlBridgeTest {
 
         List<Map<String,Object>> controls=GnomeControlBridge.quickControls(config);
 
-        assertEquals(1,controls.size());Map<String,Object> control=controls.getFirst();assertEquals("links",control.get("kind"));assertEquals("switch",control.get("nodeType"));assertEquals(List.of("in->monitor"),control.get("value"));assertEquals(List.of(Map.of("id","in->monitor","label","in → monitor"),Map.of("id","in->aux","label","in → aux")),control.get("options"));assertEquals(false,control.get("multiple"));
+        assertEquals(1,controls.size());Map<String,Object> control=controls.getFirst();assertEquals("links",control.get("kind"));assertEquals("switch",control.get("nodeType"));assertEquals(List.of("in->monitor"),control.get("value"));assertEquals(List.of(Map.of("id","in->monitor","label","in → monitor"),Map.of("id","in->aux","label","in → aux")),control.get("options"));assertEquals(true,control.get("multiple"));
     }
 
     @Test void publishesMatrixViewAndIndependentLinksForPinnedMatrixNode(){

@@ -3,6 +3,7 @@ package io.github.ilyaandreev05.audiomatrix.audio;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.ilyaandreev05.audiomatrix.config.ChannelMatrix;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphCommonVibro;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -38,9 +39,12 @@ abstract class PipeWireRoutePart02 extends PipeWireRoutePart01 {
             String linkListing = run(List.of("pw-link", "-l"), COMMAND_TIMEOUT);
             for (StreamPlan stream : plan.streams())
                 originalStreamLinks.computeIfAbsent(stream.node().name(), ignored -> linksFromNode(linkListing, stream.node().name()));
+            Map<String, List<Link>> rollbackLinks = deepLinks(originalStreamLinks);
+            originalBeforeApply.putAll(rollbackLinks);
 
             stopOwnedProcesses();
             disconnectOwnedLinks();
+            desiredLinks.clear();
 
             Set<String> requiredBusIds = new LinkedHashSet<>();
             plan.routes().forEach(route -> {
@@ -82,10 +86,14 @@ abstract class PipeWireRoutePart02 extends PipeWireRoutePart01 {
 
             Map<String, List<String>> inputs = ports("-i");
             Map<String, List<String>> outputs = ports("-o");
-            observedLinks.clear();
-            observedLinks.addAll(PipeWireLinkOperations.allLinks(run(List.of("pw-link", "-l"), COMMAND_TIMEOUT)));
-            Map<String, List<RoutePlan>> routesByBus = new LinkedHashMap<>();
-            for (RoutePlan route : plan.routes()) routesByBus.computeIfAbsent(route.fromBusId(), ignored -> new ArrayList<>()).add(route);
+            refreshObservedLinks();
+            BusPlan mainBus = plan.buses().get(GraphCommonVibro.MAIN_SOURCE_ID);
+            if (mainBus != null) {
+                List<Link> systemCopy = channelLinks(outputs.getOrDefault(PipeWireBackend.SYSTEM_MIXER_SINK_NAME, List.of()),
+                        inputs.getOrDefault(mainBus.nodeName(), List.of()), mainBus.channelLayout(), false);
+                if (systemCopy.isEmpty()) throw new IOException("The virtual system input is unavailable; Main Mixer has no application source");
+                connectAll(systemCopy);
+            }
             for (RoutePlan route : plan.routes()) {
                 BusPlan sourceBus = plan.buses().get(route.fromBusId());
                 String sourceTarget = route.filters().isEmpty() ? route.captureNodeName() : route.filterInputNodeName();
@@ -174,6 +182,7 @@ abstract class PipeWireRoutePart02 extends PipeWireRoutePart01 {
                 restoreOriginal(name);
                 originalStreamLinks.remove(name);
             }
+            confirmDesiredLinks();
             if (fadeInMs > 0) fadeRoutePlan(plan, false, fadeInMs);
             active = true;
             appliedSignature = signature;
@@ -183,6 +192,7 @@ abstract class PipeWireRoutePart02 extends PipeWireRoutePart01 {
         } catch (Exception error) {
             disconnectOwnedLinks();
             stopOwnedProcesses();
+            // Keep newly captured originals as well as streams managed by the previous plan.
             originalStreamLinks.clear();
             originalStreamLinks.putAll(originalBeforeApply);
             restoreAllOriginal();
@@ -191,7 +201,9 @@ abstract class PipeWireRoutePart02 extends PipeWireRoutePart01 {
             active = false;
             appliedSignature = "";
             appliedPlan = null;
-            status = "Route apply failed; previous stream links were restored: " + message(error);
+            desiredLinks.clear();
+            lastReport = new ApplyReport(0, 0, 0, List.copyOf(transitionWarnings));
+            status = "Route apply failed; original stream restoration attempted: " + message(error);
             throw error;
         }
     }

@@ -13,18 +13,27 @@ final class PipeWireCommandRunner {
 
     static String run(List<String> command, Duration timeout) throws Exception {
         Path output = Files.createTempFile("audio-matrix-command-", ".out");
+        Process process = null;
         try {
-            Process process = new ProcessBuilder(command).redirectErrorStream(true)
+            process = new ProcessBuilder(command).redirectErrorStream(true)
                     .redirectOutput(output.toFile()).start();
-            if (!process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
-                process.destroyForcibly();
+            if (!process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS))
                 throw new IOException("Command timed out: " + command.getFirst());
-            }
             String text = Files.readString(output);
             if (process.exitValue() != 0)
                 throw new IOException(text.isBlank() ? command.getFirst() + " exited with " + process.exitValue() : text.trim());
             return text;
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw error;
         } finally {
+            if (process != null && process.isAlive()) {
+                process.destroyForcibly();
+                boolean interrupted = Thread.interrupted();
+                try { process.waitFor(1, TimeUnit.SECONDS); }
+                catch (InterruptedException error) { interrupted = true; }
+                finally { if (interrupted) Thread.currentThread().interrupt(); }
+            }
             Files.deleteIfExists(output);
         }
     }

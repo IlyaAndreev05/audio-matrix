@@ -40,9 +40,8 @@ rg -q 'this\._menuItemsLease\.rollback' "$extension_source/volume-menu-adapter.j
 rg -q 'this\._adapter\?\.commit\(\)' "$main_source"
 rg -q 'this\._adapter\?\.rollback\(\)' "$main_source"
 rg -q '\.restore\(\)' "$extension_source/volume-menu-adapter.js"
-rg -q 'removeMenuItem\(this\._section\)' "$extension_source/volume-menu-adapter.js"
-# PopupMenu.removeMenuItem() owns destruction of an inserted PopupMenuSection.
-# A second destroy from Extension.disable() produces disposed-actor errors.
+rg -q 'actor\.get_parent\(\)\?\.remove_child\(actor\)' "$extension_source/volume-menu-adapter.js"
+# The adapter owns destruction; a Shell menu rebuild only reparents the section.
 if rg -q 'this\._dynamic\?\.destroy\(\)' "$main_source"; then
     echo 'The GNOME menu section must be destroyed only by its owning menu adapter' >&2
     exit 1
@@ -71,6 +70,9 @@ rg -q 'St\.ScrollView' "$extension_source"
 rg -q 'updateMenuControls' "$extension_source"
 rg -q 'set_graph_output_volume' "$extension_source/menu-output.js"
 rg -q 'graphGainNodeId' "$extension_source/menu-output.js"
+rg -q 'set_graph_gain' "$extension_source/menu-output.js"
+rg -q 'toggle_graph_gain_mute' "$extension_source/menu-output.js"
+rg -q 'graph-gain' "$extension_source/menu-state.js"
 rg -q 't\.outputUnavailable' "$extension_source/menu-output.js"
 rg -q "outputUnavailable: 'Устройство вывода недоступно'" "$extension_source/menu-text.js"
 rg -q 'pin\.routeId' "$extension_source/menu-output.js"
@@ -96,6 +98,9 @@ rg -q "'Result'" "$extension_source"
 for source_file in "$extension_source"/*.js; do node --check "$source_file"; done
 gjs -m "$repo_root/scripts/test-gnome-quick-settings-state.js"
 node "$repo_root/scripts/test-volume-menu-lease.mjs"
+node "$repo_root/scripts/test-menu-adapter.mjs"
+node "$repo_root/scripts/test-menu-renderer.mjs"
+node "$repo_root/scripts/test-menu-output.mjs"
 node "$repo_root/scripts/test-menu-control-scale.mjs"
 gnome-extensions pack "$extension_source" --force --out-dir "$scratch" \
     --extra-source=menu-text.js \
@@ -109,13 +114,14 @@ gnome-extensions pack "$extension_source" --force --out-dir "$scratch" \
     --extra-source=menu-mixer.js \
     --extra-source=menu-output.js \
     --extra-source=menu-disclosure.js \
+    --extra-source=menu-groups.js \
     --extra-source=menu-renderer.js \
     --extra-source=menu-state.js \
     --extra-source=menu-lease.js \
     --extra-source=volume-menu-adapter.js
 unzip -t "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip"
 unzip -p "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" metadata.json | rg '"version": 17'
-for module in menu-text.js state-client.js menu-rows.js menu-applications.js menu-links.js menu-layout.js menu-control-scale.js menu-matrix.js menu-mixer.js menu-output.js menu-disclosure.js menu-renderer.js menu-state.js menu-lease.js volume-menu-adapter.js; do
+for module in menu-text.js state-client.js menu-rows.js menu-applications.js menu-links.js menu-layout.js menu-control-scale.js menu-matrix.js menu-mixer.js menu-output.js menu-disclosure.js menu-groups.js menu-renderer.js menu-state.js menu-lease.js volume-menu-adapter.js; do
     unzip -Z1 "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" | grep -Fxq "$module"
 done
 

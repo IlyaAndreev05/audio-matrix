@@ -21,6 +21,7 @@ class PipeWireApplicationRoutingTest extends PipeWireRouteManagerTestSupport {
 @Test
     void unmatchedEventSoundStudioStreamNeverUsesTheGeneralCatchAllButExactRuleCanRouteIt() throws IOException {
         Map<String,Object> config = DefaultConfig.create();
+        config.put("active_route", "");
         config.put("graph_default_bus", "main");
         @SuppressWarnings("unchecked") List<Map<String,Object>> routes = (List<Map<String,Object>>) config.get("routes");
         routes.add(DefaultConfig.map("id", "main-out", "from", "main", "to", "system_default", "enabled", true));

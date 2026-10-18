@@ -33,6 +33,10 @@ public abstract class PipeWireRouteTypes {
     public record ApplyReport(int buses, int routes, int streams, List<String> warnings) {
         public ApplyReport { warnings = List.copyOf(warnings); }
     }
+    /** Counts from the last reconciliation; no device identities or command output. */
+    public record RouteDiagnostics(int desiredLinks, int observedLinks, int missingLinks,
+                                   int unavailableOutputs, int conflictingOutputs,
+                                   int commandTimeouts, boolean active) {}
     public record HeadroomEstimate(boolean available, double preLimiterPeakDbfs, double limiterCeilingDbfs,
                                    double postLimiterPeakDbfs, double worstCaseReductionDb, String message) {
         static HeadroomEstimate unavailable(String message) {

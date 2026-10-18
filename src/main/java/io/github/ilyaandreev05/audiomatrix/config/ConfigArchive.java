@@ -187,7 +187,11 @@ public final class ConfigArchive {
                 if (!requiredKind.isBlank() && !requiredKind.equals(target.kind()))
                     throw new ArchiveException("Selected device has the wrong direction for " + item.getKey());
                 Map<String, Object> mapped = updatedById.get(item.getKey());
-                mapped.put("selector", DefaultConfig.map("kind", "name_equals", "value", target.name()));
+                if (mapped.containsKey("identity") || target.identity() != null) {
+                    if (target.identity() == null || !target.identity().reliable()) throw new ArchiveException("Selected device has no reliable identity for " + item.getKey());
+                    mapped.put("identity", target.identity().toMap()); mapped.remove("selector");
+                }
+                else mapped.put("selector", DefaultConfig.map("kind", "name_equals", "value", target.name()));
                 if (requiredKind.isBlank()) mapped.put("role", target.kind());
             }
             List<String> errors = ConfigValidator.validate(updated);
@@ -199,7 +203,8 @@ public final class ConfigArchive {
     }
 
     public record ImportedDevice(String id, String name, String role, String selectorKind, String selectorValue) {}
-    public record DeviceTarget(String kind, String name) {
+    public record DeviceTarget(String kind, String name, io.github.ilyaandreev05.audiomatrix.audio.DeviceIdentity identity) {
+        public DeviceTarget(String kind, String name) { this(kind, name, null); }
         public DeviceTarget {
             if (!Set.of("output", "input").contains(kind) || name == null || name.isBlank())
                 throw new IllegalArgumentException("A device target needs an input/output direction and node name");
@@ -208,8 +213,7 @@ public final class ConfigArchive {
 
     private static String deviceDirection(String role) {
         if (Set.of("source", "input", "microphone", "accelerometer").contains(role)) return "input";
-        if (Set.of("output", "speaker", "speakers", "subwoofer", "haptic_output").contains(role)) return "output";
-        return "";
+        return Set.of("output", "speaker", "speakers", "subwoofer", "haptic_output").contains(role) ? "output" : "";
     }
 
     private static TreeMap<String, Path> measurementFiles(Map<String, Object> config, Path root) throws IOException {

@@ -10,6 +10,11 @@ import java.util.UUID;
 public final class GraphProfileLibrary {
     private GraphProfileLibrary() {}
 
+    /** Adds Octine presets without replacing or activating an existing custom profile. */
+    public static void installOctineProfiles(Map<String,Object> config) {
+        io.github.ilyaandreev05.audiomatrix.config.OctineProfileConfig.install(config);
+    }
+
     /** Creates a new empty graph workspace while carrying over profile-level output preferences. */
     public static Map<String,Object> createProfile(Map<String,Object> config,String templateProfileId,String name) {
         Map<String,Object> source=find(maps(config.get("profiles")),templateProfileId);

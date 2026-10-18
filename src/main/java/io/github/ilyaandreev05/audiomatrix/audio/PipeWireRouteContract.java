@@ -44,6 +44,9 @@ abstract class PipeWireRouteContract extends PipeWireRouteState {
                                              int fadeOutMs, int fadeInMs,
                                              Map<String, List<Link>> originalBeforeApply) throws Exception;
     protected abstract ApplyReport reportAppliedPlan(Plan plan);
+    protected abstract boolean observedGraphMatches() throws Exception;
+    protected abstract void confirmDesiredLinks() throws Exception;
+    protected abstract void refreshObservedLinks() throws Exception;
     protected abstract void fadeRoutePlan(Plan plan, boolean fadeOut, int durationMs);
     protected abstract Plan plan(Map<String, Object> config, PipeWireBackend.Snapshot snapshot) throws IOException;
     protected abstract void updateLiveLevels(Plan previous, Plan plan) throws Exception;

@@ -91,7 +91,7 @@ abstract class AppShellUiPart30 extends AppShellUiPart29 {
             Map<String, Object> pin = QuickSettingsConfig.pins(config).stream()
                     .filter(item -> fields[0].equals(item.get("id"))).findFirst()
                     .orElseThrow(() -> new IllegalArgumentException("Pinned node no longer exists"));
-            if (!String.valueOf(config.getOrDefault("active_route", "")).equals(pin.get("route_id")))
+            if (!GraphUiRoutes.available(config, String.valueOf(pin.get("route_id"))))
                 throw new IllegalArgumentException("Pinned node is not on the active route");
             pin.put("view", fields[1]);
         });

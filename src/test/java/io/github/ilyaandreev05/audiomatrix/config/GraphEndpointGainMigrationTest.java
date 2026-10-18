@@ -36,9 +36,9 @@ class GraphEndpointGainMigrationTest {
             @SuppressWarnings("unchecked") Map<String, Object> active =
                     (Map<String, Object>) ((List<?>) compiled.get("routes")).getFirst();
 
-            assertEquals(7, migrated.get("schema_version"));
+            assertEquals(DefaultConfig.SCHEMA_VERSION, migrated.get("schema_version"));
             assertTrue(java.util.Arrays.equals(oldBytes,
-                    Files.readAllBytes(temp.resolve("config.json.before-schema-7"))));
+                    Files.readAllBytes(temp.resolve("config.json.before-schema-"+DefaultConfig.SCHEMA_VERSION))));
             assertEquals(3, graph.nodes().stream().filter(GainNode.class::isInstance).count());
             assertEquals(0.37, active.get("volume"));
             assertTrue(graph.connections().stream().allMatch(edge -> edge.gain() == 1.0));
@@ -60,8 +60,8 @@ class GraphEndpointGainMigrationTest {
         try (ConfigStore store = new ConfigStore(file)) {
             Map<String, Object> migrated = store.snapshot();
             AudioGraph graph = GraphCodec.fromMap(route(migrated));
-            assertEquals(7, migrated.get("schema_version"));
-            assertTrue(java.util.Arrays.equals(oldBytes, Files.readAllBytes(temp.resolve("config-v6.json.before-schema-7"))));
+            assertEquals(DefaultConfig.SCHEMA_VERSION, migrated.get("schema_version"));
+            assertTrue(java.util.Arrays.equals(oldBytes, Files.readAllBytes(temp.resolve("config-v6.json.before-schema-"+DefaultConfig.SCHEMA_VERSION))));
             assertTrue(graph.connections().stream().allMatch(edge -> edge.gain() == 1.0));
             assertTrue(graph.nodes().stream().filter(GainNode.class::isInstance).map(GainNode.class::cast)
                     .anyMatch(gain -> gain.endpointNodeId().isBlank() && gain.gain() == 0.37));
@@ -78,11 +78,12 @@ class GraphEndpointGainMigrationTest {
                 List.of(new io.github.ilyaandreev05.audiomatrix.graph.GraphConnection(
                         "link-a", "source-a", "out", "output-a", "in", true, 0.37)));
         Map<String, Object> encoded = new LinkedHashMap<>(GraphCodec.toMap(graph));
-        encoded.put("profile_id", "desk");
+        encoded.put("profile_id", "monitor");
         encoded.put("group_id", "");
         @SuppressWarnings("unchecked") List<Map<String, Object>> routes =
                 (List<Map<String, Object>>) config.get("route_library");
         routes.add(encoded);
+        QuickSettingsConfig.pins(config).clear();
         QuickSettingsConfig.migrateNodePins(config);
         return config;
     }
@@ -90,6 +91,6 @@ class GraphEndpointGainMigrationTest {
     private static Map<String, Object> route(Map<String, Object> config) {
         @SuppressWarnings("unchecked") List<Map<String, Object>> routes =
                 (List<Map<String, Object>>) config.get("route_library");
-        return routes.getFirst();
+        return routes.stream().filter(item -> "desk-route".equals(item.get("id"))).findFirst().orElseThrow();
     }
 }

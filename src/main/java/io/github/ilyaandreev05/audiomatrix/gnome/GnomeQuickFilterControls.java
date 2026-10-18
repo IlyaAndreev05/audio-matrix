@@ -12,6 +12,7 @@ final class GnomeQuickFilterControls {
     private GnomeQuickFilterControls() {}
 
     static List<GnomeQuickControlParameter.Definition> definitions(FilterNode node) {
+        if (!supported(node.processor())) return List.of();
         List<GnomeQuickControlParameter.Definition> result = new ArrayList<>();
         result.add(definition("enabled", "Фильтр", "Filter"));
         switch (node.processor()) {
@@ -35,6 +36,7 @@ final class GnomeQuickFilterControls {
         Object value = read(parameters, parameter);
         if (value == null) return null;
         String processor = String.valueOf(parameters.getOrDefault("processor", ""));
+        if (!supported(processor)) return null;
         if ("enabled".equals(parameter)) return simple("toggle", value);
         if (("low_pass".equals(processor) || "high_pass".equals(processor))
                 && "frequency_hz".equals(parameter)) return range(value, 20, 20000, "log", "Hz", 0);
@@ -149,6 +151,10 @@ final class GnomeQuickFilterControls {
             case "high_shelf" -> "Полка ВЧ";
             default -> "Режекторный";
         };
+    }
+
+    private static boolean supported(String processor) {
+        return List.of("eq", "low_pass", "high_pass", "delay", "limiter").contains(processor);
     }
 
     private static Map<String, Object> simple(String kind, Object value) { return Map.of("kind", kind, "value", value); }

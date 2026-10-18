@@ -22,6 +22,12 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 class GnomeGraphOutputGainTest {
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> savedRoute(Map<String, Object> config, String routeId) {
+        return ((List<Map<String, Object>>) config.get("route_library")).stream()
+                .filter(item -> routeId.equals(item.get("id"))).findFirst().orElseThrow();
+    }
+
     @Test void outputMenuTargetChangesOnlyTheSavedGraphGain() {
         Map<String, Object> config = DefaultConfig.create();
         AudioNode sink = new AudioNode(12, "alsa_output.monitor", "Monitor HDMI", "Audio/Sink", "running",
@@ -40,9 +46,8 @@ class GnomeGraphOutputGainTest {
         assertNotNull(target);
 
         GnomeGraphOutputGain.set(config, target, .43, false);
-        @SuppressWarnings("unchecked") Map<String, Object> savedRoute =
-                ((List<Map<String, Object>>) config.get("route_library")).getFirst();
-        AudioGraph changed = GraphCodec.fromMap(savedRoute);
+        Map<String, Object> saved = savedRoute(config, graph.id());
+        AudioGraph changed = GraphCodec.fromMap(saved);
         var output = (io.github.ilyaandreev05.audiomatrix.graph.OutputNode) changed.nodes().stream()
                 .filter(OutputNode.class::isInstance).findFirst().orElseThrow();
         var gain = GnomeGraphOutputGain.forOutput(changed, output);
@@ -76,9 +81,8 @@ class GnomeGraphOutputGainTest {
         GnomeGraphOutputGain.set(config, greenTarget, .18, false);
         GnomeGraphOutputGain.set(config, blackTarget, null, true);
 
-        @SuppressWarnings("unchecked") Map<String, Object> savedRoute =
-                ((List<Map<String, Object>>) config.get("route_library")).getFirst();
-        AudioGraph changed = GraphCodec.fromMap(savedRoute);
+        Map<String, Object> saved = savedRoute(config, graph.id());
+        AudioGraph changed = GraphCodec.fromMap(saved);
         GainNode updatedGreen = (GainNode) changed.nodes().stream().filter(node -> node.id().equals("green-gain")).findFirst().orElseThrow();
         GainNode updatedBlack = (GainNode) changed.nodes().stream().filter(node -> node.id().equals("black-gain")).findFirst().orElseThrow();
         assertEquals(.18, updatedGreen.gain());

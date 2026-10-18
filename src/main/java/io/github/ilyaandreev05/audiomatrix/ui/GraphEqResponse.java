@@ -32,17 +32,17 @@ final class GraphEqResponse {
         Coefficients coefficients = switch (type) {
             case "notch" -> new Coefficients(1, -2 * cosine, 1,
                     1 + alpha, -2 * cosine, 1 - alpha);
-            case "low_shelf", "lowshelf" -> shelf(a, cosine, sine, Math.min(1.0, 1.0 / q), true);
-            case "high_shelf", "highshelf" -> shelf(a, cosine, sine, Math.min(1.0, 1.0 / q), false);
+            case "low_shelf", "lowshelf" -> shelf(a, cosine, alpha, true);
+            case "high_shelf", "highshelf" -> shelf(a, cosine, alpha, false);
             default -> new Coefficients(1 + alpha * a, -2 * cosine, 1 - alpha * a,
                     1 + alpha / a, -2 * cosine, 1 - alpha / a);
         };
         return coefficients.magnitudeDb(sampleOmega);
     }
 
-    private static Coefficients shelf(double a, double cosine, double sine, double slope, boolean low) {
-        double root = Math.sqrt((a + 1 / a) * (1 / slope - 1) + 2);
-        double alpha = sine / 2 * root, beta = 2 * Math.sqrt(a) * alpha;
+    // PipeWire spa/plugins/audioconvert/biquad.c uses Q, not RBJ shelf slope S.
+    private static Coefficients shelf(double a, double cosine, double alpha, boolean low) {
+        double beta = 2 * Math.sqrt(a) * alpha;
         if (low) return new Coefficients(a * ((a + 1) - (a - 1) * cosine + beta),
                 2 * a * ((a - 1) - (a + 1) * cosine), a * ((a + 1) - (a - 1) * cosine - beta),
                 (a + 1) + (a - 1) * cosine + beta, -2 * ((a - 1) + (a + 1) * cosine),

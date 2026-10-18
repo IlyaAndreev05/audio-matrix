@@ -39,6 +39,7 @@ abstract class PipeWireRouteState extends PipeWireRouteStaticSupport04 implement
     protected final Map<String, ManagedProcess> filterChainProcesses = new LinkedHashMap<>();
     protected final Map<String, List<Link>> originalStreamLinks = new LinkedHashMap<>();
     protected final Set<Link> ownedLinks = new LinkedHashSet<>();
+    protected final Set<Link> desiredLinks = new LinkedHashSet<>();
     protected final Set<Link> observedLinks = new HashSet<>();
     protected int skippedStreamCount;
     protected volatile boolean active;
@@ -50,6 +51,25 @@ abstract class PipeWireRouteState extends PipeWireRouteStaticSupport04 implement
     protected volatile ApplyReport lastReport = new ApplyReport(0, 0, 0, List.of());
     protected final List<String> transitionWarnings = new ArrayList<>();
     protected Path bundledLadspaDirectory;
+    protected int unavailableOutputs, conflictingOutputs, commandTimeouts;
+    protected volatile RouteDiagnostics diagnostics = new RouteDiagnostics(0, 0, 0, 0, 0, 0, false);
+
+    protected String run(List<String> command, Duration timeout) throws Exception {
+        try { return PipeWireCommandRunner.run(command, timeout); }
+        catch (IOException error) {
+            if (error.getMessage() != null && error.getMessage().startsWith("Command timed out:")) commandTimeouts++;
+            throw error;
+        }
+    }
+
+    protected void publishDiagnostics() {
+        int missing = 0, present = 0;
+        for (Link link : desiredLinks) {
+            if (observedLinks.contains(link)) present++; else missing++;
+        }
+        diagnostics = new RouteDiagnostics(desiredLinks.size(), present, missing,
+                unavailableOutputs, conflictingOutputs, commandTimeouts, active);
+    }
     protected CompletableFuture<Void> closeFuture;
 
 }

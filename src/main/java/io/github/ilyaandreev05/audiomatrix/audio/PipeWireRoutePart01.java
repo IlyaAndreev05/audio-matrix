@@ -42,10 +42,16 @@ abstract class PipeWireRoutePart01 extends PipeWireRouteContract {
         if (closed) return CompletableFuture.failedFuture(new IllegalStateException("Route manager is closed"));
         return CompletableFuture.supplyAsync(() -> {
             try {
-                if (reconnect) active = false;
+                // Reconnect uses observed links and process liveness, not an unconditional rebuild.
                 return applyNow(config, snapshot);
             }
-            catch (Exception e) { status = "Route apply failed: " + message(e); throw new CompletionException(e); }
+            catch (Exception e) {
+                status = "Route apply failed: " + message(e)
+                        + (transitionWarnings.isEmpty() ? "" : " · " + String.join("; ", transitionWarnings));
+                throw new CompletionException(e);
+            } finally {
+                publishDiagnostics();
+            }
         }, worker);
     }
 
@@ -54,6 +60,7 @@ abstract class PipeWireRoutePart01 extends PipeWireRouteContract {
         return CompletableFuture.runAsync(() -> {
             try { clearNow(true); }
             catch (Exception e) { throw new CompletionException(e); }
+            finally { publishDiagnostics(); }
         }, worker);
     }
 
@@ -62,6 +69,7 @@ abstract class PipeWireRoutePart01 extends PipeWireRouteContract {
     public String status() { return status; }
 
     public ApplyReport lastReport() { return lastReport; }
+    public RouteDiagnostics diagnostics() { return diagnostics; }
 
     public HeadroomEstimate estimateHeadroom(Map<String, Object> config, PipeWireBackend.Snapshot snapshot, AudioNode sink) throws IOException {
         if (snapshot == null || !snapshot.connected() || sink == null)
@@ -127,6 +135,7 @@ abstract class PipeWireRoutePart01 extends PipeWireRouteContract {
     }
 
     protected ApplyReport applyNow(Map<String, Object> config, PipeWireBackend.Snapshot snapshot) throws Exception {
+        commandTimeouts = 0;
         if (snapshot == null || !snapshot.connected()) {
             if (active || !busProcesses.isEmpty() || !routeProcesses.isEmpty() || !filterChainProcesses.isEmpty()) clearNow(false);
             originalStreamLinks.clear();
@@ -153,11 +162,12 @@ abstract class PipeWireRoutePart01 extends PipeWireRouteContract {
                 throw new IOException("Route '" + route.id() + "' requests positive gain; enable the limiter DSP before applying it");
         }
         String signature = signature(plan, snapshot);
-        if (active && signature.equals(appliedSignature) && processesAlive()) {
+        boolean observed = active && processesAlive() && observedGraphMatches();
+        if (observed && signature.equals(appliedSignature)) {
             activeTransitionMs = transitionMillis(config);
             return reportAppliedPlan(plan);
         }
-        if (active && appliedPlan != null && processesAlive() && sameRoutingTopology(appliedPlan, plan)) {
+        if (observed && appliedPlan != null && sameRoutingTopology(appliedPlan, plan)) {
             try {
                 updateLiveLevels(appliedPlan, plan);
                 activeTransitionMs = transitionMillis(config);

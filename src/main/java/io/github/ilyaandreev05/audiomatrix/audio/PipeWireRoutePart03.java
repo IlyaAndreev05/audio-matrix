@@ -38,7 +38,7 @@ abstract class PipeWireRoutePart03 extends PipeWireRoutePart02 {
         int filterCount = plan.routes().stream().mapToInt(route -> route.filters().size()).sum()
                 + plan.outputs().values().stream().mapToInt(output -> output.filters().size() + output.limiterFilters().size()).sum()
                 + plan.streams().stream().mapToInt(stream -> stream.filters().size()).sum();
-        status = "Applied " + plan.streams().size() + " streams through " + plan.buses().size()
+        status = "Applied " + lastReport.streams() + " streams through " + plan.buses().size()
                 + " buses and " + plan.routes().size() + " routes";
         if (filterCount > 0) status += " with " + filterCount + " PipeWire filters";
         if (!reportedWarnings.isEmpty()) status += " · " + String.join("; ", reportedWarnings);

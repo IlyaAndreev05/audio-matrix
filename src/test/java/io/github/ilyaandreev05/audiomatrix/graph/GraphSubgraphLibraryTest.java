@@ -89,6 +89,7 @@ class GraphSubgraphLibraryTest {
         return new GraphConnection(id, from, "out", to, "in", true, 1);
     }
     @SuppressWarnings("unchecked") private static Map<String,Object> route(Map<String,Object> config) {
-        return ((List<Map<String,Object>>) config.get("route_library")).getFirst();
+        return ((List<Map<String,Object>>) config.get("route_library")).stream()
+                .filter(item -> "route-subgraph".equals(item.get("id"))).findFirst().orElseThrow();
     }
 }

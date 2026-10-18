@@ -14,12 +14,12 @@ final class GraphNodeCopies {
                 : node.outputs().getFirst().channels();
         return switch (node.type()) {
             case "source" -> new SourceNode(id, node.name(), ((SourceNode) node).selector(), channels);
+            case "device_slot" -> new DeviceSlotNode(id, node.name(), ((DeviceSlotNode) node).deviceId(), channels);
             case "output" -> copyOutput(node, id, channels);
             case "gain" -> copyGain(node, id, channels, nodeIds);
             case "gate" -> copyGate(node, id, channels);
             case "router" -> copyRouter(node, id, channels);
             case "switch" -> new SwitchNode(id, node.name(), channels, outputIds(node), links(node));
-            case "multi_switch" -> new MultiSwitchNode(id, node.name(), channels, outputIds(node), links(node));
             case "selector" -> new SelectorNode(id, node.name(), channels, inputIds(node), links(node));
             case "multi_selector" -> new MultiSelectorNode(id, node.name(), channels, inputIds(node), links(node));
             case "matrix" -> new MatrixNode(id, node.name(), channels, inputIds(node), outputIds(node), links(node));

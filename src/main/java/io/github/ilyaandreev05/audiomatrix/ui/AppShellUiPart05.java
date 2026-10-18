@@ -91,7 +91,7 @@ abstract class AppShellUiPart05 extends AppShellUiPart04 {
     }
 
     protected void addGraphPortConnection(String routeId,GraphPortRef source,String targetNode,String targetPort){
-        updateRouteConfig(t("Соединить порты графа","Connect graph ports"),config->{Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->routeId.equals(item.get("id"))).findFirst().orElseThrow(()->new IllegalArgumentException("Route no longer exists"));AudioGraph old=GraphCodec.fromMap(route);boolean duplicate=old.connections().stream().anyMatch(edge->edge.fromNode().equals(source.nodeId())&&edge.fromPort().equals(source.portId())&&edge.toNode().equals(targetNode)&&edge.toPort().equals(targetPort));if(duplicate)return;List<GraphConnection> edges=new ArrayList<>(old.connections());edges.add(new GraphConnection("link-"+UUID.randomUUID(),source.nodeId(),source.portId(),targetNode,targetPort,true,1));AudioGraph candidate=new AudioGraph(old.id(),old.name(),old.nodes(),edges);List<String>problems=GraphValidator.validate(candidate);if(!problems.isEmpty())throw new IllegalArgumentException(String.join("; ",problems));GraphRouteLibrary.saveRoute(config,candidate,string(route.get("group_id"),""));});
+        updateRouteConfig(t("Соединить порты графа","Connect graph ports"),config->{Map<String,Object> route=GraphUiRoutes.route(config,routeId);AudioGraph old=GraphCodec.fromMap(route);boolean duplicate=old.connections().stream().anyMatch(edge->edge.fromNode().equals(source.nodeId())&&edge.fromPort().equals(source.portId())&&edge.toNode().equals(targetNode)&&edge.toPort().equals(targetPort));if(duplicate)return;List<GraphConnection> edges=new ArrayList<>(old.connections());edges.add(new GraphConnection("link-"+UUID.randomUUID(),source.nodeId(),source.portId(),targetNode,targetPort,true,1));AudioGraph candidate=new AudioGraph(old.id(),old.name(),old.nodes(),edges);List<String>problems=GraphValidator.validate(candidate);if(!problems.isEmpty())throw new IllegalArgumentException(String.join("; ",problems));GraphRouteLibrary.saveRoute(config,candidate,string(route.get("group_id"),""));});
     }
 
     protected void saveGraphNodePosition(String routeId,String nodeId,double x,double y){
@@ -121,7 +121,7 @@ abstract class AppShellUiPart05 extends AppShellUiPart04 {
     }
 
     protected void setDirectMatrixConnection(String routeId,SourceNode source,OutputNode output,boolean enabled){
-        Map<String,Object> config=store.snapshot();Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->routeId.equals(item.get("id"))).findFirst().orElse(null);if(route==null)return;
+        Map<String,Object> config=store.snapshot();Map<String,Object> route=GraphUiRoutes.route(config,routeId);
         AudioGraph old=GraphCodec.fromMap(route);
         try{saveGraph(routeId,GraphMatrixRouting.setDirect(old,source,output,enabled));}
         catch(IllegalArgumentException invalid){setNotice(invalid.getMessage(),true);showPage(Page.GRAPH);}

@@ -35,6 +35,24 @@ public class AudioMatrixApp extends Application {
             exportDefaultConfig(path); System.exit(0); return;
         }
         if (args.length > 0 && "--diagnose-pipewire".equals(args[0])) { diagnosePipeWire(); System.exit(0); return; }
+        if (args.length > 0 && "--install-octine-profiles".equals(args[0])) {
+            runSetup(() -> io.github.ilyaandreev05.audiomatrix.config.OctineSetupCli.installProfiles(args.length > 1 ? Path.of(args[1]) : ConfigStore.defaultPath())); return;
+        }
+        if (args.length > 0 && "--replace-with-octine-profiles".equals(args[0])) {
+            runSetup(() -> io.github.ilyaandreev05.audiomatrix.config.OctineSetupCli.replaceProfiles(args.length > 1 ? Path.of(args[1]) : ConfigStore.defaultPath())); return;
+        }
+        if (args.length > 2 && "--bind-device".equals(args[0])) {
+            runSetup(() -> io.github.ilyaandreev05.audiomatrix.config.OctineSetupCli.bindDevice(args.length > 3 ? Path.of(args[3]) : ConfigStore.defaultPath(), args[1], args[2])); return;
+        }
+        if (args.length > 3 && "--upgrade-device".equals(args[0])) {
+            runSetup(() -> io.github.ilyaandreev05.audiomatrix.config.OctineSetupCli.upgradeDevice(args.length > 4 ? Path.of(args[4]) : ConfigStore.defaultPath(), args[1], args[2], args[3])); return;
+        }
+        if (args.length > 2 && "--assign-slot".equals(args[0])) {
+            runSetup(() -> io.github.ilyaandreev05.audiomatrix.config.OctineSetupCli.assignSlot(args.length > 3 ? Path.of(args[3]) : ConfigStore.defaultPath(), args[1], args[2])); return;
+        }
+        if (args.length > 1 && "--activate-profile".equals(args[0])) {
+            runSetup(() -> io.github.ilyaandreev05.audiomatrix.config.OctineSetupCli.activateProfile(args.length > 2 ? Path.of(args[2]) : ConfigStore.defaultPath(), args[1])); return;
+        }
         if (args.length > 0 && "--quit".equals(args[0])) {
             try { InstanceControlServer.requestQuitAndWait(Duration.ofSeconds(20)); }
             catch (Exception e) { System.err.println("Could not stop Audio Matrix cleanly: " + e.getMessage()); System.exit(1); }
@@ -96,6 +114,11 @@ public class AudioMatrixApp extends Application {
         } catch (Exception e) { System.err.println("Could not write default configuration: " + e.getMessage()); System.exit(1); }
     }
 
+    private static void runSetup(SetupCommand command) {
+        try { System.exit(command.run()); }
+        catch (Exception error) { System.err.println("Octine setup failed: " + error.getMessage()); System.exit(1); }
+    }
+    @FunctionalInterface interface SetupCommand { int run() throws Exception; }
     private static com.fasterxml.jackson.databind.ObjectMapper mapperFor(Path path) {
         return path.getFileName().toString().endsWith(".yaml") || path.getFileName().toString().endsWith(".yml")
                 ? new com.fasterxml.jackson.databind.ObjectMapper(new com.fasterxml.jackson.dataformat.yaml.YAMLFactory())

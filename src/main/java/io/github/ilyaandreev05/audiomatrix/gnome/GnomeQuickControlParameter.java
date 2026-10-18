@@ -39,7 +39,7 @@ public final class GnomeQuickControlParameter {
         if ("gain".equals(nodeType) && "gain".equals(parameter)) return simple("slider", value);
         if ("gain".equals(nodeType) && "muted".equals(parameter)
                 || "gate".equals(nodeType) && "open".equals(parameter)) return simple("toggle", value);
-        if (List.of("switch", "multi_switch", "selector", "multi_selector", "matrix")
+        if (List.of("switch", "selector", "multi_selector", "matrix")
                 .contains(nodeType) && "active_links".equals(parameter)) return simple("links", value);
         return null;
     }

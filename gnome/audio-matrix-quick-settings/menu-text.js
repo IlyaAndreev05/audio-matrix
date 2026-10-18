@@ -10,6 +10,12 @@ export const TEXT = {
         controls: 'ЗАКРЕПЛЁННЫЕ НАСТРОЙКИ', enabled: 'Включено', disabled: 'Выключено',
         matrix: 'Матрица', arrows: 'Стрелки', input: 'Вход ↓', activeLinks: 'Активные связи', changeLink: 'Связи',
         percent: 'Уровень громкости', commandError: 'Команда не выполнена',
+        pinned: 'Закреплено', reorder: 'Перетащить группу', moveUp: 'Переместить группу выше', moveDown: 'Переместить группу ниже',
+        onOff: 'Вкл. / Выкл.', bass: 'Басы', events: 'События',
+        deviceStates: {
+            ONLINE: 'Подключено', UNBOUND: 'Не привязано', OFFLINE: 'Недоступно',
+            AMBIGUOUS: 'Неоднозначная привязка', CONFLICT: 'Конфликт устройства', IGNORED: 'Игнорируется',
+        },
     },
     en: {
         title: 'Audio Matrix', connecting: 'Connecting to engine…', unavailable: 'Audio Matrix engine unavailable',
@@ -20,6 +26,12 @@ export const TEXT = {
         controls: 'PINNED CONTROLS', enabled: 'Enabled', disabled: 'Disabled',
         matrix: 'Matrix', arrows: 'Arrows', input: 'Input ↓', activeLinks: 'Active connections', changeLink: 'Connections',
         percent: 'Volume level', commandError: 'Command failed',
+        pinned: 'Pinned', reorder: 'Drag group to reorder', moveUp: 'Move group up', moveDown: 'Move group down',
+        onOff: 'On / Off', bass: 'Bass', events: 'Events',
+        deviceStates: {
+            ONLINE: 'Connected', UNBOUND: 'Not bound', OFFLINE: 'Offline',
+            AMBIGUOUS: 'Ambiguous binding', CONFLICT: 'Device conflict', IGNORED: 'Ignored',
+        },
     },
 };
 

@@ -23,6 +23,10 @@ public final class GraphRouteLibrary {
     }
 
     public static String saveRoute(Map<String,Object> config,AudioGraph graph,String groupId,String profileId) {
+        if (GraphCommonVibro.COMMON_ROUTE_ID.equals(graph.id())) {
+            GraphCommonVibro.save(config, graph);
+            return graph.id();
+        }
         AudioGraph originalGraph = graph;
         Map<String, Object> previous = find(maps(config.get("route_library")), graph.id());
         Set<String> oldNodeIds = previous == null ? Set.of() : nodeIds(previous);

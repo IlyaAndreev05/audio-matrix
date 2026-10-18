@@ -31,13 +31,22 @@ public final class DeviceSelectorMatcher {
     /** Supports legacy profile values containing a PipeWire name or selector value as well as stable device IDs. */
     public static AudioNode resolve(List<AudioNode> nodes, String reference, List<Map<String, Object>> devices) {
         if (reference == null || reference.isBlank() || "system_default".equals(reference)) return null;
+        List<Map<String, Object>> configured = devices.stream().filter(device -> reference.equals(device.get("id"))).toList();
+        if (!configured.isEmpty()) {
+            if (configured.size() != 1) return null;
+            Map<String, Object> device = configured.getFirst();
+            AudioNode node = DeviceDiscovery.resolve(nodes, device).node();
+            return node != null && DeviceDiscovery.conflict(nodes, devices, device, node).isEmpty() ? node : null;
+        }
+        // Legacy raw names remain explicit references; never use a default sink or first fuzzy match.
         List<AudioNode> direct = nodes.stream().filter(node -> node.name().equals(reference)).toList();
         if (!direct.isEmpty()) return direct.size() == 1 ? direct.getFirst() : null;
         java.util.LinkedHashSet<AudioNode> resolved = new java.util.LinkedHashSet<>();
         for (Map<String, Object> device : devices) {
             Map<String, Object> selector = object(device.get("selector"));
-            if (reference.equals(device.get("id")) || reference.equals(selector.get("value"))) {
-                resolved.addAll(findAll(nodes, selector));
+            if (reference.equals(selector.get("value"))) {
+                AudioNode node = DeviceDiscovery.resolve(nodes, device).node();
+                if (node != null && DeviceDiscovery.conflict(nodes, devices, device, node).isEmpty()) resolved.add(node);
             }
         }
         return resolved.size() == 1 ? resolved.iterator().next() : null;

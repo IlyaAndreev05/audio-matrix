@@ -45,30 +45,29 @@ export class MenuItemsLease {
 export class MenuButtonLease {
     constructor(output) {
         this.output = output;
-        this.originalSync = output?._sync;
-        this.wrappedSync = null;
-        if (typeof this.originalSync !== 'function')
-            return;
-        const original = this.originalSync;
-        this.wrappedSync = function (...args) {
-            original.apply(this, args);
-            this.menuEnabled = true;
-        };
-        output._sync = this.wrappedSync;
-        output.menuEnabled = true;
+        this.originalMenuEnabled = output?.menuEnabled;
+        this.signalId = output?.connect('notify::menu-enabled', () => {
+            if (!output.menuEnabled)
+                output.menuEnabled = true;
+        });
+        if (output)
+            output.menuEnabled = true;
     }
 
     isCurrent() {
-        return Boolean(this.output && this.wrappedSync && this.output._sync === this.wrappedSync);
+        return Boolean(this.output && this.signalId);
     }
 
     restore() {
-        if (!this.output || !this.wrappedSync)
+        if (!this.output)
             return;
-        if (this.output._sync === this.wrappedSync)
-            this.output._sync = this.originalSync;
         try {
-            this.originalSync.call(this.output);
+            this.output.disconnect(this.signalId);
+            // Re-evaluate current devices rather than restoring a stale count.
+            if (typeof this.output._sync === 'function')
+                this.output._sync();
+            else
+                this.output.menuEnabled = this.originalMenuEnabled;
         } catch (_error) {
             // GNOME may already be tearing down the volume indicator.
         }

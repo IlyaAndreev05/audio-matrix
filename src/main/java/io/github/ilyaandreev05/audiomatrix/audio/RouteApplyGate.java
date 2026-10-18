@@ -3,7 +3,6 @@ package io.github.ilyaandreev05.audiomatrix.audio;
 /** Coalesces route updates and prevents an unchanged failed graph from retrying on every PipeWire event. */
 public final class RouteApplyGate {
     private boolean inFlight;
-    private boolean pending;
     private boolean pendingForce;
     private String applyingSignature = "";
     private String lastSignature = "";
@@ -17,7 +16,6 @@ public final class RouteApplyGate {
         if (inFlight) {
             if (!force && requested.equals(applyingSignature) && connectionGeneration == applyingGeneration)
                 return false;
-            pending = true;
             pendingForce |= force;
             return false;
         }
@@ -52,15 +50,13 @@ public final class RouteApplyGate {
         inFlight = false;
         applyingSignature = "";
         applyingGeneration = -1;
-        Completion completion = new Completion(pending || inputsChangedDuringApply, pendingForce);
-        pending = false;
+        Completion completion = new Completion(pendingForce || inputsChangedDuringApply, pendingForce);
         pendingForce = false;
         return completion;
     }
 
     public synchronized void reset() {
         inFlight = false;
-        pending = false;
         pendingForce = false;
         applyingSignature = "";
         lastSignature = "";

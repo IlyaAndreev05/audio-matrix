@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.BiConsumer;
 
+import java.util.function.IntConsumer;
 /** Interactive logarithmic EQ response plot with draggable frequency and gain points. */
 final class GraphEqCanvas extends Canvas {
     private static final double LEFT = 42, RIGHT = 12, TOP = 12, BOTTOM = 28;
@@ -15,21 +16,26 @@ final class GraphEqCanvas extends Canvas {
     private List<Map<String, Object>> bands = List.of();
     private int selected = -1;
     private BiConsumer<Integer, double[]> onMove = (index, values) -> {};
+    private IntConsumer onSelect = index -> {};
+    private boolean dragging;
 
     GraphEqCanvas() {
         super(600, 230);
         setAccessibleText("Parametric EQ response, frequency 20 Hz to 20 kHz; drag points to change frequency and gain");
         setOnMousePressed(event -> select(event.getX(), event.getY()));
         setOnMouseDragged(event -> move(event.getX(), event.getY()));
+        setOnMouseReleased(event -> dragging = false);
         widthProperty().addListener((observable, oldValue, value) -> draw());
         heightProperty().addListener((observable, oldValue, value) -> draw());
         draw();
     }
 
-    void setBands(List<Map<String, Object>> value, int selectedIndex, BiConsumer<Integer, double[]> callback) {
+    void setBands(List<Map<String, Object>> value, int selectedIndex, BiConsumer<Integer, double[]> callback,
+                  IntConsumer selectionCallback) {
         bands = List.copyOf(value);
         selected = selectedIndex;
         onMove = callback == null ? (index, point) -> {} : callback;
+        onSelect = selectionCallback;
         draw();
     }
 
@@ -42,11 +48,12 @@ final class GraphEqCanvas extends Canvas {
             double current = Math.hypot(dx, dy);
             if (current < distance) { nearest = i; distance = current; }
         }
-        if (nearest >= 0) { selected = nearest; draw(); }
+        dragging = nearest >= 0;
+        if (dragging) { selected = nearest; onSelect.accept(nearest); draw(); }
     }
 
     private void move(double px, double py) {
-        if (selected < 0 || selected >= bands.size()) return;
+        if (!dragging || selected < 0 || selected >= bands.size()) return;
         double width = Math.max(1, getWidth() - LEFT - RIGHT);
         double height = Math.max(1, getHeight() - TOP - BOTTOM);
         double fraction = clamp((px - LEFT) / width, 0, 1);

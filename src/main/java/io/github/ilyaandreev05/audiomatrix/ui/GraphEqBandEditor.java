@@ -3,6 +3,7 @@ package io.github.ilyaandreev05.audiomatrix.ui;
 import javafx.collections.FXCollections;
 import javafx.geometry.Pos;
 import javafx.scene.control.Button;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListView;
@@ -16,7 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.BiFunction;
 
-/** Editable parametric EQ bands and their measured-coefficient response plot. */
+/** Editable parametric EQ bands with a calculated, explicitly rate-labelled DSP response. */
 final class GraphEqBandEditor {
     private final List<Map<String, Object>> bands = new ArrayList<>();
     private final ListView<String> list = new ListView<>();
@@ -24,13 +25,16 @@ final class GraphEqBandEditor {
     private final TextField frequency = new TextField();
     private final TextField gain = new TextField();
     private final TextField q = new TextField();
+    private final CheckBox enabled = new CheckBox("Enabled");
     private final GraphEqCanvas canvas = new GraphEqCanvas();
     private final VBox view = new VBox(8);
     private final BiFunction<String, String, String> t;
     private boolean loading;
+    private Runnable onChange = () -> {};
 
     GraphEqBandEditor(Object rawBands, BiFunction<String, String, String> translate) {
         t = translate;
+        enabled.setText(t.apply("Полоса включена", "Band enabled"));
         bands.addAll(decode(rawBands));
         type.getItems().setAll("peaking", "low_shelf", "high_shelf", "notch");
         frequency.setPromptText("100"); gain.setPromptText("0"); q.setPromptText("1.0");
@@ -40,29 +44,32 @@ final class GraphEqBandEditor {
         frequency.textProperty().addListener((observable, oldValue, value) -> editCurrent());
         gain.textProperty().addListener((observable, oldValue, value) -> editCurrent());
         q.textProperty().addListener((observable, oldValue, value) -> editCurrent());
+        enabled.selectedProperty().addListener((observable, oldValue, value) -> editCurrent());
         Button add = new Button(t.apply("Добавить полосу", "Add band"));
         Button remove = new Button(t.apply("Удалить выбранную", "Remove selected"));
         add.setOnAction(event -> addBand());
         remove.setOnAction(event -> removeBand());
-        canvas.setBands(bands, -1, this::movePoint);
+        canvas.setBands(bands, -1, this::movePoint, index -> list.getSelectionModel().select(index));
         VBox fields = new VBox(6, field(t.apply("Тип", "Type"), type), field(t.apply("Частота, Hz", "Frequency, Hz"), frequency),
-                field(t.apply("Усиление, dB", "Gain, dB"), gain), field("Q", q));
+                field(t.apply("Усиление, dB", "Gain, dB"), gain), field("Q", q), enabled);
         HBox editors = new HBox(10, list, fields); editors.setAlignment(Pos.CENTER_LEFT);
         HBox actions = new HBox(8, add, remove); actions.setAlignment(Pos.CENTER_LEFT);
-        view.getChildren().addAll(new Label(t.apply("Кривая рассчитана по biquad-коэффициентам; перетаскивай точки для изменения частоты и усиления.",
-                "Curve uses biquad coefficients; drag points to change frequency and gain.")), canvas, actions, editors);
+        view.getChildren().addAll(new Label(t.apply("Расчёт DSP при 48 кГц (не измерение); перетаскивай точки. Notch не использует Gain.",
+                "DSP model at 48 kHz (not a measurement); drag points. Notch ignores Gain.")), canvas, actions, editors);
         refreshList();
-        if (!bands.isEmpty()) list.getSelectionModel().select(0);
+        if (!bands.isEmpty()) list.getSelectionModel().select(0); else load(-1);
     }
 
     VBox view() { return view; }
+    void setOnChange(Runnable listener) { onChange = listener; }
     List<Map<String, Object>> bands() { return bands.stream().map(Map::copyOf).toList(); }
 
     boolean valid() {
         for (Map<String, Object> band : bands) {
             double hz = number(band.get("frequency_hz")), db = number(band.get("gain_db")), quality = number(band.get("q"));
             if (!Double.isFinite(hz) || !Double.isFinite(db) || !Double.isFinite(quality)
-                    || hz < 20 || hz > 20000 || db < -24 || db > 24 || quality <= 0 || quality > 20) return false;
+                    || hz < 20 || hz > 20000 || db < -24 || db > 24 || quality <= 0 || quality > 20
+                    || !type.getItems().contains(String.valueOf(band.get("type")))) return false;
         }
         if (list.getSelectionModel().getSelectedIndex() < 0) return true;
         try {
@@ -75,7 +82,7 @@ final class GraphEqBandEditor {
     private void addBand() {
         if (bands.size() >= 20) return;
         bands.add(band("peaking", bands.isEmpty() ? 100.0 : Math.min(20000, 100.0 * Math.pow(2, bands.size())), 0.0, 1.0));
-        refreshList(); list.getSelectionModel().select(bands.size() - 1); draw();
+        refreshList(); list.getSelectionModel().select(bands.size() - 1); draw(); onChange.run();
     }
 
     private void removeBand() {
@@ -83,49 +90,63 @@ final class GraphEqBandEditor {
         if (index < 0 || index >= bands.size()) return;
         bands.remove(index); refreshList();
         if (!bands.isEmpty()) list.getSelectionModel().select(Math.min(index, bands.size() - 1));
-        draw();
+        load(list.getSelectionModel().getSelectedIndex());
+        draw(); onChange.run();
     }
 
     private void load(int index) {
-        if (index < 0 || index >= bands.size()) return;
+        if (loading) return;
+        boolean absent = index < 0 || index >= bands.size();
+        type.setDisable(absent); frequency.setDisable(absent); gain.setDisable(absent); q.setDisable(absent); enabled.setDisable(absent);
+        if (absent) { draw(); return; }
         Map<String, Object> band = bands.get(index);
         loading = true;
         type.setValue(String.valueOf(band.getOrDefault("type", "peaking")));
         frequency.setText(String.valueOf(band.get("frequency_hz")));
         gain.setText(String.valueOf(band.get("gain_db")));
         q.setText(String.valueOf(band.get("q")));
-        loading = false; draw();
+        enabled.setSelected(!Boolean.FALSE.equals(band.get("enabled")));
+        gain.setDisable("notch".equals(type.getValue()));
+        loading = false; draw(); onChange.run();
     }
 
     private void editCurrent() {
         if (loading) return;
         int index = list.getSelectionModel().getSelectedIndex();
         if (index < 0 || index >= bands.size()) return;
+        gain.setDisable("notch".equals(type.getValue()));
         try {
             Map<String, Object> edited = band(type.getValue(), Double.parseDouble(frequency.getText()),
                     Double.parseDouble(gain.getText()), Double.parseDouble(q.getText()));
+            if (!enabled.isSelected()) edited.put("enabled", false);
             bands.set(index, edited); refreshList(index); draw();
         } catch (RuntimeException ignored) {
             // Invalid in-progress text stays visible and disables Save until corrected.
         }
+        onChange.run();
     }
 
     private void movePoint(int index, double[] point) {
         if (index < 0 || index >= bands.size()) return;
+        list.getSelectionModel().select(index);
         Map<String, Object> old = bands.get(index);
         bands.set(index, band(String.valueOf(old.get("type")), point[0], point[1], number(old.get("q"))));
+        if (Boolean.FALSE.equals(old.get("enabled"))) bands.get(index).put("enabled", false);
         loading = true; frequency.setText(String.format(java.util.Locale.ROOT, "%.1f", point[0]));
         gain.setText(String.format(java.util.Locale.ROOT, "%.1f", point[1])); loading = false;
-        refreshList(index); draw();
+        refreshList(index); draw(); onChange.run();
     }
 
-    private void draw() { canvas.setBands(bands, list.getSelectionModel().getSelectedIndex(), this::movePoint); }
+    private void draw() { canvas.setBands(bands, list.getSelectionModel().getSelectedIndex(), this::movePoint,
+            index -> list.getSelectionModel().select(index)); }
 
     private void refreshList() { refreshList(list.getSelectionModel().getSelectedIndex()); }
 
     private void refreshList(int selected) {
+        boolean wasLoading = loading; loading = true;
         list.setItems(FXCollections.observableArrayList(bands.stream().map(this::label).toList()));
         if (selected >= 0 && selected < bands.size()) list.getSelectionModel().select(selected);
+        loading = wasLoading;
     }
 
     private String label(Map<String, Object> band) {
@@ -135,6 +156,9 @@ final class GraphEqBandEditor {
 
     private static VBox field(String name, javafx.scene.Node control) { return new VBox(3, new Label(name), control); }
     private static Map<String, Object> band(String type, double hz, double db, double quality) {
+        if (!Double.isFinite(hz) || !Double.isFinite(db) || !Double.isFinite(quality)
+                || hz < 20 || hz > 20000 || db < -24 || db > 24 || quality <= 0 || quality > 20)
+            throw new IllegalArgumentException("Invalid EQ band");
         String normalized = type == null ? "peaking" : type;
         if (normalized.equalsIgnoreCase("bell") || normalized.equalsIgnoreCase("peak")) normalized = "peaking";
         return new LinkedHashMap<>(Map.of("type", normalized, "frequency_hz", hz, "gain_db", db, "q", quality));

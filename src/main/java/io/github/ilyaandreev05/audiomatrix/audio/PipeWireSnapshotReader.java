@@ -42,7 +42,7 @@ final class PipeWireSnapshotReader {
             String mediaClass = props.path("media.class").asText("");
             String name = props.path("node.name").asText("");
             if (!isSnapshotAudioNode(mediaClass, name)) continue;
-            AudioNode node = audioNode(object, info, props, mediaClass, name, clients, levels);
+            AudioNode node = audioNode(object, info, props, mediaClass, name, clients, levels, root);
             if (EventInputMonitor.isSink(mediaClass, name)) sources.add(EventInputMonitor.sourceView(node));
             else addNode(node, mediaClass, sinks, sources, streams);
         }
@@ -50,7 +50,7 @@ final class PipeWireSnapshotReader {
 
     private static AudioNode audioNode(JsonNode object, JsonNode info, JsonNode props, String mediaClass,
                                        String name, Map<Integer, JsonNode> clients,
-                                       Map<Integer, PipeWireBackend.LevelState> levels) {
+                                       Map<Integer, PipeWireBackend.LevelState> levels, JsonNode root) {
         int id = object.path("id").asInt(-1);
         String description = props.path("node.description").asText(name);
         String state = info.path("state").asText("unknown").toLowerCase();
@@ -63,8 +63,10 @@ final class PipeWireSnapshotReader {
         double volume = level == null ? Double.NaN : level.volume();
         boolean muted = level != null ? level.muted() : stateProps.path("mute").asBoolean(false);
         return new AudioNode(id, name, description, mediaClass, state, app.applicationName(),
-                app.processName(), app.applicationId(), channels, rates, volume, muted, pulseId);
+                app.processName(), app.applicationId(), channels, rates, volume, muted, pulseId,
+                DeviceIdentity.from(DeviceProperties.read(root, props), channels));
     }
+
 
     private static void addNode(AudioNode node, String mediaClass, List<AudioNode> sinks,
                                 List<AudioNode> sources, List<AudioNode> streams) {

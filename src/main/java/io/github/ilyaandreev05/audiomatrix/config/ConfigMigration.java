@@ -127,10 +127,16 @@ final class ConfigMigration {
             config.put("schema_version", 5);
             schema = 5;
         }
-        if (schema < DefaultConfig.SCHEMA_VERSION) {
+        if (schema < 7) {
             config.putIfAbsent("graph_ui_matrix_views", new LinkedHashMap<>());
             GraphEndpointGainMigration.migrate(config);
-            config.put("schema_version", DefaultConfig.SCHEMA_VERSION);
+            schema = 7;
+        }
+        if (schema < 8) {
+            GraphSwitchMigration.upgrade(config);
+            // Presets are explicit opt-in on upgrades: existing routes and active selections survive.
+            config.putIfAbsent("octine_profiles_available", false);
+            config.put("schema_version", 8);
         }
     }
 
