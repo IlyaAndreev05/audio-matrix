@@ -24,6 +24,7 @@ function structureSignature(snapshot) {
                 (application.streams || []).map(stream => [stream.id, stream.name, stream.description])]),
             (pin.mixerInputs || []).map(input => [input.id, input.name]),
             pin.output ? [pin.output.id, pin.output.name, pin.output.description, pin.output.available] : null,
+            pin.sourceGain ? [pin.sourceGain.routeId, pin.sourceGain.sourceNodeId, pin.sourceGain.gainNodeId] : null,
         ]),
         controls: (state.quickControls || []).map(control => [
             control.id, control.nodeId, control.parameterId, control.label, control.section,
@@ -61,6 +62,9 @@ function updateMenuControls(rows, toggles, linkRows, matrixRows, linkRenderer, m
     }
     for (const output of state.outputs || [])
         updateLevelRow(rows, menuRows, `output:${output.id || output.name}`, output, t);
+    for (const pin of state.quickPins || [])
+        if (pin.sourceGain)
+            updateLevelRow(rows, menuRows, `source:${pin.nodeId}`, pin.sourceGain, t);
     for (const pin of state.quickPins || [])
         for (const input of pin.mixerInputs || [])
             updateLevelRow(rows, menuRows, `mixer:${pin.nodeId}:${input.id}`, input, t);
@@ -227,7 +231,7 @@ export default class AudioMatrixMenuRenderer {
         if (open) header.add_accessible_state(Atk.StateType.EXPANDED);
         const content = new PopupMenu.PopupMenuSection();
         if (pin.nodeType === 'source')
-            this._applications.render(pin.applications || [], t, content);
+            this._applications.render(pin, pin.applications || [], t, content);
         if (pin.nodeType === 'mixer')
             this._mixer.render(pin.routeId, pin.nodeId, pin.mixerInputs || [], t, content);
         if (pin.nodeType === 'output')

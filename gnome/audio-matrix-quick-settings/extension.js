@@ -23,11 +23,9 @@ export default class AudioMatrixQuickSettingsExtension extends Extension {
         this._adapter = new AudioMatrixVolumeMenuAdapter(this._dynamic);
         this._client.start();
         this._retryId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 1, () => {
-            if (!this._adapter.attach())
-                return GLib.SOURCE_CONTINUE;
-            this._retryId = 0;
-            this._renderer.render(this._client.snapshot());
-            return GLib.SOURCE_REMOVE;
+            if (this._adapter.attach())
+                this._renderer.render(this._client.snapshot());
+            return GLib.SOURCE_CONTINUE;
         });
     }
 

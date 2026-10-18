@@ -37,10 +37,14 @@ final class GnomeQuickSettingsPins {
             String nodeId = String.valueOf(pin.getOrDefault("node_id", ""));
             GraphNode node = graph.nodes().stream().filter(item -> nodeId.equals(item.id())).findFirst().orElse(null);
             if (node == null) continue;
+            if (isEndpointGain(graph, node)) continue;
             Map<String, Object> state = pinState(pin, node);
             state.put("controls", controlsFor(pin, quickControls));
-            if (node instanceof SourceNode source)
+            if (node instanceof SourceNode source) {
                 state.put("applications", applicationsFor(source, applications, graph));
+                GainNode sourceGain = GnomeGraphSourceGain.forSource(graph, source.id());
+                if (sourceGain != null) state.put("sourceGain", sourceGainState(routeId, source, sourceGain));
+            }
             if (node instanceof OutputNode output)
                 state.put("output", outputFor(output, graph, snapshot, config, outputs));
             if (node instanceof MixerNode mixer)
@@ -49,6 +53,17 @@ final class GnomeQuickSettingsPins {
         }
         result.sort(java.util.Comparator.comparingInt(item -> number(item.get("order"), 0)));
         return List.copyOf(result);
+    }
+
+    private static Map<String, Object> sourceGainState(String routeId, SourceNode source, GainNode gain) {
+        return Map.of("routeId", routeId, "sourceNodeId", source.id(), "gainNodeId", gain.id(),
+                "volume", gain.gain(), "muted", gain.muted());
+    }
+
+    private static boolean isEndpointGain(AudioGraph graph, GraphNode node) {
+        if (!(node instanceof GainNode gain) || gain.endpointNodeId().isBlank()) return false;
+        return graph.nodes().stream().anyMatch(endpoint -> endpoint.id().equals(gain.endpointNodeId())
+                && (endpoint instanceof SourceNode || endpoint instanceof OutputNode));
     }
 
     private static Map<String, Object> pinState(Map<String, Object> pin, GraphNode node) {

@@ -7,20 +7,40 @@ export default class AudioMatrixMenuApplications {
         this._send = send;
     }
 
-    render(applications, t, target) {
+    render(pin, applications, t, target) {
+        const sourceGain = pin.sourceGain;
+        if (sourceGain) {
+            this._addLevelRow({
+                id: `source:${pin.nodeId}`, name: pin.name,
+                icon: applications.length ? this._rows.applicationIcon(applications[0]) : 'application-x-executable-symbolic',
+                value: sourceGain.volume, muted: sourceGain.muted,
+                mutedLabel: sourceGain.muted ? t.unmute : t.mute,
+                onValue: value => this._send('set_source_volume', [sourceGain.routeId, sourceGain.sourceNodeId,
+                    sourceGain.gainNodeId, value.toFixed(3)].join('\t')),
+                onMute: () => this._send('toggle_source_mute', [sourceGain.routeId, sourceGain.sourceNodeId,
+                    sourceGain.gainNodeId].join('\t')),
+            }, target);
+        }
         if (applications.length === 0) {
             target.addMenuItem(new PopupMenu.PopupMenuItem(t.noApplications, {reactive: false, can_focus: false}));
             return;
         }
         for (const application of applications) {
-            this._addLevelRow({
-                id: `app:${application.id}`, name: application.name || application.id,
-                icon: this._rows.applicationIcon(application), value: application.volume,
-                muted: application.muted, mutedLabel: application.muted ? t.unmute : t.mute,
-                onValue: value => this._send('set_app_volume', application.id + '\t' + value.toFixed(3)),
-                onMute: () => this._send('toggle_app_mute', application.id),
-            }, target);
-            this._renderStreams(application, t, target);
+            if (sourceGain) {
+                const submenu = new PopupMenu.PopupSubMenuMenuItem(
+                    `${application.name || application.id} (${(application.streams || []).length})`, false);
+                this._renderStreams(application, t, submenu.menu);
+                target.addMenuItem(submenu);
+            } else {
+                this._addLevelRow({
+                    id: `app:${application.id}`, name: application.name || application.id,
+                    icon: this._rows.applicationIcon(application), value: application.volume,
+                    muted: application.muted, mutedLabel: application.muted ? t.unmute : t.mute,
+                    onValue: value => this._send('set_app_volume', application.id + '\t' + value.toFixed(3)),
+                    onMute: () => this._send('toggle_app_mute', application.id),
+                }, target);
+                this._renderStreams(application, t, target);
+            }
         }
     }
 

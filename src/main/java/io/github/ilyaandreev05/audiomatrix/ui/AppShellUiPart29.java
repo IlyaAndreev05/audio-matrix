@@ -27,6 +27,8 @@ abstract class AppShellUiPart29 extends AppShellUiPart28 {
             case "toggle_mute" -> { AudioNode node=activeOutputNode(); if(node==null)yield CompletableFuture.failedFuture(new IllegalStateException("No active physical output")); boolean muted=!node.muted(); yield backend.setMute(node.id(),muted).thenCompose(ignored->store.updateAsync(config->{Map<String,Object> device=ensureDevice(config,node);device.put("mute",muted);})).thenRun(this::refreshBackend); }
             case "set_output_volume" -> setGnomeOutputLevel(command.value(),false);
             case "toggle_output_mute" -> setGnomeOutputLevel(command.value(),true);
+            case "set_source_volume" -> setGnomeSourceLevel(command.value(),false);
+            case "toggle_source_mute" -> setGnomeSourceLevel(command.value(),true);
             case "set_app_volume" -> setGnomeApplicationLevel(command.value(),false);
             case "toggle_app_mute" -> setGnomeApplicationLevel(command.value(),true);
             case "set_stream_volume" -> setGnomeStreamLevel(command.value(),false);
@@ -108,6 +110,23 @@ abstract class AppShellUiPart29 extends AppShellUiPart28 {
             device.put("volume", target);
             device.put("mute", false);
         })).thenRun(this::refreshBackend);
+    }
+
+    protected CompletableFuture<Void> setGnomeSourceLevel(String value, boolean toggleMute) {
+        String[] fields = value.split("\\t", 4);
+        if (fields.length < 3 || fields[0].isBlank() || fields[1].isBlank() || fields[2].isBlank())
+            return CompletableFuture.failedFuture(new IllegalArgumentException("Source Gain reference is malformed"));
+        Double level = null;
+        if (!toggleMute) {
+            if (fields.length < 4) return CompletableFuture.failedFuture(new IllegalArgumentException("Source volume is missing"));
+            try { level = Double.parseDouble(fields[3]); }
+            catch (NumberFormatException invalid) { return CompletableFuture.failedFuture(new IllegalArgumentException("Source volume is invalid")); }
+            if (!Double.isFinite(level)) return CompletableFuture.failedFuture(new IllegalArgumentException("Source volume is invalid"));
+        }
+        Double target = level;
+        GnomeGraphSourceGain.Target source = new GnomeGraphSourceGain.Target(fields[0], fields[1], fields[2]);
+        return updateRouteConfigCommand(t("Изменить громкость источника графа", "Change graph source level"),
+                config -> GnomeGraphSourceGain.set(config, source, target, toggleMute));
     }
 
     protected CompletableFuture<Void> setGnomeApplicationLevel(String value, boolean toggleMute) {

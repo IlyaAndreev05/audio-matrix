@@ -1,12 +1,13 @@
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import {MenuButtonLease, MenuItemsLease} from './menu-lease.js';
 
 export default class AudioMatrixVolumeMenuAdapter {
     constructor(section) {
         this._section = section;
         this._menu = null;
         this._output = null;
-        this._originalSync = null;
-        this._hiddenItems = [];
+        this._menuButtonLease = null;
+        this._menuItemsLease = new MenuItemsLease();
     }
 
     attach() {
@@ -14,46 +15,25 @@ export default class AudioMatrixVolumeMenuAdapter {
         const menu = output?.menu;
         if (!menu || !menu.addMenuItem)
             return false;
-        if (this._menu === menu)
+        if (this._menu === menu) {
+            if (output !== this._output || !this._menuButtonLease?.isCurrent()) {
+                this._menuButtonLease?.restore();
+                this._output = output;
+                this._menuButtonLease = new MenuButtonLease(output);
+            }
+            this._menuItemsLease.hide(menu, this._section);
+            const items = menu._getMenuItems?.() || menu._items || [];
+            if (!items.includes(this._section))
+                menu.addMenuItem(this._section);
             return true;
+        }
         this.detach();
         this._output = output;
-        this._forceMenuButtonEnabled(output);
+        this._menuButtonLease = new MenuButtonLease(output);
         this._menu = menu;
-        this._hideBuiltInItems(menu);
+        this._menuItemsLease.hide(menu, this._section);
         this._menu.addMenuItem(this._section);
         return true;
-    }
-
-    _forceMenuButtonEnabled(output) {
-        const originalSync = output._sync;
-        if (typeof originalSync !== 'function')
-            return;
-        this._originalSync = originalSync;
-        output._sync = function (...args) {
-            originalSync.apply(this, args);
-            this.menuEnabled = true;
-        };
-        output.menuEnabled = true;
-    }
-
-    _hideBuiltInItems(menu) {
-        const items = menu._getMenuItems?.() || menu._items || [];
-        this._hiddenItems = items.filter(item => item !== this._section && item.actor)
-            .map(item => ({actor: item.actor, visible: item.actor.visible}));
-        for (const item of this._hiddenItems)
-            item.actor.visible = false;
-    }
-
-    _restoreBuiltInItems() {
-        for (const item of this._hiddenItems) {
-            try {
-                item.actor.visible = item.visible;
-            } catch (_error) {
-                // The native menu may have been rebuilt during session teardown.
-            }
-        }
-        this._hiddenItems = [];
     }
 
     detach() {
@@ -66,23 +46,12 @@ export default class AudioMatrixVolumeMenuAdapter {
             } catch (error) {
                 console.debug(`Audio Matrix menu cleanup failed: ${error}`);
             }
-            this._restoreBuiltInItems();
+            this._menuItemsLease.restore();
         }
-        this._restoreMenuButton();
+        this._menuButtonLease?.restore();
+        this._menuButtonLease = null;
         this._menu = null;
-    }
-
-    _restoreMenuButton() {
-        if (this._output && this._originalSync) {
-            this._output._sync = this._originalSync;
-            try {
-                this._originalSync.call(this._output);
-            } catch (error) {
-                console.debug(`GNOME sound menu state restore failed: ${error}`);
-            }
-        }
         this._output = null;
-        this._originalSync = null;
     }
 
     destroy() {
