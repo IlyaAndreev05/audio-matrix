@@ -190,7 +190,13 @@ public final class ConfigStore implements AutoCloseable {
         }
         boolean upgraded = parsed.get("schema_version") instanceof Number version
                 && version.intValue() < DefaultConfig.SCHEMA_VERSION;
-        if (upgraded) upgradeConfig(parsed);
+        if (upgraded) {
+            try { upgradeConfig(parsed); }
+            catch (RuntimeException invalid) {
+                diagnostic = "Configuration migration failed: " + invalid.getMessage();
+                throw new ConfigValidationException(List.of(diagnostic));
+            }
+        }
         List<String> errors = ConfigValidator.validate(parsed);
         if (!errors.isEmpty()) {
             diagnostic = String.join("; ", errors);

@@ -19,10 +19,10 @@ public final class QuickSettingsConfig {
 
     public static List<Map<String, Object>> defaultGroups() {
         return new ArrayList<>(List.of(
-                group("sources", "Источники", 0),
+                group("applications", "Приложения", 0),
                 group("outputs", "Выходные устройства", 1),
-                group("routing", "Коммутация и управление", 2),
-                group("effects", "Обработка звука", 3)));
+                group("routing", "Маршрутизация", 2),
+                group("events", "Звуки событий", 3)));
     }
 
     public static void migrate(Map<String, Object> config) {

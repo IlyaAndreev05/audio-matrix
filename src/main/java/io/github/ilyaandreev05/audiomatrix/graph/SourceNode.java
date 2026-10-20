@@ -3,7 +3,7 @@ package io.github.ilyaandreev05.audiomatrix.graph;
 import java.util.List;
 import java.util.Map;
 
-public final class SourceNode extends GraphNode {
+public non-sealed class SourceNode extends GraphNode {
     private final String selector;
     public SourceNode(String id, String name, String selector, List<String> channels) {
         super(id, name, List.of(new AudioPort("out", AudioPort.Direction.OUTPUT, channels, false)));

@@ -1,95 +1,81 @@
 package io.github.ilyaandreev05.audiomatrix.config;
 
+import io.github.ilyaandreev05.audiomatrix.graph.GraphCommonVibro;
 import org.junit.jupiter.api.Test;
 
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 class QuickSettingsConfigTest {
-    @Test void schemaThreeControlsMigrateIntoNamedStableGroups() {
-        Map<String, Object> config = DefaultConfig.create();
-        config.put("schema_version", 3);
-        config.put("quick_controls", List.of(DefaultConfig.map(
-                "id", "bass", "route_id", "route-1", "node_id", "gain-1", "parameter_id", "gain",
-                "section", "Bass and events", "label", "Bass", "order", 2)));
-
-        ConfigMigration.upgradeConfig(config);
-
-        Map<String, Object> control = ConfigValidationValues.optionalList(config.get("quick_controls"),
-                "quick_controls", new java.util.ArrayList<>()).getFirst();
-        String groupId = String.valueOf(control.get("group_id"));
-        Map<String, Object> group = QuickSettingsConfig.groups(config).stream()
-                .filter(candidate -> groupId.equals(candidate.get("id"))).findFirst().orElse(null);
-        assertEquals(DefaultConfig.SCHEMA_VERSION, config.get("schema_version"));
-        assertNotNull(group);
-        assertEquals("Bass and events", group.get("name"));
-        assertEquals("Bass and events", control.get("section"));
-        assertTrue(Boolean.FALSE.equals(group.get("collapsed")));
-    }
-
-    @Test void defaultConfigurationHasTheFourSuggestedDisplayGroups() {
+    @Test void defaultsHaveFourStableRussianGroups() {
         List<Map<String, Object>> groups = QuickSettingsConfig.groups(DefaultConfig.create());
 
-        assertEquals(List.of("sources", "outputs", "routing", "effects", groups.get(4).get("id")),
+        assertEquals(List.of("applications", "outputs", "routing", "events"),
                 groups.stream().map(group -> String.valueOf(group.get("id"))).toList());
-        assertEquals("Вибродинамик", groups.get(4).get("name"));
-        assertFalse(groups.getFirst().get("collapsed").equals(true));
+        assertEquals(List.of("Приложения", "Выходные устройства", "Маршрутизация", "Звуки событий"),
+                groups.stream().map(group -> String.valueOf(group.get("name"))).toList());
+        assertTrue(groups.stream().noneMatch(group -> Boolean.TRUE.equals(group.get("collapsed"))));
     }
 
-    @Test void schemaUpgradeAddsBassControlsWithoutChangingCurrentLevels() {
+    @Test void defaultPinsExposeMainSourcesAndControlsButNotTheInternalMerge() {
         Map<String, Object> config = DefaultConfig.create();
-        config.put("schema_version", 8);
-
-        ConfigMigration.upgradeConfig(config);
-
-        List<Map<String, Object>> controls = ConfigValidationValues.optionalList(config.get("quick_controls"),
-                "quick_controls", new java.util.ArrayList<>());
-        assertTrue(controls.stream().anyMatch(control -> "frequency_hz".equals(control.get("parameter_id"))
-                && "octine-bass-low-pass".equals(control.get("node_id"))));
-        assertTrue(controls.stream().anyMatch(control -> "slope_db_oct".equals(control.get("parameter_id"))
-                && "octine-bass-low-pass".equals(control.get("node_id"))));
-        assertEquals(List.of(), ConfigValidator.validate(config));
-    }
-
-    @Test void migrationGroupsLegacyControlsAndPinsRouteSourcesAndOutputs() {
-        Map<String, Object> config = DefaultConfig.create();
-        config.put("schema_version", 4);
-        config.put("quick_controls", List.of(DefaultConfig.map(
-                "id", "gain-control", "route_id", "route-1", "node_id", "gain-1", "parameter_id", "gain",
-                "section", "Коммутация и управление", "label", "Bass", "order", 1)));
-        Map<String, Object> route = DefaultConfig.map(
-                "id", "route-1", "name", "Desk", "profile_id", "monitor", "group_id", "", "nodes", List.of(
-                        DefaultConfig.map("id", "source-1", "name", "Chrome", "type", "source",
-                                "channels", List.of("FL", "FR"), "parameters", DefaultConfig.map("selector", "application:chrome")),
-                        DefaultConfig.map("id", "gain-1", "name", "Bass", "type", "gain",
-                                "channels", List.of("FL", "FR"), "parameters", DefaultConfig.map("gain", 0.5, "muted", false)),
-                        DefaultConfig.map("id", "out-1", "name", "Monitor", "type", "output",
-                                "channels", List.of("FL", "FR"), "parameters", DefaultConfig.map("device_id", "monitor"))),
-                "connections", List.of());
-        config.put("route_library", List.of(route));
-        config.put("active_route", "route-1");
-        @SuppressWarnings("unchecked") List<Map<String, Object>> profiles =
-                (List<Map<String, Object>>) config.get("profiles");
-        profiles.getFirst().put("selected_route_id", "route-1");
-        config.put("profiles", List.of(profiles.getFirst()));
-        QuickSettingsConfig.pins(config).clear();
-
-        ConfigMigration.upgradeConfig(config);
-
         List<Map<String, Object>> pins = QuickSettingsConfig.pins(config);
-        assertEquals(DefaultConfig.SCHEMA_VERSION, config.get("schema_version"));
-        assertEquals(4, pins.size());
-        assertTrue(pins.stream().anyMatch(pin -> "source-1".equals(pin.get("node_id"))
-                && "sources".equals(pin.get("group_id"))));
-        assertTrue(pins.stream().anyMatch(pin -> "out-1".equals(pin.get("node_id"))
-                && "outputs".equals(pin.get("group_id"))));
-        Map<String, Object> gainPin = pins.stream().filter(pin -> "gain-1".equals(pin.get("node_id"))).findFirst().orElseThrow();
-        assertEquals(List.of("gain-control"), gainPin.get("control_ids"));
+
+        assertEquals(8, pins.size());
+        assertTrue(pins.stream().anyMatch(pin -> "octine-main-source".equals(pin.get("node_id"))
+                && "applications".equals(pin.get("group_id"))));
+        assertTrue(pins.stream().anyMatch(pin -> "octine-vibro-gain".equals(pin.get("node_id"))
+                && "routing".equals(pin.get("group_id"))));
+        assertFalse(pins.stream().anyMatch(pin -> Set.of("octine-vibro-mixer", "octine-bass-low-pass")
+                .contains(pin.get("node_id"))));
+    }
+
+    @Test void migrationDropsBassControlsFromMenuAndKeepsThemInTheArchive() {
+        Map<String, Object> config = DefaultConfig.create();
+        config.put("schema_version", 9);
+        config.put("common_vibro_graph", io.github.ilyaandreev05.audiomatrix.graph.GraphCodec.toMap(
+                GraphCommonVibro.defaults()));
+        config.put("quick_controls", new ArrayList<>(List.of(DefaultConfig.map(
+                "id", "bass-frequency", "route_id", "octine-common-vibro",
+                "node_id", "octine-bass-low-pass", "parameter_id", "frequency_hz",
+                "section", "Details", "order", 1))));
+        config.put("quick_settings", DefaultConfig.map("groups", List.of(
+                DefaultConfig.map("id", "sources", "name", "Sources", "order", 0, "collapsed", false),
+                DefaultConfig.map("id", "vibro", "name", "Vibro", "order", 1, "collapsed", false)),
+                "pins", List.of()));
+
+        ConfigMigration.upgradeConfig(config);
+
+        assertEquals(List.of("applications", "outputs", "routing", "events"),
+                QuickSettingsConfig.groups(config).stream().map(group -> String.valueOf(group.get("id"))).toList());
+        assertTrue(QuickSettingsConfig.pins(config).stream().noneMatch(pin ->
+                "octine-bass-low-pass".equals(pin.get("node_id")) || "octine-vibro-mixer".equals(pin.get("node_id"))));
+        assertTrue(ConfigValidationValues.optionalList(config.get("quick_controls"), "quick_controls", new ArrayList<>()).isEmpty());
+        Map<String, Object> archive = (Map<String, Object>) config.get("migration_archive");
+        Map<String, Object> prior = (Map<String, Object>) archive.get("prior_config");
+        assertTrue(prior.toString().contains("bass-frequency"));
         assertEquals(List.of(), ConfigValidator.validate(config));
+    }
+
+    @Test void aUserControlOnAnExistingNodeKeepsItsIdAndGroupDuringMigration() {
+        Map<String, Object> config = DefaultConfig.create();
+        config.put("schema_version", 9);
+        config.put("quick_controls", new ArrayList<>(List.of(DefaultConfig.map(
+                "id", "my-overall-strength", "route_id", "main", "node_id", "octine-vibro-gain",
+                "parameter_id", "gain", "section", "My vibration", "group_id", "routing", "order", 4))));
+
+        ConfigMigration.upgradeConfig(config);
+
+        Map<String, Object> kept = QuickSettingsConfig.groups(config).stream()
+                .filter(group -> "routing".equals(group.get("id"))).findFirst().orElseThrow();
+        Map<String, Object> control = ConfigValidationValues.optionalList(config.get("quick_controls"),
+                "quick_controls", new ArrayList<>()).stream()
+                .filter(item -> "my-overall-strength".equals(item.get("id"))).findFirst().orElseThrow();
+        assertEquals("Маршрутизация", kept.get("name"));
+        assertEquals("routing", control.get("group_id"));
+        assertTrue(QuickSettingsConfig.pins(config).stream().anyMatch(pin ->
+                "octine-vibro-gain".equals(pin.get("node_id"))
+                        && ((List<?>) pin.get("control_ids")).contains("my-overall-strength")));
     }
 }

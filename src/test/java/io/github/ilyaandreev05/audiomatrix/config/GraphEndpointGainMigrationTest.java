@@ -23,34 +23,30 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class GraphEndpointGainMigrationTest {
     @TempDir Path temp;
 
-    @Test void schemaFiveMigrationBacksUpTheFileAndKeepsEveryLegacyRouteFactor() throws Exception {
+    @Test void schemaFiveMigrationBacksUpPriorGraphAndKeepsItInTheMigrationArchive() throws Exception {
         Path file = temp.resolve("config.json");
         byte[] oldBytes = new ObjectMapper().writeValueAsBytes(schemaFiveConfig());
         Files.write(file, oldBytes);
 
         try (ConfigStore store = new ConfigStore(file)) {
             Map<String, Object> migrated = store.snapshot();
-            Map<String, Object> route = route(migrated);
-            AudioGraph graph = GraphCodec.fromMap(route);
-            Map<String, Object> compiled = GraphPipeWireCompiler.compile(graph, migrated);
-            @SuppressWarnings("unchecked") Map<String, Object> active =
-                    (Map<String, Object>) ((List<?>) compiled.get("routes")).getFirst();
-
             assertEquals(DefaultConfig.SCHEMA_VERSION, migrated.get("schema_version"));
             assertTrue(java.util.Arrays.equals(oldBytes,
                     Files.readAllBytes(temp.resolve("config.json.before-schema-"+DefaultConfig.SCHEMA_VERSION))));
-            assertEquals(3, graph.nodes().stream().filter(GainNode.class::isInstance).count());
-            assertEquals(0.37, active.get("volume"));
-            assertTrue(graph.connections().stream().allMatch(edge -> edge.gain() == 1.0));
-            assertTrue(graph.nodes().stream().filter(GainNode.class::isInstance).map(GainNode.class::cast)
-                    .anyMatch(gain -> gain.endpointNodeId().isBlank() && gain.gain() == 0.37));
-            assertTrue(((List<?>) migrated.get("quick_controls")).stream().anyMatch(item ->
-                    item.toString().contains("endpoint-gain") && item.toString().contains("gain")));
+            Map<String, Object> prior = prior(migrated);
+            Map<String, Object> archived = route(prior, "desk-route");
+            AudioGraph archivedGraph = GraphCodec.fromMap(archived);
+            assertTrue(archivedGraph.connections().stream().anyMatch(edge -> edge.gain() == 0.37));
+            assertEquals("main", migrated.get("active_route"));
+            AudioGraph graph = GraphCodec.fromMap(route(migrated));
+            Map<String, Object> compiled = GraphPipeWireCompiler.compile(graph, migrated);
+            assertTrue(((List<?>) compiled.get("routes")).stream().anyMatch(item ->
+                    "system_default".equals(((Map<?, ?>) item).get("to"))));
             assertEquals(List.of(), ConfigValidator.validate(migrated));
         }
     }
 
-    @Test void schemaSixConfigMigrationPreservesLegacyConnectionLevelsInGainNodes() throws Exception {
+    @Test void schemaSixMigrationLeavesLegacyConnectionLevelsUnchangedInTheArchive() throws Exception {
         Path file = temp.resolve("config-v6.json");
         Map<String, Object> old = schemaFiveConfig();
         old.put("schema_version", 6);
@@ -59,12 +55,10 @@ class GraphEndpointGainMigrationTest {
 
         try (ConfigStore store = new ConfigStore(file)) {
             Map<String, Object> migrated = store.snapshot();
-            AudioGraph graph = GraphCodec.fromMap(route(migrated));
             assertEquals(DefaultConfig.SCHEMA_VERSION, migrated.get("schema_version"));
             assertTrue(java.util.Arrays.equals(oldBytes, Files.readAllBytes(temp.resolve("config-v6.json.before-schema-"+DefaultConfig.SCHEMA_VERSION))));
-            assertTrue(graph.connections().stream().allMatch(edge -> edge.gain() == 1.0));
-            assertTrue(graph.nodes().stream().filter(GainNode.class::isInstance).map(GainNode.class::cast)
-                    .anyMatch(gain -> gain.endpointNodeId().isBlank() && gain.gain() == 0.37));
+            assertEquals(0.37, GraphCodec.fromMap(route(prior(migrated), "desk-route")).connections().getFirst().gain());
+            assertEquals("main", migrated.get("active_route"));
             assertEquals(List.of(), ConfigValidator.validate(migrated));
         }
     }
@@ -89,8 +83,17 @@ class GraphEndpointGainMigrationTest {
     }
 
     private static Map<String, Object> route(Map<String, Object> config) {
+        String routeId = config.get("active_route") instanceof String value ? value : "main";
+        return route(config, routeId);
+    }
+
+    private static Map<String, Object> route(Map<String, Object> config, String routeId) {
         @SuppressWarnings("unchecked") List<Map<String, Object>> routes =
                 (List<Map<String, Object>>) config.get("route_library");
-        return routes.stream().filter(item -> "desk-route".equals(item.get("id"))).findFirst().orElseThrow();
+        return routes.stream().filter(item -> routeId.equals(item.get("id"))).findFirst().orElseThrow();
+    }
+
+    @SuppressWarnings("unchecked") private static Map<String, Object> prior(Map<String, Object> config) {
+        return (Map<String, Object>) ((Map<String, Object>) config.get("migration_archive")).get("prior_config");
     }
 }

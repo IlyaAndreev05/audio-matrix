@@ -27,25 +27,25 @@ class ConfigStoreTest {
         }
     }
 
-    @Test void schemaTwoRoutesAndGroupsAreAssignedToTheirOwningProfile() throws Exception {
+    @Test void legacyProfilesAndRoutesAreArchivedIntoTheSingleMainProfile() throws Exception {
         Path file=temp.resolve("config.json");
         Map<String,Object> old=DefaultConfig.create();old.put("schema_version",2);
         @SuppressWarnings("unchecked") Map<String,Object> profile=(Map<String,Object>)((java.util.List<?>)old.get("profiles")).getFirst();
         profile.remove("selected_route_id");
-        String group=io.github.ilyaandreev05.audiomatrix.graph.GraphRouteLibrary.createGroup(old,"monitor","Desk");
-        var route=new io.github.ilyaandreev05.audiomatrix.graph.AudioGraph("desk-route","Desk route",java.util.List.of(),java.util.List.of());
-        io.github.ilyaandreev05.audiomatrix.graph.GraphRouteLibrary.saveRoute(old,route,group);
-        old.put("active_route",route.id());
-        @SuppressWarnings("unchecked") java.util.List<Map<String,Object>> groups=(java.util.List<Map<String,Object>>)old.get("route_groups");groups.getFirst().remove("profile_id");
-        @SuppressWarnings("unchecked") java.util.List<Map<String,Object>> routes=(java.util.List<Map<String,Object>>)old.get("route_library");routes.stream().filter(item->route.id().equals(item.get("id"))).findFirst().orElseThrow().remove("profile_id");
+        Map<String,Object> legacyRoute=new java.util.LinkedHashMap<>();
+        legacyRoute.put("id","desk-route");legacyRoute.put("name","Desk route");legacyRoute.put("profile_id","desk");
+        legacyRoute.put("group_id","");legacyRoute.put("nodes",java.util.List.of());legacyRoute.put("connections",java.util.List.of());
+        old.put("route_library",java.util.List.of(legacyRoute));old.put("active_route","desk-route");
         byte[] schemaTwo= new ObjectMapper().writeValueAsBytes(old);Files.write(file,schemaTwo);
 
         try(ConfigStore store=new ConfigStore(file)) {
             Map<String,Object> migrated=store.snapshot();
             assertEquals(DefaultConfig.SCHEMA_VERSION,((Number)migrated.get("schema_version")).intValue());
-            assertEquals("monitor",groups(migrated).stream().filter(item->group.equals(item.get("id"))).findFirst().orElseThrow().get("profile_id"));
-            assertEquals("monitor",routes(migrated).stream().filter(item->route.id().equals(item.get("id"))).findFirst().orElseThrow().get("profile_id"));
-            assertEquals(route.id(),profile(migrated).get("selected_route_id"));
+            assertEquals("main",migrated.get("active_profile"));
+            assertEquals("main",migrated.get("active_route"));
+            assertEquals("main",profile(migrated).get("selected_route_id"));
+            Map<String,Object> archive=(Map<String,Object>)migrated.get("migration_archive");
+            assertTrue(archive.toString().contains("desk-route"));
             assertEquals(java.util.List.of(),ConfigValidator.validate(migrated));
             assertTrue(java.util.Arrays.equals(schemaTwo,Files.readAllBytes(temp.resolve("config.json.before-schema-"+DefaultConfig.SCHEMA_VERSION))));
         }

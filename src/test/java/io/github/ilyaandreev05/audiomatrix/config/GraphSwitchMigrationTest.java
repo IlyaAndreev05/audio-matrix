@@ -24,7 +24,7 @@ class GraphSwitchMigrationTest {
         assertEquals(first, config.toString());
     }
 
-    @Test void schemaSevenUpgradeKeepsProfilesRoutesAndTheActiveSelection() {
+    @Test void schemaSevenUpgradeArchivesTheOldSelectionAndActivatesTheSingleMainGraph() {
         Map<String, Object> profile = new LinkedHashMap<>(Map.of("id", "desk", "name", "Desk", "mode", "hybrid",
                 "default_output", "system_default", "selected_route_id", "route-1"));
         Map<String, Object> route = new LinkedHashMap<>(Map.of("id", "route-1", "name", "Legacy route",
@@ -40,14 +40,17 @@ class GraphSwitchMigrationTest {
                 (Map<String, Object>) ((List<?>) config.get("profiles")).getFirst();
         @SuppressWarnings("unchecked") Map<String, Object> storedRoute =
                 (Map<String, Object>) ((List<?>) config.get("route_library")).getFirst();
-        assertEquals("desk", config.get("active_profile"));
-        assertEquals("route-1", config.get("active_route"));
-        assertEquals("route-1", storedProfile.get("selected_route_id"));
-        assertEquals("Legacy route", storedRoute.get("name"));
-        assertEquals("desk", storedRoute.get("profile_id"));
-        assertEquals("switch", firstNode(storedRoute).get("type"));
-        assertEquals(List.of("in->a"), parameters(firstNode(storedRoute)).get("active_links"));
-        assertEquals(false, config.get("octine_profiles_available"));
+        assertEquals("main", config.get("active_profile"));
+        assertEquals("main", config.get("active_route"));
+        assertEquals("main", storedProfile.get("selected_route_id"));
+        assertEquals("Основной", storedRoute.get("name"));
+        assertEquals("main", storedRoute.get("profile_id"));
+        Map<?, ?> archive = (Map<?, ?>) config.get("migration_archive");
+        Map<?, ?> prior = (Map<?, ?>) archive.get("prior_config");
+        Map<?, ?> legacyRoute = ((List<Map<?, ?>>) prior.get("route_library")).stream()
+                .filter(item -> "route-1".equals(item.get("id"))).findFirst().orElseThrow();
+        assertEquals("Legacy route", legacyRoute.get("name"));
+        assertFalse(config.containsKey("octine_profiles_available"));
     }
 
     @Test void legacyCodecAlwaysWritesCanonicalMultiSelectionSwitch() {

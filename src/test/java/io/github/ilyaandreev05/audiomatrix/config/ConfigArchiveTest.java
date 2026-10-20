@@ -41,7 +41,7 @@ class ConfigArchiveTest {
             manifest.remove("kind");
         });
         try (ConfigArchive.PreparedImport prepared = ConfigArchive.prepare(legacy)) {
-            assertEquals(3, prepared.profileCount());
+            assertEquals(1, prepared.profileCount());
         }
 
         Path future = temp.resolve("future.amx.zip");
@@ -91,7 +91,8 @@ class ConfigArchiveTest {
                 String restoredDecay = String.valueOf(restoredCalibration.get("decay_curve_file"));
                 assertTrue(restoredDecay.startsWith("measurements/imported/"));
                 assertEquals("time_ms,envelope_relative_db,integrated_decay_db\n0,0,0\n", Files.readString(destinationDir.resolve(restoredDecay)));
-                assertEquals("monitor", restored.get("active_profile"));
+                assertEquals("main", restored.get("active_profile"));
+                assertEquals(1, ((List<?>) restored.get("profiles")).size());
             }
         }
     }

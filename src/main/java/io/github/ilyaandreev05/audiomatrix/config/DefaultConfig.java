@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Map;
 
 public final class DefaultConfig {
-    public static final int SCHEMA_VERSION = 9;
+    public static final int SCHEMA_VERSION = 10;
     private DefaultConfig() {}
 
     public static Map<String, Object> create() {
@@ -22,7 +22,7 @@ public final class DefaultConfig {
         root.put("quick_controls", new ArrayList<>());
         root.put("active_route", "");
         root.put("app", "audio-matrix");
-        root.put("active_profile", "monitor");
+        root.put("active_profile", "main");
         root.put("ui", map("language", "ru", "theme", "system", "start_minimized", false));
         root.put("mixer", map("global_volume", 0.8, "global_mute", false,
                 "global_eq", map("enabled", false, "filters", new ArrayList<>())));
@@ -31,20 +31,19 @@ public final class DefaultConfig {
                 "restore_owned_nodes_on_exit", true, "device_loss_policy", "mute", "transition_ms", 120));
         root.put("devices", new ArrayList<>());
         root.put("applications", new ArrayList<>());
-        root.put("buses", List.of(
+        root.put("buses", new ArrayList<>(List.of(
                 map("id", "main", "name", "Main", "role", "general", "channels", "stereo", "volume", 1.0, "mute", false),
                 map("id", "music", "name", "Music", "role", "music", "channels", "stereo", "volume", 1.0, "mute", false),
                 map("id", "effects", "name", "Effects", "role", "effects", "channels", "stereo", "volume", 0.8, "mute", false),
                 map("id", "subwoofer", "name", "Subwoofer", "role", "subwoofer", "channels", "mono", "volume", 0.65, "mute", false),
-                map("id", "aux", "name", "Aux", "role", "general", "channels", "stereo", "volume", 1.0, "mute", false)));
+                map("id", "aux", "name", "Aux", "role", "general", "channels", "stereo", "volume", 1.0, "mute", false))));
         root.put("routes", new ArrayList<>());
         root.put("dsp", map("order", List.of("stream", "bus", "route", "physical_output", "limiter"),
                 "global_eq", map("enabled", false, "filters", new ArrayList<>()),
                 "devices", map(), "route_chains", map(),
                 "limiter", map("enabled", true, "ceiling_db", -1.0, "lookahead_ms", 5.0, "release_ms", 50.0)));
         root.put("profiles", new ArrayList<>());
-        OctineProfileConfig.install(root);
-        root.put("active_route", "octine-monitor");
+        UnifiedGraphConfig.installDefault(root);
         root.put("calibrations", new ArrayList<>());
         root.put("export", map("include_measurements", true, "include_audio_assets", false));
         return root;

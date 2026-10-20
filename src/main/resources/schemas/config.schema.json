@@ -5,7 +5,7 @@
   "type": "object",
   "required": ["schema_version", "app", "active_profile", "ui", "mixer", "quick_settings", "engine", "devices", "applications", "buses", "routes", "dsp", "profiles", "calibrations"],
   "properties": {
-    "schema_version": {"const": 8},
+    "schema_version": {"const": 10},
     "app": {"const": "audio-matrix"},
     "active_profile": {"type": "string", "minLength": 1},
     "ui": {"$ref": "#/$defs/ui"},
@@ -21,6 +21,7 @@
     "calibrations": {"type": "array", "items": {"$ref": "#/$defs/calibration"}},
     "active_route": {"type": "string"},
     "octine_profiles_available": {"type": "boolean"},
+    "migration_archive": {"type": "object", "required": ["source_schema_version", "prior_config"], "properties": {"source_schema_version": {"type": "integer"}, "prior_config": {"type": "object"}}, "additionalProperties": false},
     "route_groups": {"type": "array", "items": {"type": "object", "required": ["id", "name", "profile_id"], "properties": {"id": {"type": "string"}, "name": {"type": "string", "minLength": 1}, "profile_id": {"type": "string", "minLength": 1}}, "additionalProperties": false}},
     "route_library": {"type": "array", "items": {"type": "object", "required": ["id", "name", "profile_id", "nodes", "connections"], "properties": {"id": {"type": "string"}, "name": {"type": "string", "minLength": 1}, "profile_id": {"type": "string", "minLength": 1}, "group_id": {"type": "string"}, "nodes": {"type": "array", "items": {"type": "object"}}, "connections": {"type": "array", "items": {"type": "object"}}}, "additionalProperties": true}},
     "common_vibro_graph": {"type": "object", "required": ["id", "name", "nodes", "connections"], "properties": {"id": {"const": "octine-common-vibro"}, "name": {"type": "string", "minLength": 1}, "nodes": {"type": "array", "items": {"type": "object"}}, "connections": {"type": "array", "items": {"type": "object"}}}},

@@ -35,7 +35,9 @@ public final class GraphCodec {
             Map<String, Object> parameters = object(item.get("parameters"));
             nodes.add(switch (type) {
                 case "source" -> new SourceNode(nodeId, nodeName, text(parameters.get("selector")), channels);
-                case "device_slot" -> new DeviceSlotNode(nodeId, nodeName, text(parameters.get("device_id")), channels);
+                case "dynamic_generator" -> new DynamicGeneratorNode(nodeId, nodeName, text(parameters.get("selector")), channels);
+                case "device_slot" -> new DeviceSlotNode(nodeId, nodeName, text(parameters.get("device_id")), channels,
+                        number(parameters.get("volume"), 0), Boolean.TRUE.equals(parameters.get("muted")));
                 case "output" -> new OutputNode(nodeId, nodeName, text(parameters.get("device_id")), channels,
                         parameters.containsKey("channel_matrix") ? ChannelMatrix.parse(parameters.get("channel_matrix")) : null);
                 case "gain" -> new GainNode(nodeId, nodeName, channels, number(parameters.get("gain"), 1),

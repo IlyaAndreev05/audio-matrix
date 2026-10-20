@@ -14,7 +14,8 @@ final class GraphNodeCopies {
                 : node.outputs().getFirst().channels();
         return switch (node.type()) {
             case "source" -> new SourceNode(id, node.name(), ((SourceNode) node).selector(), channels);
-            case "device_slot" -> new DeviceSlotNode(id, node.name(), ((DeviceSlotNode) node).deviceId(), channels);
+            case "dynamic_generator" -> new DynamicGeneratorNode(id, node.name(), ((SourceNode) node).selector(), channels);
+            case "device_slot" -> copyDeviceSlot(node, id, channels);
             case "output" -> copyOutput(node, id, channels);
             case "gain" -> copyGain(node, id, channels, nodeIds);
             case "gate" -> copyGate(node, id, channels);
@@ -28,6 +29,11 @@ final class GraphNodeCopies {
             case "filter" -> copyFilter(node, id, channels);
             default -> throw new IllegalArgumentException("Unsupported graph node type: " + node.type());
         };
+    }
+
+    private static GraphNode copyDeviceSlot(GraphNode node, String id, List<String> channels) {
+        DeviceSlotNode slot = (DeviceSlotNode) node;
+        return new DeviceSlotNode(id, node.name(), slot.deviceId(), channels, slot.volume(), slot.muted());
     }
 
     private static GraphNode copyOutput(GraphNode node, String id, List<String> channels) {

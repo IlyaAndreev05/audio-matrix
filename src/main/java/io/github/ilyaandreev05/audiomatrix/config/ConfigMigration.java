@@ -3,7 +3,6 @@ package io.github.ilyaandreev05.audiomatrix.config;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
-import io.github.ilyaandreev05.audiomatrix.graph.GraphCommonVibro;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -37,7 +36,12 @@ final class ConfigMigration {
             throw new ConfigStore.ConfigValidationException(List.of("Legacy YAML could not be read; it was left untouched: " + error.getMessage()));
         }
         int version = parsed.get("schema_version") instanceof Number number ? number.intValue() : -1;
-        if (version < DefaultConfig.SCHEMA_VERSION) upgradeConfig(parsed);
+        if (version < DefaultConfig.SCHEMA_VERSION) {
+            try { upgradeConfig(parsed); }
+            catch (RuntimeException invalid) {
+                throw new ConfigStore.ConfigValidationException(List.of("Legacy configuration is incomplete: " + invalid.getMessage()));
+            }
+        }
         List<String> errors = ConfigValidator.validate(parsed);
         if (!errors.isEmpty()) throw new ConfigStore.ConfigValidationException(errors);
         Path backup = legacy.resolveSibling("config.yaml.before-json");
@@ -51,100 +55,44 @@ final class ConfigMigration {
         }
     }
 
-    @SuppressWarnings("unchecked")
     static void upgradeConfig(Map<String,Object> config) {
         int schema = config.get("schema_version") instanceof Number number ? number.intValue() : -1;
-        if (schema < 2) {
-            config.putIfAbsent("route_groups", new ArrayList<>());
-            config.putIfAbsent("route_library", new ArrayList<>());
-            config.putIfAbsent("saved_copies", new ArrayList<>());
-            config.putIfAbsent("graph_ui_layout", new LinkedHashMap<>());
-            config.putIfAbsent("graph_ui_scale", new LinkedHashMap<>());
-            config.putIfAbsent("graph_ui_subgraphs", new LinkedHashMap<>());
-            config.putIfAbsent("quick_controls", new ArrayList<>());
-            config.putIfAbsent("active_route", "");
-            schema = 2;
+        if (schema >= DefaultConfig.SCHEMA_VERSION) return;
+        Map<String, Object> source = mutableObject(config);
+        long legacyFields = List.of("ui", "mixer", "devices", "applications", "profiles", "buses", "routes",
+                        "route_library", "route_groups", "active_route", "quick_settings")
+                .stream().filter(source::containsKey).count();
+        if (legacyFields < 2) throw new IllegalArgumentException("not enough legacy settings to migrate safely");
+        if (!config.containsKey("migration_archive")) {
+            Map<String, Object> archive = new LinkedHashMap<>();
+            archive.put("source_schema_version", schema);
+            archive.put("prior_config", deepCopy(source));
+            source.put("migration_archive", archive);
         }
-        if (schema < 3) {
-            List<Map<String,Object>> profiles = config.get("profiles") instanceof List<?> list
-                    ? (List<Map<String,Object>>) list : new ArrayList<>();
-            if (!(config.get("profiles") instanceof List<?>)) config.put("profiles", profiles);
-            String activeProfile = String.valueOf(config.getOrDefault("active_profile", ""));
-            boolean hasActiveProfile=false;
-            for(Map<String,Object> profile:profiles)if(activeProfile.equals(profile.get("id"))){hasActiveProfile=true;break;}
-            if (!hasActiveProfile) {
-                activeProfile = profiles.isEmpty() ? "desk" : String.valueOf(profiles.getFirst().get("id"));
-                if (profiles.isEmpty()) profiles.add(DefaultConfig.map("id", activeProfile,
-                        "name", "Рабочий стол", "mode", "hybrid", "default_output", "system_default"));
-                config.put("active_profile", activeProfile);
-            }
-            List<Map<String,Object>> groups = config.get("route_groups") instanceof List<?> list
-                    ? (List<Map<String,Object>>) list : new ArrayList<>();
-            if (!(config.get("route_groups") instanceof List<?>)) config.put("route_groups", groups);
-            List<Map<String,Object>> routes = config.get("route_library") instanceof List<?> list
-                    ? (List<Map<String,Object>>) list : new ArrayList<>();
-            if (!(config.get("route_library") instanceof List<?>)) config.put("route_library", routes);
-            Map<String,String> groupProfiles = new LinkedHashMap<>();
-            for (Map<String,Object> group : groups) {
-                group.putIfAbsent("profile_id", activeProfile);
-                groupProfiles.put(String.valueOf(group.get("id")), String.valueOf(group.get("profile_id")));
-            }
-            for (Map<String,Object> route : routes) {
-                String groupId = String.valueOf(route.getOrDefault("group_id", ""));
-                route.putIfAbsent("profile_id", groupProfiles.getOrDefault(groupId, activeProfile));
-            }
-            String activeRoute = String.valueOf(config.getOrDefault("active_route", ""));
-            for (Map<String,Object> profile : profiles) {
-                String profileId = String.valueOf(profile.get("id"));
-                String selected = "";
-                if (profileId.equals(activeProfile) && !activeRoute.isBlank()
-                        && routes.stream().anyMatch(route -> activeRoute.equals(route.get("id")) && profileId.equals(route.get("profile_id")))) {
-                    selected = activeRoute;
-                } else {
-                    selected = routes.stream().filter(route -> profileId.equals(route.get("profile_id")))
-                            .map(route -> String.valueOf(route.get("id"))).findFirst().orElse("");
-                }
-                profile.putIfAbsent("selected_route_id", selected);
-            }
-            if (config.get("saved_copies") instanceof List<?> copies) {
-                for (Object raw : copies) if (raw instanceof Map<?,?> copyRaw) {
-                    Map<String,Object> copy = (Map<String,Object>) copyRaw;
-                    if (!copy.containsKey("profile_id") && copy.get("route") instanceof Map<?,?> routeRaw) {
-                        Object profileId = routeRaw.get("profile_id");
-                        copy.put("profile_id", profileId == null ? activeProfile : profileId);
-                    }
-                }
-            }
-            config.put("schema_version", 3);
+        config.clear();
+        config.putAll(source);
+        DefaultConfig.create().forEach(config::putIfAbsent);
+        UnifiedGraphConfig.migrate(config);
+        config.put("schema_version", DefaultConfig.SCHEMA_VERSION);
+    }
+
+    private static Object deepCopy(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> copy = new LinkedHashMap<>();
+            map.forEach((key, item) -> copy.put(String.valueOf(key), deepCopy(item)));
+            return copy;
         }
-        if (schema < 4) {
-            QuickSettingsConfig.migrate(config);
-            config.put("schema_version", 4);
-            schema = 4;
+        if (value instanceof List<?> list) {
+            List<Object> copy = new ArrayList<>(list.size());
+            list.forEach(item -> copy.add(deepCopy(item)));
+            return copy;
         }
-        if (schema < 5) {
-            QuickSettingsConfig.migrate(config);
-            QuickSettingsConfig.migrateNodePins(config);
-            config.put("schema_version", 5);
-            schema = 5;
-        }
-        if (schema < 7) {
-            config.putIfAbsent("graph_ui_matrix_views", new LinkedHashMap<>());
-            GraphEndpointGainMigration.migrate(config);
-            schema = 7;
-        }
-        if (schema < 8) {
-            GraphSwitchMigration.upgrade(config);
-            // Presets are explicit opt-in on upgrades: existing routes and active selections survive.
-            config.putIfAbsent("octine_profiles_available", false);
-            config.put("schema_version", 8);
-            schema = 8;
-        }
-        if (schema < 9) {
-            GraphCommonVibro.migrateLegacyBassFilter(config);
-            QuickSettingsConfig.migrateVibroBassControls(config);
-            config.put("schema_version", 9);
-        }
+        return value;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> mutableObject(Map<String, Object> source) {
+        return (Map<String, Object>) deepCopy(source);
     }
 
 }
