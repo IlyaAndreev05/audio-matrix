@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Map;
 
 public final class DefaultConfig {
-    public static final int SCHEMA_VERSION = 8;
+    public static final int SCHEMA_VERSION = 9;
     private DefaultConfig() {}
 
     public static Map<String, Object> create() {

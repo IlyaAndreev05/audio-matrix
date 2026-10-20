@@ -31,7 +31,7 @@ public final class OctineProfileConfig {
         config.put("profiles", profiles); config.put("route_library", routes);
         QuickSettingsConfig.migrate(config);
         GraphCommonVibro.save(config, GraphCommonVibro.defaults());
-        Map<String, Object> tactile = QuickSettingsConfig.findOrCreateGroup(config, "Закреплённый тактильный тракт");
+        Map<String, Object> tactile = QuickSettingsConfig.findOrCreateGroup(config, "Вибродинамик");
         QuickSettingsConfig.pinNode(config, GraphCommonVibro.COMMON_ROUTE_ID, "octine-event-source",
                 "sources", 0, "DEFAULT");
         int order = 0;
@@ -39,6 +39,7 @@ public final class OctineProfileConfig {
                 "octine-vibro-limiter", GraphCommonVibro.VIBRO_OUTPUT_ID))
             QuickSettingsConfig.pinNode(config, GraphCommonVibro.COMMON_ROUTE_ID, node,
                     String.valueOf(tactile.get("id")), order++, "DEFAULT");
+        QuickSettingsConfig.migrateVibroBassControls(config);
         QuickSettingsConfig.pinNode(config, "octine-free", "octine-free-switch", "routing", 0, "DEFAULT");
         QuickSettingsConfig.pinNode(config, "octine-monitor", "octine-monitor-output", "outputs", 0, "DEFAULT");
         QuickSettingsConfig.pinNode(config, "octine-headphones", "octine-headphones-output", "outputs", 1, "DEFAULT");

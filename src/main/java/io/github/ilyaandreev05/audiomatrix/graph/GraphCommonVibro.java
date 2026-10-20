@@ -21,23 +21,23 @@ public final class GraphCommonVibro {
     }
 
     public static SourceNode mainSource() {
-        return new SourceNode(MAIN_SOURCE_ID, "Все приложения (без EVENT)", "application:unassigned", CHANNELS);
+        return new SourceNode(MAIN_SOURCE_ID, "Все приложения, кроме событий", "application:unassigned", CHANNELS);
     }
 
     public static MixerNode mainMixer() {
-        return new MixerNode(MAIN_MIXER_ID, "Main Mixer", CHANNELS, Map.of("applications", 1.0, "additional", 1.0));
+        return new MixerNode(MAIN_MIXER_ID, "Основной микшер", CHANNELS, Map.of("applications", 1.0, "additional", 1.0));
     }
 
     public static AudioGraph defaults() {
         List<GraphNode> nodes = List.of(mainSource(), mainMixer(),
-                new FilterNode("octine-bass-low-pass", "Басы · 120 Hz", CHANNELS, "low_pass", true,
-                        Map.of("frequency_hz", 120.0, "q", 0.70710678)),
-                new SourceNode("octine-event-source", "Event Sound Studio", EventSoundStudioSource.SELECTOR, CHANNELS),
-                new MixerNode(VIBRO_MIXER_ID, "Vibro Mixer", CHANNELS, Map.of("bass", 0.6, "events", 0.65)),
-                new GainNode(VIBRO_GAIN_ID, "Vibro Gain / Mute", CHANNELS, 0.6, false),
-                new FilterNode("octine-vibro-limiter", "Vibro Limiter", CHANNELS, "limiter", true,
+                new FilterNode("octine-bass-low-pass", "Басы · 60 Гц", CHANNELS, "low_pass", true,
+                        Map.of("frequency_hz", 60.0, "slope_db_oct", 48.0)),
+                new SourceNode("octine-event-source", "События", EventSoundStudioSource.SELECTOR, CHANNELS),
+                new MixerNode(VIBRO_MIXER_ID, "Микшер вибродинамика", CHANNELS, Map.of("bass", 0.6, "events", 0.65)),
+                new GainNode(VIBRO_GAIN_ID, "Общая сила", CHANNELS, 0.6, false),
+                new FilterNode("octine-vibro-limiter", "Защита пиков вибродинамика", CHANNELS, "limiter", true,
                         Map.of("ceiling_db", -1.0, "lookahead_ms", 5.0, "release_ms", 80.0)),
-                new DeviceSlotNode(VIBRO_OUTPUT_ID, "Vibro Output · назначьте устройство", "", CHANNELS));
+                new DeviceSlotNode(VIBRO_OUTPUT_ID, "Устройство вибродинамика", "", CHANNELS));
         return new AudioGraph(COMMON_ROUTE_ID, "Общий закреплённый Vibro", nodes, List.of(
                 edge("main-input", MAIN_SOURCE_ID, "out", MAIN_MIXER_ID, "applications"),
                 edge("bass-copy", MAIN_MIXER_ID, "out", "octine-bass-low-pass", "in"),
@@ -61,6 +61,44 @@ public final class GraphCommonVibro {
         if (!errors.isEmpty()) throw new IllegalArgumentException(String.join("; ", errors));
         GraphVibroInvariant.require(graph);
         config.put("common_vibro_graph", new LinkedHashMap<>(GraphCodec.toMap(graph)));
+    }
+
+    /** Upgrades only the untouched shipped low-pass defaults; personalized filter settings remain intact. */
+    public static void migrateLegacyBassFilter(Map<String, Object> config) {
+        AudioGraph graph;
+        try { graph = graph(config); }
+        catch (RuntimeException invalid) { return; }
+        if (graph == null) return;
+        List<GraphNode> nodes = new ArrayList<>(graph.nodes());
+        boolean changed = false;
+        for (int index = 0; index < nodes.size(); index++) {
+            GraphNode node = nodes.get(index);
+            if (!(node instanceof FilterNode filter) || !"octine-bass-low-pass".equals(filter.id())) continue;
+            boolean untouched = "low_pass".equals(filter.processor())
+                    && number(filter.parameters().get("frequency_hz"), -1) == 120.0
+                    && (!filter.parameters().containsKey("q")
+                        || number(filter.parameters().get("q"), -1) == 0.70710678)
+                    && !filter.parameters().containsKey("slope_db_oct");
+            if (untouched) {
+                Map<String, Object> parameters = new LinkedHashMap<>(filter.parameters());
+                parameters.remove("q");
+                parameters.put("frequency_hz", 60.0);
+                parameters.put("slope_db_oct", 48.0);
+                String name = isLegacyDefaultFilterName(filter.name()) ? "Басы · 60 Гц" : filter.name();
+                nodes.set(index, new FilterNode(filter.id(), name, filter.inputs().getFirst().channels(), filter.processor(),
+                        filter.enabled(), parameters));
+                changed = true;
+            }
+        }
+        if (changed) save(config, new AudioGraph(graph.id(), graph.name(), nodes, graph.connections()));
+    }
+
+    private static boolean isLegacyDefaultFilterName(String name) {
+        return "Басы · 120 Hz".equals(name) || "Басы · 120 Гц".equals(name);
+    }
+
+    private static double number(Object value, double fallback) {
+        return value instanceof Number number ? number.doubleValue() : fallback;
     }
 
     /** Configuration validation entry point for the fixed shared topology. */

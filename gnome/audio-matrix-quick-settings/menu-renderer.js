@@ -23,7 +23,7 @@ function createScrollableGroups(section) {
     });
     const monitor = global.display.get_monitor_geometry(global.display.get_current_monitor());
     const availableHeight = monitor?.height || 800;
-    scroll.set_style(`max-height: ${Math.max(120, Math.min(560, Math.floor(availableHeight * 0.55)))}px;`);
+    scroll.set_style(`max-height: ${Math.max(120, Math.min(560, Math.floor(availableHeight * 0.55)))}px; max-width: 24em;`);
     scroll._delegate = column;
     column.actor = scroll;
     section.addMenuItem(column);
@@ -146,6 +146,7 @@ export default class AudioMatrixMenuRenderer {
         const {state, available, language, commandError} = snapshot;
         const t = TEXT[language];
         this._section.removeAll();
+        this._section.actor.set_style('max-width: 24em;');
         this._column = null;
         this._rows.addHeader(state, available);
         if (commandError)

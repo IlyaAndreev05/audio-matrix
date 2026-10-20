@@ -27,6 +27,34 @@ class GnomeQuickControlParameterTest {
                 GnomeQuickControlParameter.definitions(filter).stream().map(GnomeQuickControlParameter.Definition::id).toList());
     }
 
+    @Test void sharedBassFilterPublishesItsNarrowFrequencyAndSteepSlopeRanges() {
+        FilterNode filter = new FilterNode("octine-bass-low-pass", "Басы · 60 Гц", List.of("FL", "FR"),
+                "low_pass", true, Map.of("frequency_hz", 60.0, "slope_db_oct", 48.0));
+
+        Map<String, Object> cutoff = GnomeQuickControlParameter.describe(filter, "frequency_hz", "ru");
+        Map<String, Object> slope = GnomeQuickControlParameter.describe(filter, "slope_db_oct", "ru");
+
+        assertEquals(40, cutoff.get("minimum"));
+        assertEquals(100, cutoff.get("maximum"));
+        assertEquals("linear", cutoff.get("scale"));
+        List<?> slopes = (List<?>) slope.get("options");
+        assertEquals(List.of("24", "36", "48"), slopes.stream()
+                .map(option -> String.valueOf(((Map<?, ?>) option).get("id"))).toList());
+    }
+
+    @Test void sharedBassFilterRejectsCutoffsAndSlopesOutsideItsPublishedRange() {
+        Map<String, Object> node = new LinkedHashMap<>(Map.of("id", "octine-bass-low-pass", "type", "filter",
+                "parameters", Map.of("processor", "low_pass", "enabled", true,
+                        "frequency_hz", 60.0, "slope_db_oct", 48.0)));
+
+        GnomeQuickControlParameter.apply(node, "frequency_hz", "100", false);
+        assertEquals(100.0, object(node.get("parameters")).get("frequency_hz"));
+        assertThrows(IllegalArgumentException.class,
+                () -> GnomeQuickControlParameter.apply(node, "frequency_hz", "101", false));
+        assertThrows(IllegalArgumentException.class,
+                () -> GnomeQuickControlParameter.choose(node, "slope_db_oct", "12"));
+    }
+
     @Test void editsEqBandFieldsAndRejectsValuesOutsideDspBounds() {
         Map<String, Object> node = new LinkedHashMap<>();
         node.put("type", "filter");

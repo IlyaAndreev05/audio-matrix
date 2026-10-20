@@ -3,6 +3,7 @@ package io.github.ilyaandreev05.audiomatrix.config;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphCommonVibro;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -137,6 +138,12 @@ final class ConfigMigration {
             // Presets are explicit opt-in on upgrades: existing routes and active selections survive.
             config.putIfAbsent("octine_profiles_available", false);
             config.put("schema_version", 8);
+            schema = 8;
+        }
+        if (schema < 9) {
+            GraphCommonVibro.migrateLegacyBassFilter(config);
+            QuickSettingsConfig.migrateVibroBassControls(config);
+            config.put("schema_version", 9);
         }
     }
 

@@ -151,15 +151,15 @@ public class AudioMatrixApp extends Application {
         stage.setMinWidth(1024); stage.setMinHeight(680);
         stage.setScene(scene);
         boolean background = getParameters().getRaw().contains("--background");
+        boolean openGraph = getParameters().getRaw().contains("--open-graph")
+                || "1".equals(System.getenv("AUDIO_MATRIX_OPEN_GRAPH"));
         if (!background) stage.show();
         shell.start();
+        if (openGraph) shell.openGraphEditor();
         instanceControl = currentInstanceControl;
         if (instanceControl != null) instanceControl.setHandler(command -> Platform.runLater(() -> {
             if ("open".equals(command)) {
-                stage.setIconified(false);
-                stage.show();
-                stage.toFront();
-                stage.requestFocus();
+                shell.openGraphEditor();
             } else if ("quit".equals(command)) {
                 shutdownApplication();
             }

@@ -1,6 +1,7 @@
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as Slider from 'resource:///org/gnome/shell/ui/slider.js';
 import Pango from 'gi://Pango';
+import Clutter from 'gi://Clutter';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 import {boxLayout} from './menu-layout.js';
@@ -71,24 +72,26 @@ export default class AudioMatrixMenuRows {
 
     createLevelRow(options) {
         const item = new PopupMenu.PopupBaseMenuItem({reactive: false, activate: false, can_focus: false});
-        const row = boxLayout({spacing: 9, x_expand: true, y_expand: true});
+        const row = boxLayout({vertical: true, spacing: 3, x_expand: true, y_expand: true});
         const icon = options.icon || 'audio-x-generic-symbolic';
-        row.add_child(typeof icon === 'string'
+        const heading = boxLayout({spacing: 7, x_expand: true, y_expand: true});
+        heading.add_child(typeof icon === 'string'
             ? new St.Icon({icon_name: icon, style_class: 'popup-menu-icon'})
             : new St.Icon({gicon: icon.gicon, style_class: 'popup-menu-icon'}));
         const name = new St.Label({text: String(options.name || ''), x_expand: true, y_expand: true});
         name.clutter_text.ellipsize = Pango.EllipsizeMode.END;
-        name.set_width(112);
-        row.add_child(name);
+        heading.add_child(name);
         const initial = options.muted ? 0 : Math.max(0, Math.min(1, Number(options.value) || 0));
+        const percentage = new St.Label({text: options.displayValue || `${Math.round(initial * 100)}%`, style_class: 'popup-status-menu-item'});
+        percentage.set_width(42);
+        percentage.x_align = Clutter.ActorAlign.END;
+        heading.add_child(percentage);
+        row.add_child(heading);
+        const controls = boxLayout({spacing: 7, x_expand: true, y_expand: true});
         const slider = new Slider.Slider(initial);
-        slider.set_width(88);
         slider.x_expand = true;
         slider.accessible_name = `${options.name || ''} — ${TEXT[this._getLanguage()].percent}`;
-        row.add_child(slider);
-        const percentage = new St.Label({text: options.displayValue || `${Math.round(initial * 100)}%`, style_class: 'popup-status-menu-item'});
-        percentage.set_width(36);
-        row.add_child(percentage);
+        controls.add_child(slider);
         const valueSignalId = this._connectSlider(slider, percentage, options);
         let muteButton = null;
         if (typeof options.onMute === 'function') {
@@ -97,8 +100,9 @@ export default class AudioMatrixMenuRows {
             muteButton = this.iconButton(
                 muted ? 'audio-volume-muted-symbolic' : 'audio-volume-high-symbolic',
                 options.mutedLabel || (muted ? t.unmute : t.mute), options.onMute);
-            row.add_child(muteButton);
+            controls.add_child(muteButton);
         }
+        row.add_child(controls);
         item.add_child(row);
         LEVEL_ROW_STATE.set(item, {slider, percentage, valueSignalId, muteButton});
         return item;

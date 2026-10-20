@@ -54,10 +54,12 @@ export default class AudioMatrixMenuOutput {
 
     _renderSlot(pin, slot, t, target) {
         const state = String(slot.state || 'OFFLINE');
-        // The slot label is authoritative; deviceName/description identify the
-        // hardware and must not rename the pin.
-        const name = slot.name || pin.name || slot.id;
-        const label = t.deviceStates?.[state] || state;
+        const boundName = slot.description || slot.deviceName;
+        const configuredName = pin.nodeId === 'octine-vibro-output'
+            && ['Vibro Output · назначьте устройство', 'Устройство вибродинамика'].includes(slot.name)
+            ? t.vibroOutput : (slot.name || pin.name || slot.id);
+        const name = state !== 'UNBOUND' && boundName ? boundName : configuredName;
+        const label = state === 'UNBOUND' ? t.assignDevice : (t.deviceStates?.[state] || state);
         // Device Slot exposes no graph Gain and no on/off parameter: report the
         // real binding state instead of fabricating controls.
         target.addMenuItem(new PopupMenu.PopupImageMenuItem(`${name || t.outputUnavailable} — ${label}`,

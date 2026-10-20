@@ -37,6 +37,7 @@ final class GnomeDeviceSlotState {
             return state;
         }
         Map<String, Object> binding = bindings.getFirst();
+        if (binding.get("name") != null) state.put("deviceName", binding.get("name"));
         DeviceDiscovery.Resolution resolution = DeviceDiscovery.resolve(snapshot.sinks(), binding);
         AudioNode node = resolution.node();
         String conflict = node == null ? "" : DeviceDiscovery.conflict(snapshot.sinks(), devices, binding, node);

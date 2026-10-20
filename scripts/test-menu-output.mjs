@@ -18,6 +18,7 @@ const Output = (await import(`data:text/javascript;base64,${Buffer.from(source).
 
 const t = {
     outputUnavailable: 'Output device unavailable', mute: 'Mute', unmute: 'Unmute',
+    assignDevice: 'Assign a device',
     deviceStates: {
         ONLINE: 'Connected', UNBOUND: 'Not bound', OFFLINE: 'Offline', CONFLICT: 'Device conflict',
         AMBIGUOUS: 'Ambiguous binding', IGNORED: 'Ignored',
@@ -41,30 +42,29 @@ assert.equal(render({nodeId: 'slot'})[0].label, 'Output device unavailable',
     'A pin without device metadata must not invent an output');
 
 const slotStates = {
-    OFFLINE: 'Vibro slot — Offline', UNBOUND: 'Vibro slot — Not bound',
-    CONFLICT: 'Vibro slot — Device conflict', AMBIGUOUS: 'Vibro slot — Ambiguous binding',
-    IGNORED: 'Vibro slot — Ignored',
+    OFFLINE: 'Rear AUX — Offline', UNBOUND: 'Vibro slot — Assign a device',
+    CONFLICT: 'Rear AUX — Device conflict', AMBIGUOUS: 'Rear AUX — Ambiguous binding',
+    IGNORED: 'Rear AUX — Ignored',
 };
 for (const [state, label] of Object.entries(slotStates)) {
     const items = render({nodeId: 'slot', name: 'Pin label', nodeType: 'device_slot',
         output: {id: 'usb', name: 'Vibro slot', deviceName: 'USB DAC', description: 'Rear AUX',
             state, available: false, message: 'detail'}});
     assert.equal(items.length, 1);
-    assert.equal(items[0].label, label, `${state} must be reported with the slot label`);
+    assert.equal(items[0].label, label, `${state} must report the assigned device when one exists`);
     assert.equal(items[0].options.reactive, false);
 }
 assert.equal(levels.length, 0, 'Device slots must never fabricate a synthetic Gain level');
 const missingState = render({nodeId: 'slot', name: 'Pin label', nodeType: 'device_slot',
     output: {id: 'usb', name: 'Vibro slot', deviceName: 'USB DAC', available: true}});
-assert.equal(missingState[0].label, 'Vibro slot — Offline',
-    'A missing binding state must be reported as OFFLINE, never invented as UNBOUND');
+assert.equal(missingState[0].label, 'USB DAC — Offline',
+    'A missing binding state must report the assigned device as OFFLINE, never invent UNBOUND');
 
 const bound = render({routeId: 'route', nodeId: 'slot', name: 'Pin label', nodeType: 'device_slot',
     output: {id: 'usb', name: 'Vibro slot', deviceName: 'USB DAC', description: 'Rear AUX',
         state: 'ONLINE', available: true}});
-assert.equal(bound[0].label, 'Vibro slot — Connected', 'ONLINE device slots show the slot label');
-assert(!bound[0].label.includes('USB DAC'), 'deviceName must not rename the pin');
-assert(!bound[0].label.includes('Rear AUX'), 'description must not rename the pin');
+assert.equal(bound[0].label, 'Rear AUX — Connected', 'ONLINE device slots show the assigned device');
+assert(bound[0].label.includes('Rear AUX'), 'The assigned device description should be visible');
 assert.equal(bound[0].icon, 'audio-card-symbolic');
 assert.equal(bound[0].options.reactive, false, 'Device Slot has no backend on/off parameter to expose');
 assert.equal(bound[0].options.can_focus, false);

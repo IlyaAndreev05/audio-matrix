@@ -37,8 +37,23 @@ class QuickSettingsConfigTest {
 
         assertEquals(List.of("sources", "outputs", "routing", "effects", groups.get(4).get("id")),
                 groups.stream().map(group -> String.valueOf(group.get("id"))).toList());
-        assertEquals("Закреплённый тактильный тракт", groups.get(4).get("name"));
+        assertEquals("Вибродинамик", groups.get(4).get("name"));
         assertFalse(groups.getFirst().get("collapsed").equals(true));
+    }
+
+    @Test void schemaUpgradeAddsBassControlsWithoutChangingCurrentLevels() {
+        Map<String, Object> config = DefaultConfig.create();
+        config.put("schema_version", 8);
+
+        ConfigMigration.upgradeConfig(config);
+
+        List<Map<String, Object>> controls = ConfigValidationValues.optionalList(config.get("quick_controls"),
+                "quick_controls", new java.util.ArrayList<>());
+        assertTrue(controls.stream().anyMatch(control -> "frequency_hz".equals(control.get("parameter_id"))
+                && "octine-bass-low-pass".equals(control.get("node_id"))));
+        assertTrue(controls.stream().anyMatch(control -> "slope_db_oct".equals(control.get("parameter_id"))
+                && "octine-bass-low-pass".equals(control.get("node_id"))));
+        assertEquals(List.of(), ConfigValidator.validate(config));
     }
 
     @Test void migrationGroupsLegacyControlsAndPinsRouteSourcesAndOutputs() {

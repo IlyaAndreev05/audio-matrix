@@ -21,8 +21,79 @@ class OctineProfileConfigTest {
                 .filter(node -> GraphCommonVibro.VIBRO_MIXER_ID.equals(node.id())).findFirst().orElseThrow();
         assertEquals(0.6, vibroMixer.inputGains().get("bass"));
         assertEquals(0.65, vibroMixer.inputGains().get("events"));
+        FilterNode bass = (FilterNode) common.nodes().stream()
+                .filter(node -> "octine-bass-low-pass".equals(node.id())).findFirst().orElseThrow();
+        assertEquals(60.0, bass.parameters().get("frequency_hz"));
+        assertEquals(48.0, bass.parameters().get("slope_db_oct"));
+        GainNode overall = (GainNode) common.nodes().stream()
+                .filter(node -> GraphCommonVibro.VIBRO_GAIN_ID.equals(node.id())).findFirst().orElseThrow();
+        assertEquals(0.6, overall.gain(), "Preset migration must not raise user output levels");
+        assertEquals(1, QuickSettingsConfig.pins(config).stream()
+                .filter(pin -> "octine-bass-low-pass".equals(pin.get("node_id"))).count());
         assertEquals(0, GraphValidator.validate(common).size());
         assertEquals(List.of(), ConfigValidator.validate(config));
+    }
+
+    @Test void schemaUpgradeMigratesOnlyTheUnchangedBassFilterAndAddsItsDetailsControls() {
+        Map<String, Object> config = DefaultConfig.create();
+        AudioGraph original = GraphCommonVibro.graph(config);
+        List<GraphNode> legacyNodes = original.nodes().stream().map(node ->
+                "octine-bass-low-pass".equals(node.id())
+                        ? new FilterNode(node.id(), "Басы · 120 Hz", GraphCommonVibro.CHANNELS, "low_pass", true,
+                                Map.of("frequency_hz", 120.0, "q", 0.70710678))
+                        : node).toList();
+        GraphCommonVibro.save(config, new AudioGraph(original.id(), original.name(), legacyNodes, original.connections()));
+        config.put("schema_version", 8);
+
+        ConfigMigration.upgradeConfig(config);
+
+        AudioGraph upgraded = GraphCommonVibro.graph(config);
+        FilterNode bass = (FilterNode) upgraded.nodes().stream()
+                .filter(node -> "octine-bass-low-pass".equals(node.id())).findFirst().orElseThrow();
+        assertEquals(60.0, bass.parameters().get("frequency_hz"));
+        assertEquals(48.0, bass.parameters().get("slope_db_oct"));
+        assertEquals("Басы · 60 Гц", bass.name());
+        List<Map<String, Object>> controls = maps(config.get("quick_controls"));
+        assertTrue(controls.stream().anyMatch(control -> "octine-bass-frequency".equals(control.get("id"))));
+        assertTrue(controls.stream().anyMatch(control -> "octine-bass-slope".equals(control.get("id"))));
+        Map<String, Object> filterPin = QuickSettingsConfig.pins(config).stream()
+                .filter(pin -> "octine-bass-low-pass".equals(pin.get("node_id"))).findFirst().orElseThrow();
+        assertEquals("COMPACT", filterPin.get("view"));
+        assertEquals(List.of(), ConfigValidator.validate(config));
+    }
+
+    @Test void schemaUpgradeLeavesCustomizedBassFilterAndLevelsUntouched() {
+        Map<String, Object> config = DefaultConfig.create();
+        AudioGraph original = GraphCommonVibro.graph(config);
+        List<GraphNode> customized = original.nodes().stream().map(node -> {
+            if ("octine-bass-low-pass".equals(node.id()))
+                return new FilterNode(node.id(), "Мой фильтр", GraphCommonVibro.CHANNELS, "low_pass", true,
+                        Map.of("frequency_hz", 90.0, "q", 1.1));
+            if (GraphCommonVibro.VIBRO_GAIN_ID.equals(node.id()))
+                return new GainNode(node.id(), node.name(), GraphCommonVibro.CHANNELS, 0.98, false);
+            if (GraphCommonVibro.VIBRO_MIXER_ID.equals(node.id()))
+                return new MixerNode(node.id(), node.name(), GraphCommonVibro.CHANNELS,
+                        Map.of("bass", 0.43, "events", 0.52));
+            return node;
+        }).toList();
+        GraphCommonVibro.save(config, new AudioGraph(original.id(), original.name(), customized, original.connections()));
+        config.put("schema_version", 8);
+
+        ConfigMigration.upgradeConfig(config);
+
+        AudioGraph upgraded = GraphCommonVibro.graph(config);
+        FilterNode bass = (FilterNode) upgraded.nodes().stream()
+                .filter(node -> "octine-bass-low-pass".equals(node.id())).findFirst().orElseThrow();
+        MixerNode mixer = (MixerNode) upgraded.nodes().stream()
+                .filter(node -> GraphCommonVibro.VIBRO_MIXER_ID.equals(node.id())).findFirst().orElseThrow();
+        GainNode gain = (GainNode) upgraded.nodes().stream()
+                .filter(node -> GraphCommonVibro.VIBRO_GAIN_ID.equals(node.id())).findFirst().orElseThrow();
+        assertEquals(90.0, bass.parameters().get("frequency_hz"));
+        assertEquals(1.1, bass.parameters().get("q"));
+        assertEquals("Мой фильтр", bass.name());
+        assertEquals(0.43, mixer.inputGains().get("bass"));
+        assertEquals(0.52, mixer.inputGains().get("events"));
+        assertEquals(0.98, gain.gain());
     }
 
     @Test void installingPresetsKeepsExistingWorkspaceAndDoesNotActivate() {

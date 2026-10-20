@@ -28,7 +28,20 @@ public final class GnomeQuickControlParameter {
     }
 
     public static Map<String, Object> describe(GraphNode node, String parameter, String language) {
-        return describe(node.type(), node.parameters(), parameter, language);
+        Map<String, Object> described = describe(node.type(), node.parameters(), parameter, language);
+        if (described == null || !(node instanceof FilterNode) || !"octine-bass-low-pass".equals(node.id()))
+            return described;
+        Map<String, Object> constrained = new LinkedHashMap<>(described);
+        if ("frequency_hz".equals(parameter)) {
+            constrained.put("minimum", 40);
+            constrained.put("maximum", 100);
+            constrained.put("scale", "linear");
+        } else if ("slope_db_oct".equals(parameter)) {
+            List<?> options = (List<?>) described.get("options");
+            constrained.put("options", options.stream().filter(option ->
+                    List.of("24", "36", "48").contains(String.valueOf(((Map<?, ?>) option).get("id")))).toList());
+        }
+        return constrained;
     }
 
     static Map<String, Object> describe(String nodeType, Map<String, Object> parameters,
@@ -49,6 +62,13 @@ public final class GnomeQuickControlParameter {
         encodedNode.put("parameters", parameters);
         String nodeType = String.valueOf(encodedNode.getOrDefault("type", ""));
         if ("filter".equals(nodeType)) {
+            if ("octine-bass-low-pass".equals(encodedNode.get("id")) && "frequency_hz".equals(parameter)) {
+                double value;
+                try { value = Double.parseDouble(rawValue); }
+                catch (NumberFormatException invalid) { throw new IllegalArgumentException("Control value is invalid"); }
+                if (toggle || !Double.isFinite(value) || value < 40 || value > 100)
+                    throw new IllegalArgumentException("Bass cutoff must be between 40 and 100 Hz");
+            }
             GnomeQuickFilterControls.apply(encodedNode, parameters, parameter, rawValue, toggle);
             return;
         }
@@ -80,6 +100,9 @@ public final class GnomeQuickControlParameter {
         encodedNode.put("parameters", parameters);
         if (!"filter".equals(String.valueOf(encodedNode.getOrDefault("type", ""))))
             throw new IllegalArgumentException("This parameter does not have choices");
+        if ("octine-bass-low-pass".equals(encodedNode.get("id")) && "slope_db_oct".equals(parameter)
+                && !List.of("24", "36", "48").contains(choice))
+            throw new IllegalArgumentException("Bass-filter slope must be 24, 36, or 48 dB/oct");
         GnomeQuickFilterControls.choose(encodedNode, parameters, parameter, choice);
     }
 

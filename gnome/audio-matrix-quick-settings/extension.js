@@ -1,5 +1,6 @@
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Gio from 'gi://Gio';
 import GioUnix from 'gi://GioUnix';
 import GLib from 'gi://GLib';
@@ -46,16 +47,23 @@ export default class AudioMatrixQuickSettingsExtension extends Extension {
         }
         try {
             const app = GioUnix.DesktopAppInfo.new('audiomatrix-AudioMatrix.desktop');
-            if (app?.launch([], null))
+            const launchContext = new Gio.AppLaunchContext();
+            launchContext.setenv('AUDIO_MATRIX_OPEN_GRAPH', '1');
+            if (app?.launch([], launchContext))
                 return;
         } catch (error) {
             console.debug(`Audio Matrix desktop launch failed: ${error}`);
         }
         try {
-            Gio.Subprocess.new(['/opt/audiomatrix/bin/AudioMatrix'], Gio.SubprocessFlags.NONE);
+            Gio.Subprocess.new(['/opt/audiomatrix/bin/AudioMatrix', '--open-graph'], Gio.SubprocessFlags.NONE);
+            return;
         } catch (error) {
             console.debug(`Audio Matrix executable launch failed: ${error}`);
         }
+        const russian = GLib.get_language_names().some(name => name.startsWith('ru'));
+        Main.notifyError('Audio Matrix', russian
+            ? 'Не удалось открыть редактор маршрутов. Проверьте установку Audio Matrix.'
+            : 'Could not open the route editor. Check that Audio Matrix is installed.');
     }
 
     disable() {

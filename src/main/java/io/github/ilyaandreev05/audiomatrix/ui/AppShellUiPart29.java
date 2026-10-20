@@ -14,11 +14,15 @@ abstract class AppShellUiPart29 extends AppShellUiPart28 {
         super(store, backend, themes);
     }
 
+    public CompletableFuture<Void> openGraphEditor() {
+        return GnomeWindowOpener.open(getScene(), () -> showPage(Page.GRAPH));
+    }
+
     protected CompletableFuture<Void> handleGnomeCommand(GnomeControlBridge.Command command) {
+        if ("open".equals(command.name())) return openGraphEditor();
         if (GnomeCommandRevision.isStale(command, store.revision()))
             return CompletableFuture.failedFuture(new IllegalStateException("GNOME command is based on an old Audio Matrix revision"));
         return switch (command.name()) {
-            case "open" -> { Platform.runLater(() -> { if (getScene() != null && getScene().getWindow() instanceof javafx.stage.Stage stage) { stage.setIconified(false); stage.toFront(); stage.requestFocus(); } }); yield CompletableFuture.completedFuture(null); }
             case "select_route" -> updateRouteConfigCommand(t("Выбран маршрут из GNOME", "Route selected from GNOME"), config -> GraphRouteLibrary.activate(config, command.value()));
             case "set_quick_group_collapsed" -> setGnomeQuickGroupCollapsed(command.value());
             case "reorder_quick_group" -> updateRouteConfigCommand(t("Изменён порядок групп GNOME", "GNOME group order changed"), config -> GnomeGroupOrder.apply(config, command.value()));

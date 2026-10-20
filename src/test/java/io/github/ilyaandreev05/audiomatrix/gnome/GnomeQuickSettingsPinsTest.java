@@ -126,7 +126,8 @@ class GnomeQuickSettingsPinsTest {
         PipeWireBackend.Snapshot snapshot = new PipeWireBackend.Snapshot(true, "", List.of(sink), List.of(),
                 List.of(), List.of(), Map.of(), sink.id(), 0);
 
-        List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config, snapshot, List.of(), List.of(), List.of());
+        List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config, snapshot,
+                GnomeControlBridge.quickControls(config), List.of(), List.of());
 
         Map<String, Object> headphones = pinFor(pins, "octine-headphones", "octine-headphones-output");
         assertEquals("outputs", headphones.get("groupId"));
@@ -147,7 +148,11 @@ class GnomeQuickSettingsPinsTest {
                 && "octine-headphones-output".equals(item.get("nodeId"))).count());
         assertEquals(1, pins.stream().filter(item -> "octine-monitor".equals(item.get("routeId"))
                 && "octine-monitor-output".equals(item.get("nodeId"))).count());
-        assertEquals(5, pins.stream().filter(item -> "octine-common-vibro".equals(item.get("routeId"))).count());
+        assertEquals(6, pins.stream().filter(item -> "octine-common-vibro".equals(item.get("routeId"))).count());
+        Map<String, Object> bassFilter = pinFor(pins, "octine-common-vibro", "octine-bass-low-pass");
+        assertEquals(List.of("octine-bass-frequency", "octine-bass-slope"),
+                ((List<Map<String, Object>>) bassFilter.get("controls")).stream()
+                        .map(control -> String.valueOf(control.get("id"))).toList());
         assertEquals(false, pins.stream().anyMatch(item -> "octine-free-switch".equals(item.get("nodeId"))));
     }
 
