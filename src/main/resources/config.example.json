@@ -1,15 +1,225 @@
 {
-  "schema_version" : 7,
-  "route_groups" : [ ],
-  "route_library" : [ ],
+  "schema_version" : 10,
+  "route_groups" : [ {
+    "id" : "main",
+    "name" : "Основной",
+    "profile_id" : "main"
+  } ],
+  "route_library" : [ {
+    "nodes" : [ {
+      "id" : "octine-main-source",
+      "name" : "Все приложения, кроме событий",
+      "type" : "dynamic_generator",
+      "channels" : [ "FL", "FR" ],
+      "parameters" : {
+        "registry" : "applications",
+        "template" : "default-application",
+        "selector" : "application:unassigned"
+      }
+    }, {
+      "id" : "octine-main-mixer",
+      "name" : "Основной микшер",
+      "type" : "mixer",
+      "channels" : [ "FL", "FR" ],
+      "parameters" : {
+        "input_gains" : {
+          "additional" : 1.0,
+          "applications" : 1.0
+        },
+        "input_mutes" : {
+          "additional" : false,
+          "applications" : false
+        }
+      }
+    }, {
+      "id" : "octine-main-switch",
+      "name" : "Маршрутизация музыки",
+      "type" : "switch",
+      "channels" : [ "FL", "FR" ],
+      "parameters" : {
+        "active_links" : [ "in->monitor" ],
+        "multiple" : true,
+        "output_ports" : [ "monitor", "vibro" ],
+        "input_ports" : [ "in" ]
+      }
+    }, {
+      "id" : "octine-monitor-output",
+      "name" : "Монитор",
+      "type" : "device_slot",
+      "channels" : [ "FL", "FR" ],
+      "parameters" : {
+        "volume" : 0.0,
+        "device_id" : "system_default",
+        "muted" : false
+      }
+    }, {
+      "id" : "octine-vibro-music-volume",
+      "name" : "Музыка на вибродинамик",
+      "type" : "gain",
+      "channels" : [ "FL", "FR" ],
+      "parameters" : {
+        "gain" : 0.6,
+        "muted" : false
+      }
+    }, {
+      "id" : "octine-event-source",
+      "name" : "Звуки событий",
+      "type" : "source",
+      "channels" : [ "FL", "FR" ],
+      "parameters" : {
+        "selector" : "application:io.github.ilyaandreev05.eventsoundstudio"
+      }
+    }, {
+      "id" : "octine-vibro-events-volume",
+      "name" : "Громкость событий",
+      "type" : "gain",
+      "channels" : [ "FL", "FR" ],
+      "parameters" : {
+        "gain" : 0.65,
+        "muted" : false
+      }
+    }, {
+      "id" : "octine-vibro-mixer",
+      "name" : "Сумматор вибродинамика",
+      "type" : "mixer",
+      "channels" : [ "FL", "FR" ],
+      "parameters" : {
+        "input_gains" : {
+          "music" : 1.0,
+          "events" : 1.0
+        },
+        "input_mutes" : {
+          "music" : false,
+          "events" : false
+        }
+      }
+    }, {
+      "id" : "octine-vibro-gain",
+      "name" : "Общая сила вибродинамика",
+      "type" : "gain",
+      "channels" : [ "FL", "FR" ],
+      "parameters" : {
+        "gain" : 0.6,
+        "muted" : false
+      }
+    }, {
+      "id" : "octine-vibro-limiter",
+      "name" : "Ограничитель",
+      "type" : "filter",
+      "channels" : [ "FL", "FR" ],
+      "parameters" : {
+        "ceiling_db" : -1.0,
+        "release_ms" : 80.0,
+        "processor" : "limiter",
+        "lookahead_ms" : 5.0,
+        "enabled" : true
+      }
+    }, {
+      "id" : "octine-vibro-output",
+      "name" : "Устройство вибродинамика",
+      "type" : "device_slot",
+      "channels" : [ "FL", "FR" ],
+      "parameters" : {
+        "volume" : 0.0,
+        "device_id" : "",
+        "muted" : false
+      }
+    } ],
+    "id" : "main",
+    "name" : "Основной",
+    "connections" : [ {
+      "from_port" : "out",
+      "from_node" : "octine-main-source",
+      "gain" : 1.0,
+      "to_port" : "applications",
+      "to_node" : "octine-main-mixer",
+      "id" : "octine-link-main-input",
+      "enabled" : true
+    }, {
+      "from_port" : "out",
+      "from_node" : "octine-main-mixer",
+      "gain" : 1.0,
+      "to_port" : "in",
+      "to_node" : "octine-main-switch",
+      "id" : "octine-link-main-switch",
+      "enabled" : true
+    }, {
+      "from_port" : "monitor",
+      "from_node" : "octine-main-switch",
+      "gain" : 1.0,
+      "to_port" : "in",
+      "to_node" : "octine-monitor-output",
+      "id" : "octine-link-monitor-output",
+      "enabled" : true
+    }, {
+      "from_port" : "vibro",
+      "from_node" : "octine-main-switch",
+      "gain" : 1.0,
+      "to_port" : "in",
+      "to_node" : "octine-vibro-music-volume",
+      "id" : "octine-link-music-volume",
+      "enabled" : true
+    }, {
+      "from_port" : "out",
+      "from_node" : "octine-vibro-music-volume",
+      "gain" : 1.0,
+      "to_port" : "music",
+      "to_node" : "octine-vibro-mixer",
+      "id" : "octine-link-music-merge",
+      "enabled" : true
+    }, {
+      "from_port" : "out",
+      "from_node" : "octine-event-source",
+      "gain" : 1.0,
+      "to_port" : "in",
+      "to_node" : "octine-vibro-events-volume",
+      "id" : "octine-link-event-volume",
+      "enabled" : true
+    }, {
+      "from_port" : "out",
+      "from_node" : "octine-vibro-events-volume",
+      "gain" : 1.0,
+      "to_port" : "events",
+      "to_node" : "octine-vibro-mixer",
+      "id" : "octine-link-event-merge",
+      "enabled" : true
+    }, {
+      "from_port" : "out",
+      "from_node" : "octine-vibro-mixer",
+      "gain" : 1.0,
+      "to_port" : "in",
+      "to_node" : "octine-vibro-gain",
+      "id" : "octine-link-vibro-total",
+      "enabled" : true
+    }, {
+      "from_port" : "out",
+      "from_node" : "octine-vibro-gain",
+      "gain" : 1.0,
+      "to_port" : "in",
+      "to_node" : "octine-vibro-limiter",
+      "id" : "octine-link-vibro-limiter",
+      "enabled" : true
+    }, {
+      "from_port" : "out",
+      "from_node" : "octine-vibro-limiter",
+      "gain" : 1.0,
+      "to_port" : "in",
+      "to_node" : "octine-vibro-output",
+      "id" : "octine-link-vibro-output",
+      "enabled" : true
+    } ],
+    "profile_id" : "main",
+    "group_id" : "main"
+  } ],
   "saved_copies" : [ ],
   "graph_ui_layout" : { },
   "graph_ui_matrix_views" : { },
   "graph_ui_scale" : { },
+  "graph_ui_subgraphs" : { },
   "quick_controls" : [ ],
-  "active_route" : "",
+  "active_route" : "main",
   "app" : "audio-matrix",
-  "active_profile" : "desk",
+  "active_profile" : "main",
   "ui" : {
     "language" : "ru",
     "theme" : "system",
@@ -30,8 +240,8 @@
     "show_mute" : true,
     "open_full_settings" : true,
     "groups" : [ {
-      "id" : "sources",
-      "name" : "Источники",
+      "id" : "applications",
+      "name" : "Приложения",
       "order" : 0,
       "collapsed" : false
     }, {
@@ -41,16 +251,80 @@
       "collapsed" : false
     }, {
       "id" : "routing",
-      "name" : "Коммутация и управление",
+      "name" : "Маршрутизация",
       "order" : 2,
       "collapsed" : false
     }, {
-      "id" : "effects",
-      "name" : "Обработка звука",
+      "id" : "events",
+      "name" : "Звуки событий",
       "order" : 3,
       "collapsed" : false
     } ],
-    "pins" : [ ]
+    "pins" : [ {
+      "id" : "pin-5d4ffff9-6bee-45b9-9031-24311ef74f26",
+      "route_id" : "main",
+      "node_id" : "octine-main-source",
+      "group_id" : "applications",
+      "order" : 0,
+      "view" : "DEFAULT",
+      "control_ids" : [ ]
+    }, {
+      "id" : "pin-38689e04-1976-4a06-9b14-d413d76c6f47",
+      "route_id" : "main",
+      "node_id" : "octine-monitor-output",
+      "group_id" : "outputs",
+      "order" : 0,
+      "view" : "DEFAULT",
+      "control_ids" : [ ]
+    }, {
+      "id" : "pin-5b59c335-8933-4c6f-b050-4be29ae0f4c1",
+      "route_id" : "main",
+      "node_id" : "octine-vibro-output",
+      "group_id" : "outputs",
+      "order" : 1,
+      "view" : "DEFAULT",
+      "control_ids" : [ ]
+    }, {
+      "id" : "pin-5238a120-4567-48da-b4d0-1c04d36e2080",
+      "route_id" : "main",
+      "node_id" : "octine-main-switch",
+      "group_id" : "routing",
+      "order" : 0,
+      "view" : "DEFAULT",
+      "control_ids" : [ ]
+    }, {
+      "id" : "pin-6a83c204-a30c-4a0f-9ec1-ca6807afb37b",
+      "route_id" : "main",
+      "node_id" : "octine-vibro-gain",
+      "group_id" : "routing",
+      "order" : 1,
+      "view" : "DEFAULT",
+      "control_ids" : [ ]
+    }, {
+      "id" : "pin-69c3316f-7706-42da-a00f-109a0a41c8a0",
+      "route_id" : "main",
+      "node_id" : "octine-vibro-music-volume",
+      "group_id" : "routing",
+      "order" : 2,
+      "view" : "DEFAULT",
+      "control_ids" : [ ]
+    }, {
+      "id" : "pin-5bc6d77f-e3d3-4a7e-880b-423fc3392bd5",
+      "route_id" : "main",
+      "node_id" : "octine-event-source",
+      "group_id" : "events",
+      "order" : 0,
+      "view" : "DEFAULT",
+      "control_ids" : [ ]
+    }, {
+      "id" : "pin-e865b1dc-b566-499e-bd52-800222bff0fb",
+      "route_id" : "main",
+      "node_id" : "octine-vibro-events-volume",
+      "group_id" : "events",
+      "order" : 1,
+      "view" : "DEFAULT",
+      "control_ids" : [ ]
+    } ]
   },
   "engine" : {
     "backend" : "pipewire",
@@ -114,12 +388,12 @@
     }
   },
   "profiles" : [ {
-    "id" : "desk",
-    "name" : "Рабочий стол",
-    "mode" : "hybrid",
-    "selected_route_id" : "",
+    "id" : "main",
+    "name" : "Основной",
+    "mode" : "multi-output",
+    "selected_route_id" : "main",
     "default_output" : "system_default",
-    "active_buses" : [ "main", "music", "effects" ],
+    "active_buses" : [ ],
     "active_routes" : [ ],
     "device_overrides" : { }
   } ],

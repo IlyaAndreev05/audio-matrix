@@ -4,7 +4,7 @@ plugins {
 }
 
 group = 'io.github.ilyaandreev05'
-version = '0.3.9'
+version = '0.4.0'
 
 repositories { mavenCentral() }
 
@@ -49,9 +49,27 @@ tasks.register('compileLimiterPlugin', Exec) {
     commandLine 'cc', '-std=c11', '-O2', '-fPIC', '-shared', '-Wall', '-Wextra', '-Werror',
             '-o', limiterOutput.absolutePath, limiterSource.absolutePath, '-lm'
 }
+def mixerHelperSource = file('src/main/native/audiomatrix_mixer_helper.c')
+def mixerHelperOutputDir = layout.buildDirectory.dir('generated-resources/mixer').get().asFile
+def mixerHelperOutput = new File(mixerHelperOutputDir, 'audiomatrix_mixer_helper')
+tasks.register('compileMixerHelper', Exec) {
+    inputs.file(mixerHelperSource)
+    outputs.file(mixerHelperOutput)
+    doFirst { mixerHelperOutputDir.mkdirs() }
+    commandLine 'cc', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror',
+            '-o', mixerHelperOutput.absolutePath, mixerHelperSource.absolutePath,
+            '-l:libwireplumber-0.5.so.0', '-l:libgobject-2.0.so.0', '-l:libglib-2.0.so.0'
+}
 tasks.named('processResources') {
-    dependsOn tasks.named('compileLimiterPlugin')
+    dependsOn tasks.named('compileLimiterPlugin'), tasks.named('compileMixerHelper')
     from(limiterOutputDir) { into 'native' }
+    from(mixerHelperOutputDir) { into 'native' }
+}
+
+tasks.register('packageFirefoxExtension', Zip) {
+    from 'firefox/tab-control'
+    archiveFileName = 'audio-matrix-tabs.xpi'
+    destinationDirectory = layout.buildDirectory.dir('firefox')
 }
 
 def limiterHarnessSource = file('src/test/native/limiter_harness.c')
@@ -70,7 +88,7 @@ tasks.named('test') {
 
 // Build a self-contained Debian package from the Gradle application distribution.
 tasks.register('packageDeb', Exec) {
-    dependsOn tasks.installDist, tasks.named('verifyClassSize')
+    dependsOn tasks.installDist, tasks.named('verifyClassSize'), tasks.named('packageFirefoxExtension')
     notCompatibleWithConfigurationCache('Debian package post-processing uses Gradle project file helpers')
     doFirst {
         def jdkHome = project.findProperty('packageJdkHome') ?: System.getProperty('java.home')
@@ -105,7 +123,7 @@ tasks.register('packageDeb', Exec) {
         def packageControl = new File(extracted, 'DEBIAN/control')
         def controlText = java.nio.file.Files.readString(packageControl.toPath())
         controlText = controlText.replaceFirst(/(?m)^Version:.*$/, "Version: ${project.version}")
-        controlText = controlText.replaceFirst(/(?m)^Depends: (.*)$/, 'Depends: $1, python3')
+        controlText = controlText.replaceFirst(/(?m)^Depends: (.*)$/, 'Depends: $1, python3, libwireplumber-0.5-0')
         java.nio.file.Files.writeString(packageControl.toPath(), controlText)
         def unitDirectory = new File(extracted, 'opt/audiomatrix/lib/systemd/user')
         unitDirectory.mkdirs()
@@ -126,6 +144,11 @@ tasks.register('packageDeb', Exec) {
         chromeHostDirectory.mkdirs()
         copy { from file('chrome/native-host'); exclude 'test_host.py', '__pycache__/**'; into chromeHostDirectory }
         new File(chromeHostDirectory, 'audio-matrix-tab-capture.py').setExecutable(true, false)
+        def firefoxDirectory = new File(extracted, 'opt/audiomatrix/lib/firefox/tab-control')
+        firefoxDirectory.mkdirs()
+        copy { from file('firefox/tab-control'); into firefoxDirectory }
+        def firefoxPackageDirectory = new File(extracted, 'opt/audiomatrix/lib/firefox')
+        copy { from layout.buildDirectory.file('firefox/audio-matrix-tabs.xpi').get().asFile; into firefoxPackageDirectory }
         def helperDirectory = new File(extracted, 'opt/audiomatrix/bin')
         helperDirectory.mkdirs()
         copy { from file('src/main/systemd/user/audiomatrix-system-sink.sh'); into helperDirectory }
