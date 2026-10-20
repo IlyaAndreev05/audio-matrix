@@ -3,60 +3,43 @@ package io.github.ilyaandreev05.audiomatrix.gnome;
 import io.github.ilyaandreev05.audiomatrix.audio.AudioNode;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.config.DefaultConfig;
-import io.github.ilyaandreev05.audiomatrix.config.QuickSettingsConfig;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
 import io.github.ilyaandreev05.audiomatrix.graph.DeviceSlotNode;
-import io.github.ilyaandreev05.audiomatrix.graph.GainNode;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCommonVibro;
-import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayList;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.*;
 
 class GnomeCommonGraphStateTest {
-    @Test void sharedPinnedControlsReadPersistedStateAcrossRoutesAndHardwareDisconnects() {
+    @Test void apiV4PublishesUnifiedGraphHierarchyCapabilitiesAndSavedLevelsOffline() {
         Map<String, Object> config = DefaultConfig.create();
-        String routeId = GraphCommonVibro.COMMON_ROUTE_ID;
-        AudioGraph defaults = GraphCommonVibro.defaults();
-        List<GraphNode> nodes = new ArrayList<>(defaults.nodes());
-        GraphNode leveled = nodes.stream().filter(node -> GraphCommonVibro.VIBRO_GAIN_ID.equals(node.id()))
+        AudioGraph graph = GraphCodec.fromMap(((List<Map<String, Object>>) config.get("route_library")).getFirst());
+        Map<String, Object> runtime = new LinkedHashMap<>(GraphCodec.toMap(graph));
+        List<Map<String, Object>> nodes = (List<Map<String, Object>>) runtime.get("nodes");
+        Map<String, Object> gain = nodes.stream().filter(node -> "octine-vibro-gain".equals(node.get("id")))
                 .findFirst().orElseThrow();
-        nodes.set(nodes.indexOf(leveled), new GainNode(GraphCommonVibro.VIBRO_GAIN_ID, leveled.name(),
-                GraphCommonVibro.CHANNELS, .38, true));
-        GraphCommonVibro.save(config, new AudioGraph(defaults.id(), defaults.name(), nodes, defaults.connections()));
-        QuickSettingsConfig.pins(config).clear();
-        QuickSettingsConfig.pinNode(config, routeId, GraphCommonVibro.MAIN_SOURCE_ID, "sources", 0, "EXPANDED");
-        QuickSettingsConfig.pinNode(config, routeId, GraphCommonVibro.VIBRO_GAIN_ID, "routing", 1, "EXPANDED");
-        QuickSettingsConfig.pinNode(config, routeId, GraphCommonVibro.VIBRO_OUTPUT_ID, "outputs", 2, "EXPANDED");
-        config.put("quick_controls", List.of(DefaultConfig.map("id", "shared-volume", "route_id", routeId,
-                "node_id", GraphCommonVibro.VIBRO_GAIN_ID, "parameter_id", "gain")));
+        gain.put("parameters", DefaultConfig.map("gain", .38, "muted", true));
+        ((List<Map<String, Object>>) config.get("route_library")).set(0, runtime);
         PipeWireBackend.Snapshot snapshot = PipeWireBackend.Snapshot.offline("disconnected");
 
-        for (String active : List.of("octine-monitor", "octine-headphones", "octine-free", "")) {
-            config.put("active_route", active);
-            List<Map<String, Object>> controls = GnomeControlBridge.quickControls(config);
-            assertEquals(1, controls.size());
-            assertEquals(.38, controls.getFirst().get("value"));
-            assertEquals(true, controls.getFirst().get("muted"));
-            assertEquals(true, controls.getFirst().get("pinned"));
-            assertEquals(routeId, controls.getFirst().get("routeId"));
-            List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config, snapshot, controls, List.of(), List.of());
-            assertEquals(3, pins.size());
-            assertEquals(true, pins.getFirst().get("pinned"));
-            assertEquals(false, pins.getFirst().get("tabAdapterAvailable"));
-            Map<?, ?> gain = (Map<?, ?>) pins.get(1).get("gain");
-            assertEquals(routeId, gain.get("routeId"));
-            assertEquals(GraphCommonVibro.VIBRO_GAIN_ID, gain.get("nodeId"));
-            assertEquals(.38, gain.get("volume"));
-            assertEquals(true, gain.get("muted"));
-            Map<?, ?> output = (Map<?, ?>) pins.getLast().get("output");
-            assertEquals("UNBOUND", output.get("state"));
-            assertEquals(false, output.get("available"));
-        }
+        Map<String, Object> state = GnomeGraphState.build(config, snapshot);
+        assertEquals("main", state.get("routeId"));
+        assertEquals(List.of(), state.get("composites"));
+        List<Map<String, Object>> published = (List<Map<String, Object>>) state.get("nodes");
+        Map<String, Object> overall = published.stream().filter(node -> "octine-vibro-gain".equals(node.get("id")))
+                .findFirst().orElseThrow();
+        assertEquals(.38, overall.get("savedVolume"));
+        assertEquals(true, overall.get("savedMuted"));
+        assertEquals(false, overall.get("available"));
+        assertEquals(true, ((Map<?, ?>) overall.get("capabilities")).get("volume"));
+        assertEquals("offline", overall.get("runtimeState"));
+        assertTrue(published.stream().anyMatch(node -> "dynamic_generator".equals(node.get("type"))));
+        assertNull(overall.get("appliedVolume"));
     }
 
     @Test void deviceSlotsReportBindingTruthInsteadOfAssumingTheDefaultSink() {

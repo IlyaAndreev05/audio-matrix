@@ -156,46 +156,22 @@ abstract class AppShellUiPart17 extends AppShellUiPart16 {
     }
 
     protected VBox profilesPage() {
-        VBox page = page(t("Монитор, Наушники и Свободный используют один общий закреплённый Vibro-тракт. Неизвестные выходы требуют явной привязки.", "Monitor, Headphones and Free share one pinned Vibro path. Unknown outputs require explicit binding."));
-        Map<String,Object> config=store.snapshot();
-        List<Map<String, Object>> profiles = maps(config.get("profiles"));
-        VBox list = card(t("Профили", "Profiles"));
-        String active = string(config.get("active_profile"), "desk");
-        List<Map<String, Object>> visibleProfiles = profiles.stream().filter(profile -> matchesSearch(string(profile.get("name"), "") + " " + string(profile.get("id"), "") + " " + string(profile.get("mode"), "") + " " + outputReferenceName(config,string(profile.get("default_output"),"system_default")), search.getText())).toList();
-        if (visibleProfiles.isEmpty()) list.getChildren().add(label(t("Профили не найдены.", "No profiles found."), "muted"));
-        for (Map<String, Object> profile : visibleProfiles) {
-            String id = string(profile.get("id"), "");
-            HBox row = new HBox(12); row.setAlignment(Pos.CENTER_LEFT); row.getStyleClass().add("node-card");
-            int graphCount=GraphRouteLibrary.routesForProfile(config,id).size();
-            VBox info = new VBox(4, label(string(profile.get("name"), id), "card-title"), label(id + " · " + string(profile.get("mode"), "hybrid") + " · " + outputReferenceName(config,string(profile.get("default_output"),"system_default")) + " · " + graphCount + t(" графов"," graphs"), "muted"));
-            Region spacer = new Region(); HBox.setHgrow(spacer, Priority.ALWAYS);
-            row.getChildren().addAll(info, spacer);
-            if (id.equals(active)) row.getChildren().add(label(t("Активен", "Active"), "accent"));
-            else row.getChildren().add(actionButton(t("Активировать", "Activate"), () -> activateProfile(id)));
-            row.getChildren().add(actionButton(t("Переименовать", "Rename"), () -> renameProfile(id)));
-            row.getChildren().add(actionButton(t("Дублировать профиль и графы", "Duplicate profile and graphs"), () -> copyProfile(id)));
-            if (profiles.size() > 1) row.getChildren().add(actionButton(t("Удалить", "Delete"), () -> deleteProfile(id)));
-            list.getChildren().add(row);
-        }
-        list.getChildren().add(actionButton(t("Новый профиль", "New profile"), this::createProfile));
-        if (!Boolean.TRUE.equals(config.get("octine_profiles_available")))
-            list.getChildren().add(actionButton(t("Добавить профили Монитор / Наушники / Свободный…", "Add Monitor / Headphones / Free profiles…"),
-                    () -> updateRouteConfig(t("Добавить общие профили Octine", "Add Octine presets"), GraphProfileLibrary::installOctineProfiles)));
-        page.getChildren().add(list);
-        page.getChildren().add(GraphVibroControls.create(config,this::t,
-                change->updateRouteConfig(t("Изменить общий Vibro", "Change common Vibro"),change)));
-        VBox presets = card(t("Режимы выхода", "Output modes"));
-        presets.getChildren().addAll(label(t("Haptic · Subwoofer · Speaker · Hybrid · Multi-output · Off", "Haptic · Subwoofer · Speaker · Hybrid · Multi-output · Off"), "card-title"),
-                label(t("Haptic пропускает шины с ролью effects на выходы haptic_output; Subwoofer — шину subwoofer на выход subwoofer; Speaker — маршруты на speaker. Назначьте роли в редакторах шин и устройств. Без роли специальный маршрут будет пропущен.",
-                        "Haptic routes effects buses to haptic_output devices; Subwoofer routes the subwoofer bus to a subwoofer output; Speaker keeps routes to speaker outputs. Set roles in bus and device editors. Specialized routes without matching roles are skipped."), "muted"));
-        ComboBox<String> mode = new ComboBox<>(); mode.getItems().addAll("haptic", "subwoofer", "speaker", "hybrid", "multi-output", "off");
-        mode.setValue(activeProfile().getOrDefault("mode", "hybrid").toString()); mode.setAccessibleText(t("Режим профиля", "Profile mode"));
-        mode.setOnAction(e -> updateRouteConfig(t("Изменён режим выхода профиля", "Profile output mode changed"),
-                updated -> activeProfile(updated).put("mode", mode.getValue()))); presets.getChildren().add(mode);
-        page.getChildren().add(presets);
+        VBox page = page(t("В Audio Matrix используется один профиль «Основной». Все источники, маршруты и уровни редактируются в едином графе.",
+                "Audio Matrix uses one profile, Main. All sources, routes, and levels are edited in one graph."));
+        Map<String,Object> config = store.snapshot();
+        VBox main = card(t("Основной", "Main"));
+        main.getChildren().addAll(label(t("Единый граф маршрутов", "Unified route graph"), "card-title"),
+                label(t("Монитор, вибродинамик, приложения и звуки событий управляются независимо в редакторе графа.",
+                        "Monitor, haptic output, applications, and event sounds are controlled independently in the graph editor."), "muted"),
+                actionButton(t("Открыть редактор маршрутов", "Open route editor"), () -> showPage(Page.GRAPH)));
+        page.getChildren().add(main);
         page.getChildren().add(routeHistoryCard());
         VBox importExport = card(t("Резервная копия и перенос", "Backup and transfer"));
-        importExport.getChildren().addAll(label(t("ZIP включает JSON-профили, связи, маршруты и все указанные файлы измерений; перед импортом проверяются manifest и контрольные суммы.", "ZIP includes JSON profiles, links, routes, and referenced measurement files; the manifest and checksums are validated before import."), "muted"),
+        String archive = String.valueOf(config.getOrDefault("migration_archive", "")).isBlank()
+                ? t("Старые профили остаются в резервной копии перед миграцией.", "Previous profiles remain in the pre-migration backup.")
+                : t("Предыдущая конфигурация и профили сохранены в архиве миграции.", "The previous configuration and profiles are preserved in the migration archive.");
+        importExport.getChildren().addAll(label(t("ZIP включает граф маршрутов и указанные файлы измерений; перед импортом проверяются manifest и контрольные суммы.", "ZIP includes the route graph and referenced measurement files; the manifest and checksums are validated before import."), "muted"),
+                label(archive, "muted"),
                 actionButton(t("Экспортировать ZIP…", "Export ZIP…"), this::exportArchive),
                 actionButton(t("Проверить и импортировать ZIP…", "Preview and import ZIP…"), this::importArchive),
                 label(t("После подтверждения импорт заменяет config.json. Совпавшие правила могут сразу изменить громкость/mute устройств и потоков. Активный граф маршрутов обновится; если импорт включает apply_on_start, маршруты могут примениться сразу. Пропавшие или неоднозначные selectors можно сопоставить с текущим устройством либо оставить offline.", "After confirmation, import replaces config.json. Matching rules may immediately change device/stream volume or mute. An active route graph will refresh; imported apply_on_start may apply routes immediately. Missing or ambiguous selectors can be mapped to a current device or kept offline."), "warning"));

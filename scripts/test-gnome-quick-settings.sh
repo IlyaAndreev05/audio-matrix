@@ -68,10 +68,9 @@ rg -q 'if \(!hasAvailableMenuState\(snapshot\)\) return;' "$extension_source/men
 rg -q 'PopupMenu\.PopupMenuSection' "$extension_source"
 rg -q 'St\.ScrollView' "$extension_source"
 rg -q 'updateMenuControls' "$extension_source"
-rg -q 'set_graph_output_volume' "$extension_source/menu-output.js"
+rg -q 'setNodeVolume' "$extension_source/menu-output.js"
 rg -q 'graphGainNodeId' "$extension_source/menu-output.js"
-rg -q 'set_graph_gain' "$extension_source/menu-output.js"
-rg -q 'toggle_graph_gain_mute' "$extension_source/menu-output.js"
+rg -q 'setNodeMuted' "$extension_source/menu-output.js"
 rg -q 'graph-gain' "$extension_source/menu-state.js"
 rg -q 't\.outputUnavailable' "$extension_source/menu-output.js"
 rg -q "outputUnavailable: 'Устройство вывода недоступно'" "$extension_source/menu-text.js"
@@ -82,12 +81,16 @@ rg -q 'select_route' "$extension_source"
 rg -q 'set_quick_group_collapsed' "$extension_source"
 rg -q "set_quick_control" "$extension_source"
 rg -q "set_quick_control_choice" "$extension_source"
+rg -q 'setRouteEnabled' "$extension_source/menu-links.js"
 rg -q 'this\._links\.render' "$extension_source/menu-renderer.js"
 rg -q 'menuStructureSignature' "$extension_source/menu-renderer.js"
 rg -q 'menuLevelRows' "$extension_source/menu-renderer.js"
 rg -q 'applications.length === 1' "$extension_source/menu-applications.js"
-rg -q 'set_mixer_input_volume' "$extension_source"
-rg -q 'toggle_mixer_input_mute' "$extension_source"
+rg -q "pin.nodeType === 'mixer'" "$extension_source/menu-groups.js"
+if rg -q 't\.bassMusic|set_mixer_input_volume|toggle_mixer_input_mute' "$extension_source"; then
+    echo 'Merge pins must not expose hidden per-input Gain or bass-only controls' >&2
+    exit 1
+fi
 rg -q "PopupMenu\.PopupMenuItem\(label\)" "$extension_source/menu-links.js"
 rg -q 'Atk\.Role\.RADIO_BUTTON' "$extension_source/menu-links.js"
 rg -q 'control\.multiple' "$extension_source/menu-links.js"
@@ -120,7 +123,7 @@ gnome-extensions pack "$extension_source" --force --out-dir "$scratch" \
     --extra-source=menu-lease.js \
     --extra-source=volume-menu-adapter.js
 unzip -t "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip"
-unzip -p "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" metadata.json | rg '"version": 17'
+unzip -p "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" metadata.json | rg '"version": 18'
 for module in menu-text.js state-client.js menu-rows.js menu-applications.js menu-links.js menu-layout.js menu-control-scale.js menu-matrix.js menu-mixer.js menu-output.js menu-disclosure.js menu-groups.js menu-renderer.js menu-state.js menu-lease.js volume-menu-adapter.js; do
     unzip -Z1 "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" | grep -Fxq "$module"
 done

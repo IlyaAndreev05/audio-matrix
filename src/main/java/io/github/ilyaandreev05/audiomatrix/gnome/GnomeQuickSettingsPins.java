@@ -1,6 +1,7 @@
 package io.github.ilyaandreev05.audiomatrix.gnome;
 
 import io.github.ilyaandreev05.audiomatrix.audio.AudioNode;
+import io.github.ilyaandreev05.audiomatrix.audio.AudioMatrixOwnedStream;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.config.QuickSettingsConfig;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
@@ -13,6 +14,7 @@ import io.github.ilyaandreev05.audiomatrix.graph.FilterNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GainNode;
 import io.github.ilyaandreev05.audiomatrix.graph.MixerNode;
 import io.github.ilyaandreev05.audiomatrix.graph.OutputNode;
+import io.github.ilyaandreev05.audiomatrix.graph.RouterNode;
 import io.github.ilyaandreev05.audiomatrix.graph.SourceNode;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -55,6 +57,8 @@ final class GnomeQuickSettingsPins {
             Map<String, Object> state = pinState(pin, node);
             state.put("pinned", common);
             state.put("controls", controlsFor(pin, quickControls));
+            if (node instanceof RouterNode router && router.multiple())
+                state.put("routeControl", routeControl(pinRouteId, router, pinGraph));
             if (node instanceof SourceNode source) {
                 List<Map<String, Object>> sourceApplications = applicationsFor(source, applications, pinGraph);
                 state.put("applications", sourceApplications);
@@ -139,6 +143,24 @@ final class GnomeQuickSettingsPins {
         return List.copyOf(result);
     }
 
+    private static Map<String, Object> routeControl(String routeId, RouterNode router, AudioGraph graph) {
+        List<GraphConnection> inputs = graph.connections().stream().filter(GraphConnection::enabled)
+                .filter(edge -> router.id().equals(edge.toNode())).toList();
+        List<GraphConnection> outputs = graph.connections().stream().filter(GraphConnection::enabled)
+                .filter(edge -> router.id().equals(edge.fromNode())).toList();
+        List<Map<String, Object>> options = new ArrayList<>();
+        for (GraphConnection input : inputs) for (GraphConnection output : outputs) {
+            GraphNode target = graph.nodes().stream().filter(node -> node.id().equals(output.toNode()))
+                    .findFirst().orElse(null);
+            options.add(Map.of("id", input.toPort() + "->" + output.fromPort(),
+                    "label", target == null ? output.fromPort() : target.name()));
+        }
+        return Map.of("id", "route:" + routeId + ":" + router.id(), "routeId", routeId,
+                "nodeId", router.id(), "nodeType", "switch", "kind", "choice",
+                "label", "Музыкальный маршрут", "multiple", true,
+                "value", router.activeLinks(), "options", options);
+    }
+
     private static List<Map<String, Object>> applicationsFor(SourceNode source,
                                                               List<Map<String, Object>> applications,
                                                               AudioGraph graph) {
@@ -152,14 +174,21 @@ final class GnomeQuickSettingsPins {
     private static boolean matches(String selector, Map<String, Object> app, List<String> explicit) {
         String appId = String.valueOf(app.getOrDefault("application_id", ""));
         String process = String.valueOf(app.getOrDefault("process", ""));
+        if ("io.github.ilyaandreev05.eventsoundstudio".equals(appId)
+                || AudioMatrixOwnedStream.matches(applicationNode(app))) return false;
         if (selector.startsWith("application:") && !selector.equals("application:*")
                 && !selector.equals("application:unassigned"))
             return selector.substring("application:".length()).equals(appId);
         if (selector.startsWith("process:")) return selector.substring("process:".length()).equals(process);
-        if (selector.equals("application:unassigned")) return appId.isBlank() && process.isBlank();
-        if (selector.equals("application:*"))
+        if (selector.equals("application:unassigned") || selector.equals("application:*"))
             return explicit.stream().noneMatch(value -> value.equals("application:" + appId) || value.equals("process:" + process));
         return false;
+    }
+
+    private static AudioNode applicationNode(Map<String, Object> app) {
+        return new AudioNode(-1, "", "", "Stream/Output/Audio", "", String.valueOf(app.getOrDefault("name", "")),
+                String.valueOf(app.getOrDefault("process", "")), String.valueOf(app.getOrDefault("application_id", "")),
+                2, List.of(), 1.0, false, null);
     }
 
     private static Map<String, Object> outputFor(OutputNode output, AudioGraph graph,

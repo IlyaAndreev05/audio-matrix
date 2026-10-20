@@ -32,6 +32,10 @@ function createScrollableGroups(section) {
 
 function updateMenuControls(rows, toggles, linkRows, matrixRows, linkRenderer, matrixRenderer, menuRows, state, t) {
     if (!state) return;
+    for (const pin of state.quickPins || []) {
+        if (pin.routeControl)
+            linkRenderer.update(linkRows.get(String(pin.routeControl.id)), pin.routeControl);
+    }
     for (const [id, source] of menuLevelRows(state))
         updateLevelRow(rows, menuRows, id, source, t);
     for (const control of state.quickControls || []) {
@@ -116,6 +120,7 @@ export default class AudioMatrixMenuRenderer {
             send: (name, value) => this._send(name, value),
             disclosures: this._disclosures,
             applications: this._applications,
+            links: this._links,
             mixer: this._mixer,
             output: this._output,
             renderControls: (controls, t, target) => this._renderControls(controls, t, target),
@@ -143,7 +148,7 @@ export default class AudioMatrixMenuRenderer {
         this._linkRows.clear();
         this._matrixRows.clear();
         this._disclosures.resetRows();
-        const {state, available, language, commandError} = snapshot;
+        const {state, available, language, commandError, apiMismatch} = snapshot;
         const t = TEXT[language];
         this._section.removeAll();
         this._section.actor.set_style('max-width: 24em;');
@@ -152,7 +157,7 @@ export default class AudioMatrixMenuRenderer {
         if (commandError)
             this._rows.addStatus(`${t.commandError}: ${commandError}`, 'dialog-warning-symbolic');
         if (!available) {
-            this._rows.addStatus(state ? t.unavailable : t.connecting, 'dialog-information-symbolic');
+            this._rows.addStatus(apiMismatch || (state ? t.unavailable : t.connecting), 'dialog-information-symbolic');
             this._rows.addAction(t.open, () => this._onOpen(false), 'preferences-system-symbolic');
             this._structure = structure;
             return;

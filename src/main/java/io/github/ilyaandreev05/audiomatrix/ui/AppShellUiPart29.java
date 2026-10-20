@@ -28,8 +28,6 @@ abstract class AppShellUiPart29 extends AppShellUiPart28 {
             case "reorder_quick_group" -> updateRouteConfigCommand(t("Изменён порядок групп GNOME", "GNOME group order changed"), config -> GnomeGroupOrder.apply(config, command.value()));
             case "set_quick_pin_view" -> setGnomeQuickPinView(command.value());
             case "set_quick_matrix_view" -> setGnomeMatrixView(command.value());
-            case "select_output" -> { Platform.runLater(() -> setNotice(t("Выходы выбираются в графе маршрутов.", "Output routing is selected in the route graph."), false)); yield CompletableFuture.completedFuture(null); }
-            case "toggle_mute" -> { AudioNode node=activeOutputNode(); if(node==null)yield CompletableFuture.failedFuture(new IllegalStateException("No active physical output")); boolean muted=!node.muted(); yield backend.setMute(node.id(),muted).thenCompose(ignored->store.updateAsync(config->{Map<String,Object> device=ensureDevice(config,node);device.put("mute",muted);})).thenRun(this::refreshBackend); }
             case "set_output_volume" -> setGnomeOutputLevel(command.value(),false);
             case "toggle_output_mute" -> setGnomeOutputLevel(command.value(),true);
             case "set_source_volume" -> setGnomeSourceLevel(command.value(),false);
@@ -43,14 +41,21 @@ abstract class AppShellUiPart29 extends AppShellUiPart28 {
             case "set_quick_control" -> setGnomeQuickControl(command.value(),false);
             case "toggle_quick_control" -> setGnomeQuickControl(command.value(),true);
             case "set_quick_control_choice" -> setGnomeQuickControlChoice(command.value());
+            case "setNodeVolume", "setNodeMuted", "setRouteEnabled" ->
+                    GnomeGraphNodeCommandExecutor.execute(command.name(), command.value(), store, backend, snapshot,
+                            physicalSinks(), this::updateGraphRuntimeThenStore,
+                            error -> Platform.runLater(() -> setNotice(t("Настройка применена, но не сохранена: ",
+                                    "Runtime setting applied but could not be saved: ") + rootMessage(error), true)),
+                            () -> Platform.runLater(() -> setNotice(t("Настройка применена.", "Setting applied."), false)));
             case "set_graph_gain" -> updateRouteConfigCommand(t("Изменить Gain из GNOME", "Change graph Gain from GNOME"), config -> GraphGainCommand.set(config, command.value(), false));
             case "toggle_graph_gain_mute" -> updateRouteConfigCommand(t("Изменить Mute Gain из GNOME", "Change graph Gain mute from GNOME"), config -> GraphGainCommand.set(config, command.value(), true));
-            case "set_mode" -> Set.of("haptic","subwoofer","speaker","hybrid","multi-output","off").contains(command.value())
-                    ? updateRouteConfigCommand(t("Изменён режим выхода из GNOME", "GNOME output mode changed"),config->activeProfile(config).put("mode",command.value()))
-                    : CompletableFuture.failedFuture(new IllegalArgumentException("Unsupported output mode"));
             case "set_channel_map" -> setGnomeChannelMap(command.value());
             default -> CompletableFuture.failedFuture(new IllegalArgumentException("Unsupported command: "+command.name()));
         };
+    }
+
+    private CompletableFuture<Void> updateGraphRuntimeThenStore(java.util.function.Consumer<Map<String, Object>> change) {
+        return GnomeNodeCommandHandler.applyRuntimeThenStore(store, change, routeManager.active() && snapshot.connected(), candidate -> routeManager.apply(runtimeDspConfig(candidate, snapshot), snapshot), error -> Platform.runLater(() -> setNotice(t("Настройка применена, но не сохранена: ", "Runtime setting applied but could not be saved: ") + rootMessage(error), true)), () -> Platform.runLater(() -> setNotice(t("Настройка применена.", "Setting applied."), false)));
     }
 
     protected CompletableFuture<Void> setGnomeQuickGroupCollapsed(String value) {

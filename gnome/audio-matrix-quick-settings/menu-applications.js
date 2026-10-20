@@ -27,6 +27,11 @@ export default class AudioMatrixMenuApplications {
             return;
         }
         for (const application of applications) {
+            const browserReason = application.browserAdapter?.reason;
+            if (browserReason) {
+                target.addMenuItem(new PopupMenu.PopupMenuItem(browserReason,
+                    {reactive: false, can_focus: false}));
+            }
             if (sourceGain) {
                 if (applications.length === 1) {
                     this._renderStreams(application, pin, t, target);

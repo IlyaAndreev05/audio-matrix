@@ -4,7 +4,7 @@ import io.github.ilyaandreev05.audiomatrix.ThemeManager;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.config.ConfigStore;
 import io.github.ilyaandreev05.audiomatrix.config.QuickSettingsConfig;
-import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
+import io.github.ilyaandreev05.audiomatrix.graph.*;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.ComboBox;
@@ -35,21 +35,12 @@ abstract class AppShellUiPart30 extends AppShellUiPart29 {
         }
         Map<String, Object> config = store.snapshot();
         List<Map<String, Object>> groups = QuickSettingsConfig.groups(config);
-        String suggested = switch(node.type()){
-            case "source" -> "Источники";
-            case "output" -> "Выходные устройства";
-            case "mixer" -> "Коммутация и управление";
-            default -> "Обработка звука";
-        };
+        String defaultGroupId = quickPinGroup(node);
+        String suggested = groups.stream().filter(group -> defaultGroupId.equals(group.get("id")))
+                .map(group -> String.valueOf(group.get("name"))).findFirst().orElse("Маршрутизация");
         String order = Integer.toString(QuickSettingsConfig.pins(config).stream()
                 .filter(pin -> routeId.equals(pin.get("route_id"))).mapToInt(pin -> number(pin.get("order"), -1))
                 .max().orElse(-1) + 1);
-        String defaultGroupId=switch(node.type()){
-            case "source" -> "sources";
-            case "output" -> "outputs";
-            case "mixer" -> "routing";
-            default -> "effects";
-        };
         Map<String, Object> defaultGroup = groups.stream()
                 .filter(group -> defaultGroupId.equals(group.get("id")))
                 .findFirst().orElse(null);
@@ -100,6 +91,13 @@ abstract class AppShellUiPart30 extends AppShellUiPart29 {
     private boolean validOrder(String value) {
         try { return Integer.parseInt(value) >= 0; }
         catch (NumberFormatException invalid) { return false; }
+    }
+
+    private String quickPinGroup(GraphNode node) {
+        if (node instanceof DeviceSlotNode || node instanceof OutputNode) return "outputs";
+        if (node instanceof SourceNode source && source.selector().equals(EventSoundStudioSource.SELECTOR)) return "events";
+        if (node instanceof SourceNode) return "applications";
+        return "routing";
     }
 
     private int number(Object value, int fallback) {

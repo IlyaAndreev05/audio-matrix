@@ -89,49 +89,42 @@ assert.equal(gate.label, 'On / Off', 'Gate exposes only On/Off, not routing impl
 gate.handlers.toggled();
 assert.deepEqual(commands.pop(), ['toggle_quick_control', 'gate']);
 
-const vibroControls = [];
-const vibroContext = {
-    _column: new Section(), _detailsOpen: new Map(), _applications: {render() {}},
+const renderedRoutes = [];
+const renderedVolumes = [];
+const graphContext = {
+    _column: new Section(), _applications: {render() {}},
     _disclosures: {
         groupOpen: () => true,
-        trackGroup: (_id, header, content) => { tracked.vibro = {header, content}; },
+        trackGroup: (_id, header, content) => { tracked.routing = {header, content}; },
         toggleGroup: () => false,
-        pinOpen: () => false, trackPin() {}, togglePin: () => false,
+        pinOpen: () => true, trackPin: () => {}, togglePin: () => false,
     },
     _send() {},
-    _mixer: {render: (_route, _node, inputs, _t, target) =>
-        inputs.forEach(input => target.addMenuItem(new MenuItem(input.label)))},
-    _output: {render: (pin, _t, target) => target.addMenuItem(new MenuItem(pin.name))},
-    _renderControls: (controls, _t, target) => {
-        vibroControls.push(...controls.map(control => control.label));
-        controls.forEach(control => target.addMenuItem(new MenuItem(control.label)));
-    },
+    _links: {render: (control, target) => {
+        renderedRoutes.push(control);
+        target.addMenuItem(new MenuItem(control.label));
+    }},
+    _mixer: {render() { throw new Error('Merge must not become a second volume mixer'); }},
+    _output: {render: (pin, _t, target) => {
+        renderedVolumes.push(pin.name);
+        target.addMenuItem(new MenuItem(pin.name));
+    }},
+    _renderControls() {},
 };
-vibroContext._renderPin = Groups.prototype._renderPin;
-vibroContext._renderVibroGroup = Groups.prototype._renderVibroGroup;
-vibroContext._displayPinName = Groups.prototype._displayPinName;
-const detailControls = [{id: 'cutoff', label: 'Bass cutoff'}, {id: 'slope', label: 'Bass slope'}];
-Groups.prototype._renderGroup.call(vibroContext,
-    {id: 'vibro', name: 'Vibration'}, [
-        {id: 'mixer-pin', routeId: 'common', nodeId: 'octine-vibro-mixer', nodeType: 'mixer', groupId: 'vibro',
-            mixerInputs: [{id: 'events', label: 'Events'}, {id: 'bass', label: 'Bass'}]},
-        {id: 'gain-pin', routeId: 'common', nodeId: 'octine-vibro-gain', name: 'Overall', nodeType: 'gain', groupId: 'vibro',
-            gain: {routeId: 'common', nodeId: 'gain', volume: 0.5, muted: false}},
-        {id: 'filter-pin', routeId: 'common', nodeId: 'octine-bass-low-pass', name: 'Bass filter', nodeType: 'filter', groupId: 'vibro', controls: detailControls},
-        {id: 'output-pin', routeId: 'common', nodeId: 'octine-vibro-output', name: 'Vibration device', nodeType: 'device_slot', groupId: 'vibro'},
-    ], {details: 'Details', vibroOverall: 'Overall', onOff: 'On / Off'}, true);
-const vibroContent = tracked.vibro.content;
-assert.deepEqual(vibroContent.items.slice(0, 3).map(item => item.label.text),
-    ['Events', 'Bass', 'Overall'], 'The three live vibration controls stay at the top level');
-const detailsHeader = vibroContent.items[3];
-const detailsContent = vibroContent.items[4];
-vibroContext._detailsContent = detailsContent;
-assert.equal(detailsHeader.label.text, 'Details');
-assert.equal(detailsContent.actor.visible, false, 'Technical controls start collapsed');
-assert.deepEqual(vibroControls, ['Bass cutoff', 'Bass slope'], 'Bass cutoff controls render inside Details');
-assert.deepEqual(detailsContent.items.slice(0, 2).map(item => item.label.text), ['Bass cutoff', 'Bass slope']);
-detailsHeader.handlers.activate();
-assert.equal(detailsContent.actor.visible, true, 'Details expands inside the vibration group');
-assert.deepEqual(vibroControls, ['Bass cutoff', 'Bass slope']);
+graphContext._renderPin = Groups.prototype._renderPin;
+graphContext._displayPinName = Groups.prototype._displayPinName;
+const routeControl = {id: 'route:main:switch', routeId: 'main', nodeId: 'switch', nodeType: 'switch',
+    kind: 'choice', label: 'Маршрутизация музыки', multiple: true, value: ['in->monitor'],
+    options: [{id: 'in->monitor', label: 'Монитор'}, {id: 'in->vibro', label: 'Вибродинамик'}]};
+Groups.prototype._renderGroup.call(graphContext, {id: 'routing', name: 'Маршрутизация'}, [
+    {id: 'switch-pin', routeId: 'main', nodeId: 'switch', name: 'MultiSwitch', nodeType: 'switch',
+        groupId: 'routing', routeControl},
+    {id: 'gain-pin', routeId: 'main', nodeId: 'gain', name: 'Общая сила вибродинамика', nodeType: 'gain',
+        groupId: 'routing', gain: {routeId: 'main', nodeId: 'gain', volume: 0.5, muted: false}},
+], {vibroOverall: 'Общая сила'}, true);
+const routingContent = tracked.routing.content;
+assert.deepEqual(renderedRoutes, [routeControl], 'MultiSwitch exposes its connected output choices');
+assert.deepEqual(renderedVolumes, ['Общая сила вибродинамика'], 'The common vibration Volume stays independently adjustable');
+assert.equal(routingContent.items.length, 4, 'The route selector and gain remain nested under their node rows');
 delete globalThis.audioMatrixRendererFixture;
-console.log('Group and pin headers expose disclosure only; reorder/pin controls remain in the main app');
+console.log('GNOME menu renders the graph MultiSwitch and gain controls without bass-only branches');

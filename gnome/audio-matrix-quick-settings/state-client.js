@@ -4,7 +4,7 @@ import {systemLanguage} from './menu-text.js';
 
 const OBJECT_PATH = '/org/ilya/AudioMatrix';
 const INTERFACE = 'org.ilya.AudioMatrix';
-const API_VERSION = 3;
+const API_VERSION = 4;
 const STALE_AFTER_SECONDS = 12;
 
 export default class AudioMatrixStateClient {
@@ -21,6 +21,7 @@ export default class AudioMatrixStateClient {
         this._renderPending = false;
         this._renderTimer = 0;
         this._commandError = '';
+        this._apiMismatch = '';
         this._signalIds = [];
         this._watchdogId = 0;
     }
@@ -51,6 +52,7 @@ export default class AudioMatrixStateClient {
             stale: this._stale,
             available,
             commandError: this._commandError,
+            apiMismatch: this._apiMismatch,
         };
     }
 
@@ -60,6 +62,8 @@ export default class AudioMatrixStateClient {
             this._lastStateAt = GLib.get_monotonic_time();
             this._stale = false;
             const state = JSON.parse(parameters.deepUnpack()[0]);
+            this._apiMismatch = state.apiVersion === API_VERSION ? ''
+                : `Audio Matrix API ${state.apiVersion ?? '—'}; extension requires API ${API_VERSION}`;
             this._state = state;
             const payload = JSON.stringify(state);
             if (payload === this._lastPayload) {
@@ -154,6 +158,7 @@ export default class AudioMatrixStateClient {
             return GLib.SOURCE_REMOVE;
         });
         this._pendingCommands.set(requestId, timer);
+        this._changed();
         try {
             Gio.DBus.session.emit_signal(null, OBJECT_PATH, INTERFACE, 'Command',
                 new GLib.Variant('(ussss)', [API_VERSION, requestId, String(this._state?.revision ?? ''), name, value]));

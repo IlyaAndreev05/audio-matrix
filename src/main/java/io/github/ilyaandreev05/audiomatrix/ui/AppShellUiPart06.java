@@ -39,7 +39,7 @@ abstract class AppShellUiPart06 extends AppShellUiPart05 {
 
     protected VBox graphNodeCard(AudioGraph graph){
         VBox box=card(t("Ноды", "Nodes"));
-        HBox add=new HBox(9);ComboBox<String> type=new ComboBox<>();type.getItems().setAll("source","output","device_slot","gain","gate","switch","selector","multi_selector","matrix","mixer","filter");type.getSelectionModel().select("source");
+        HBox add=new HBox(9);ComboBox<String> type=new ComboBox<>();type.getItems().setAll("source","dynamic_generator","output","device_slot","gain","gate","switch","selector","multi_selector","matrix","mixer","filter");type.getSelectionModel().select("source");
         add.getChildren().addAll(type,actionButton(t("Добавить ноду", "Add node"),()->addGraphNode(graph,type.getValue())));box.getChildren().add(add);
         HBox subgraphAction=new HBox(10);subgraphAction.setAlignment(Pos.CENTER_LEFT);
         Label selectionCount=label(selectedSubgraphNodeIds.size()+t(" нод выбрано"," nodes selected"),"muted");
@@ -57,7 +57,7 @@ abstract class AppShellUiPart06 extends AppShellUiPart05 {
         }
         if(graph.nodes().isEmpty()){box.getChildren().add(label(t("Граф пуст.","Graph is empty."),"muted"));return box;}
         for(GraphNode node:graph.nodes().stream().filter(item->selectedGraphNodeId.isBlank()||selectedGraphNodeId.equals(item.id())).toList()){
-            HBox row=new HBox(12);row.setAlignment(Pos.CENTER_LEFT);CheckBox subgraphSelection=new CheckBox();subgraphSelection.setAccessibleText(t("Выбрать ноду для подграфа: ","Select node for subgraph: ")+node.name());subgraphSelection.setSelected(selectedSubgraphNodeIds.contains(node.id()));subgraphSelection.setOnAction(event->{if(subgraphSelection.isSelected())selectedSubgraphNodeIds.add(node.id());else selectedSubgraphNodeIds.remove(node.id());selectionCount.setText(selectedSubgraphNodeIds.size()+t(" нод выбрано"," nodes selected"));createSubgraph.setDisable(selectedSubgraphNodeIds.size()<2);showPage(Page.GRAPH);});if(!GraphUiRoutes.common(graph.id()))row.getChildren().add(subgraphSelection);row.getChildren().add(label(node.name()+" · "+node.type(),"card-title"));
+            HBox row=new HBox(12);row.setAlignment(Pos.CENTER_LEFT);CheckBox subgraphSelection=new CheckBox();subgraphSelection.setAccessibleText(t("Выбрать ноду для подграфа: ","Select node for subgraph: ")+node.name());subgraphSelection.setSelected(selectedSubgraphNodeIds.contains(node.id()));subgraphSelection.setOnAction(event->{if(subgraphSelection.isSelected())selectedSubgraphNodeIds.add(node.id());else selectedSubgraphNodeIds.remove(node.id());selectionCount.setText(selectedSubgraphNodeIds.size()+t(" нод выбрано"," nodes selected"));createSubgraph.setDisable(selectedSubgraphNodeIds.size()<2);showPage(Page.GRAPH);});if(!GraphUiRoutes.common(graph.id()))row.getChildren().add(subgraphSelection);row.getChildren().add(label(node.name()+" · "+GraphNodeLabels.typeName(node,this::t),"card-title"));
             if(node instanceof GainNode gain)row.getChildren().add(GraphGainControl.create(gain,t("Уровень графа: ","Graph level: ")+gain.name(),(level,muted)->updateGraphNodeParameters(graph.id(),gain.id(),parameters->{if(level!=null)parameters.put("gain",level);parameters.put("muted",muted);})));
             else if(node instanceof MixerNode mixer){
                 row.getChildren().add(GraphMixerControls.create(mixer,t("Уровень и mute входов","Mixer input levels and mute"),t("Mute","Mute"),
@@ -111,9 +111,9 @@ abstract class AppShellUiPart06 extends AppShellUiPart05 {
                 row.getChildren().add(routerControls);
             }
             if(node instanceof SourceNode||node instanceof OutputNode){GainNode bound=GraphGainControl.endpoint(graph,node);row.getChildren().add(bound==null?label(t("Нет привязанного Gain: уровень недоступен","No bound Gain: level unavailable"),"muted"):GraphGainControl.create(bound,t("Уровень графа: ","Graph level: ")+bound.name(),(level,muted)->updateGraphNodeParameters(graph.id(),bound.id(),parameters->{if(level!=null)parameters.put("gain",level);parameters.put("muted",muted);})));}
-            if(node instanceof SourceNode||node instanceof OutputNode||node instanceof DeviceSlotNode||node instanceof MixerNode){boolean pinned=graphNodePinned(graph.id(),node.id());row.getChildren().add(actionButton(pinned?t("Открепить от GNOME","Unpin from GNOME"):t("Закрепить в GNOME","Pin in GNOME"),()->toggleGraphNodePin(graph.id(),node,pinned)));}
-            else if(node instanceof FilterNode){List<GnomeQuickControlParameter.Definition> controls=GnomeQuickControlParameter.definitions(node);row.getChildren().add(GraphQuickControlMenu.create(t("Быстрые контролы","Quick controls"),controls,control->quickControlPinned(graph.id(),node.id(),control.id()),control->t(control.russianLabel(),control.englishLabel()),(control,selected)->toggleGraphQuickControl(graph.id(),node,control.id(),!selected)));}
-            else{String quickParameter=quickControlParameter(node);if(!quickParameter.isBlank()){boolean pinned=quickControlPinned(graph.id(),node.id(),quickParameter);row.getChildren().add(actionButton(pinned?t("Открепить от GNOME","Unpin from GNOME"):t("Закрепить в GNOME","Pin in GNOME"),()->toggleGraphQuickControl(graph.id(),node,quickParameter,pinned)));}}
+            boolean pinned=graphNodePinned(graph.id(),node.id());row.getChildren().add(actionButton(pinned?t("Открепить от GNOME","Unpin from GNOME"):t("Закрепить в GNOME","Pin in GNOME"),()->toggleGraphNodePin(graph.id(),node,pinned)));
+            if(node instanceof FilterNode){List<GnomeQuickControlParameter.Definition> controls=GnomeQuickControlParameter.definitions(node);row.getChildren().add(GraphQuickControlMenu.create(t("Быстрые контролы","Quick controls"),controls,control->quickControlPinned(graph.id(),node.id(),control.id()),control->t(control.russianLabel(),control.englishLabel()),(control,selected)->toggleGraphQuickControl(graph.id(),node,control.id(),!selected)));}
+            else{String quickParameter=quickControlParameter(node);if(!quickParameter.isBlank()){boolean controlPinned=quickControlPinned(graph.id(),node.id(),quickParameter);row.getChildren().add(actionButton(controlPinned?t("Открепить параметр","Unpin parameter"):t("Закрепить параметр","Pin parameter"),()->toggleGraphQuickControl(graph.id(),node,quickParameter,controlPinned)));}}
             Region space=new Region();HBox.setHgrow(space,Priority.ALWAYS);row.getChildren().add(space);row.getChildren().add(actionButton(t("Удалить","Delete"),()->removeGraphNode(graph.id(),node.id())));box.getChildren().add(row);
         }
         return box;
@@ -188,14 +188,15 @@ abstract class AppShellUiPart06 extends AppShellUiPart05 {
                 choice.showAndWait().ifPresent(selectedLabel->{AudioNode output=available.get(outputLabels.indexOf(selectedLabel));updateRouteConfig(t("Добавить выходную ноду","Add output node"),config->{Map<String,Object> device=ensureDevice(config,output);GraphNode node=new OutputNode(id,name,string(device.get("id"),"system_default"),stereo);Map<String,Object> saved=GraphUiRoutes.route(config,graph.id());AudioGraph old=GraphCodec.fromMap(saved);List<GraphNode> nodes=new ArrayList<>(old.nodes());nodes.add(node);GraphRouteLibrary.saveRoute(config,new AudioGraph(old.id(),old.name(),nodes,old.connections()),string(saved.get("group_id"),""));});});return;
             }
             if("device_slot".equals(type)){updateGraph(graph.id(),nodes->nodes.add(new DeviceSlotNode(id,name,"",stereo)));return;}
-            if("source".equals(type)){
+            if("source".equals(type)||"dynamic_generator".equals(type)){
                 TextInputDialog selector=new TextInputDialog("application:unassigned");selector.setTitle(t("Источник приложения","Application source"));selector.setHeaderText(t("application:<id>, process:<name> или application:unassigned","application:<id>, process:<name>, or application:unassigned"));styleDialog(selector);
-                selector.showAndWait().map(String::trim).filter(value->!value.isBlank()).ifPresent(value->updateGraph(graph.id(),nodes->nodes.add(new SourceNode(id,name,value,stereo))));return;
+                selector.showAndWait().map(String::trim).filter(value->!value.isBlank()).ifPresent(value->updateGraph(graph.id(),nodes->nodes.add("dynamic_generator".equals(type)?new DynamicGeneratorNode(id,name,value,stereo):new SourceNode(id,name,value,stereo))));return;
             }
             GraphNode node=switch(type){case "gain"->new GainNode(id,name,stereo,1,false);case "gate"->new GateNode(id,name,stereo,true);case "switch"->new SwitchNode(id,name,stereo,List.of("out-1","out-2"),List.of());case "selector"->new SelectorNode(id,name,stereo,List.of("in-1","in-2"),List.of());case "multi_selector"->new MultiSelectorNode(id,name,stereo,List.of("in-1","in-2"),List.of());case "matrix"->new MatrixNode(id,name,stereo,List.of("in-1","in-2"),List.of("out-1","out-2"),List.of());case "mixer"->new MixerNode(id,name,stereo,Map.of("in-a",1.0,"in-b",1.0));default->new FilterNode(id,name,stereo,"low_pass",true,Map.of("frequency_hz",120.0,"slope_db_oct",24.0));};
             updateGraph(graph.id(),nodes->nodes.add(node));
         });
     }
+
 
     protected void setRouterLink(String routeId,String nodeId,String link,boolean enabled,boolean multiple){
         updateGraphNodeParameters(routeId,nodeId,parameters->{

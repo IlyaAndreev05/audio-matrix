@@ -23,7 +23,7 @@ export default class AudioMatrixMenuLinks {
         const label = option.label || option.id;
         if (multiple) {
             const item = new PopupMenu.PopupSwitchMenuItem(label, selected.has(option.id));
-            const signalId = item.connect('toggled', () => this._choose(control, option.id));
+            const signalId = item.connect('toggled', () => this._choose(control, option.id, Boolean(item.state)));
             item.connect('activate', () => item.stop_emission_by_name('activate'));
             submenu.menu.addMenuItem(item);
             return {id: option.id, item, signalId};
@@ -36,7 +36,11 @@ export default class AudioMatrixMenuLinks {
         return {id: option.id, item, signalId: 0};
     }
 
-    _choose(control, optionId) {
+    _choose(control, optionId, enabled = null) {
+        if (control.nodeType === 'switch' && enabled !== null) {
+            this._send('setRouteEnabled', `${control.routeId}\t${control.nodeId}\t${optionId}\t${enabled}`);
+            return;
+        }
         this._send('set_quick_control_choice', `${control.id}\t${optionId}`);
     }
 

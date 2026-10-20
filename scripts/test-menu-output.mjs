@@ -70,15 +70,25 @@ assert.equal(bound[0].options.reactive, false, 'Device Slot has no backend on/of
 assert.equal(bound[0].options.can_focus, false);
 assert.equal(levels.length, 0, 'No slider or fake power toggle for a Device Slot');
 
+render({routeId: 'main', nodeId: 'slot', name: 'Вибродинамик', nodeType: 'device_slot',
+    output: {id: 'usb', name: 'Vibro slot', deviceName: 'USB DAC', description: 'Rear AUX',
+        commandId: 'device:usb', state: 'ONLINE', available: true, volume: 0.62, muted: false}});
+const deviceRow = levels.at(-1);
+assert.equal(deviceRow.id, 'device:slot');
+deviceRow.onValue(0.4);
+assert.deepEqual(commands.pop(), ['setNodeVolume', 'main\tslot\t0.400']);
+deviceRow.onMute();
+assert.deepEqual(commands.pop(), ['setNodeMuted', 'main\tslot\ttrue']);
+
 const offlineOutput = render({routeId: 'route', nodeId: 'output',
     output: {id: 'hdmi', name: 'HDMI', available: false, state: 'OFFLINE'}});
 assert.equal(offlineOutput[0].label, 'HDMI — Offline', 'Output nodes report real device availability');
 render({routeId: 'route', nodeId: 'output', name: 'Monitor',
     output: {id: 'hdmi', name: 'HDMI', state: 'ONLINE', available: true, volume: 0.4,
         muted: false, graphGainNodeId: 'gain-1'}});
-assert.equal(levels.length, 1);
-assert.equal(levels[0].id, 'graph-output:output');
-assert.equal(levels[0].value, 0.4);
+assert.equal(levels.length, 2);
+assert.equal(levels[1].id, 'graph-output:output');
+assert.equal(levels[1].value, 0.4);
 
 render({nodeId: 'vibro-gain', name: 'Vibro Gain',
     gain: {routeId: 'common', nodeId: 'gain-1', volume: 0.55, muted: false}});
@@ -88,13 +98,13 @@ assert.equal(gainRow.name, 'Vibro Gain');
 assert.equal(gainRow.value, 0.55);
 assert.equal(gainRow.muted, false);
 gainRow.onValue(0.25);
-assert.deepEqual(commands.pop(), ['set_graph_gain', 'common\tgain-1\t0.250']);
+assert.deepEqual(commands.pop(), ['setNodeVolume', 'common\tgain-1\t0.250']);
 gainRow.onMute();
-assert.deepEqual(commands.pop(), ['toggle_graph_gain_mute', 'common\tgain-1']);
+assert.deepEqual(commands.pop(), ['setNodeMuted', 'common\tgain-1\ttrue']);
 const mutedGain = render({nodeId: 'vibro-gain', name: 'Vibro Gain',
     gain: {routeId: 'common', nodeId: 'gain-1', volume: 0.55, muted: true}});
 assert.equal(mutedGain.length, 0, 'Gain uses a level row, not a placeholder');
 assert.equal(levels.at(-1).muted, true);
 assert.equal(levels.at(-1).mutedLabel, 'Unmute');
 delete globalThis.audioMatrixOutputFixture;
-console.log('Device availability and pinned Gain rows expose truthful controls and commands');
+console.log('Device availability and pinned Volume rows expose truthful, idempotent controls');

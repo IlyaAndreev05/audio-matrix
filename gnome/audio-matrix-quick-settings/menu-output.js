@@ -31,13 +31,12 @@ export default class AudioMatrixMenuOutput {
                 this._outputIcon(output), {reactive: false, can_focus: false}));
             return;
         }
-        const graphTarget = `${pin.routeId}\t${pin.nodeId}\t${output.graphGainNodeId}`;
         this._addLevelRow({
             id: 'graph-output:' + pin.nodeId, name: output.description || output.name,
             icon: this._outputIcon(output), value: output.volume, muted: output.muted,
             mutedLabel: output.muted ? t.unmute : t.mute,
-            onValue: value => this._send('set_graph_output_volume', graphTarget + '\t' + value.toFixed(3)),
-            onMute: () => this._send('toggle_graph_output_mute', graphTarget),
+            onValue: value => this._send('setNodeVolume', `${pin.routeId}\t${output.graphGainNodeId}\t${value.toFixed(3)}`),
+            onMute: () => this._send('setNodeMuted', `${pin.routeId}\t${output.graphGainNodeId}\t${!Boolean(output.muted)}`),
         }, target);
     }
 
@@ -47,8 +46,8 @@ export default class AudioMatrixMenuOutput {
             id: 'graph-gain:' + pin.nodeId, name: pin.name || gain.nodeId,
             icon: this._outputIcon({name: pin.name || ''}), value: gain.volume,
             muted: Boolean(gain.muted), mutedLabel: gain.muted ? t.unmute : t.mute,
-            onValue: value => this._send('set_graph_gain', `${graphTarget}\t${value.toFixed(3)}`),
-            onMute: () => this._send('toggle_graph_gain_mute', graphTarget),
+            onValue: value => this._send('setNodeVolume', `${graphTarget}\t${value.toFixed(3)}`),
+            onMute: () => this._send('setNodeMuted', `${graphTarget}\t${!Boolean(gain.muted)}`),
         }, target);
     }
 
@@ -60,6 +59,16 @@ export default class AudioMatrixMenuOutput {
             ? t.vibroOutput : (slot.name || pin.name || slot.id);
         const name = state !== 'UNBOUND' && boundName ? boundName : configuredName;
         const label = state === 'UNBOUND' ? t.assignDevice : (t.deviceStates?.[state] || state);
+        if (state === 'ONLINE' && Number.isFinite(Number(slot.volume))) {
+            this._addLevelRow({
+                id: `device:${pin.nodeId}`, name: boundName || configuredName,
+                icon: this._outputIcon({name: boundName || configuredName}), value: slot.volume, muted: Boolean(slot.muted),
+                mutedLabel: slot.muted ? t.unmute : t.mute,
+                onValue: value => this._send('setNodeVolume', `${pin.routeId}\t${pin.nodeId}\t${value.toFixed(3)}`),
+                onMute: () => this._send('setNodeMuted', `${pin.routeId}\t${pin.nodeId}\t${!Boolean(slot.muted)}`),
+            }, target);
+            return;
+        }
         // Device Slot exposes no graph Gain and no on/off parameter: report the
         // real binding state instead of fabricating controls.
         target.addMenuItem(new PopupMenu.PopupImageMenuItem(`${name || t.outputUnavailable} — ${label}`,

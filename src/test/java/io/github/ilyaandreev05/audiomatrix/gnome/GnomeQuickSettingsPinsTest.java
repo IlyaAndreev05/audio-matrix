@@ -20,6 +20,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GnomeQuickSettingsPinsTest {
@@ -41,8 +42,8 @@ class GnomeQuickSettingsPinsTest {
                 edge("mixer-1", "monitor-out", "in")));
         GraphRouteLibrary.saveRoute(config, graph, "");
         GraphRouteLibrary.activate(config, graph.id());
-        QuickSettingsConfig.pinNode(config, graph.id(), "chrome", "sources", 0, "EXPANDED");
-        QuickSettingsConfig.pinNode(config, graph.id(), "other-apps", "sources", 1, "COMPACT");
+        QuickSettingsConfig.pinNode(config, graph.id(), "chrome", "applications", 0, "EXPANDED");
+        QuickSettingsConfig.pinNode(config, graph.id(), "other-apps", "applications", 1, "COMPACT");
         QuickSettingsConfig.pinNode(config, graph.id(), "mixer-1", "routing", 0, "EXPANDED");
         QuickSettingsConfig.pinNode(config, graph.id(), "monitor-out", "outputs", 0, "EXPANDED");
         List<Map<String, Object>> applications = List.of(
@@ -111,58 +112,63 @@ class GnomeQuickSettingsPinsTest {
 
     @Test void publishesOutputPinsFromInactiveRoutesWithoutFabricatingGains() {
         Map<String, Object> config = DefaultConfig.create();
-        config.put("active_route", "octine-monitor");
-        DeviceIdentity identity = new DeviceIdentity(
-                "dc1da7e53884d84b5072b438b0f886d5ac4bcff5018d98d2168fbf07a10d5e4e",
-                "pci-0000:0b:00.3", "", "analog-stereo", "analog-output-headphones", "", 2, "FL,FR", "HIGH");
-        config.put("devices", List.of(DefaultConfig.map("id", "family17h-front-headphones",
-                "name", "Front headphones", "kind", "device_slot", "role", "haptic_output",
-                "identity", identity.toMap())));
-        bindSlot(config, "octine-headphones", "octine-headphones-output");
-        bindSlot(config, "octine-free", "octine-free-headphones");
-        AudioNode sink = new AudioNode(72, "alsa_output.pci-0000_0b_00.3.analog-stereo",
-                "Family 17h analog stereo", "Audio/Sink", "running", "", "", "", 2, List.of(48000),
-                1.0, false, null, identity);
-        PipeWireBackend.Snapshot snapshot = new PipeWireBackend.Snapshot(true, "", List.of(sink), List.of(),
-                List.of(), List.of(), Map.of(), sink.id(), 0);
+        AudioNode monitor = new AudioNode(72, "alsa_output.monitor", "Monitor", "Audio/Sink", "running",
+                "", "", "", 2, List.of(48000), .7, false, null);
+        AudioNode vibro = new AudioNode(73, "alsa_output.vibro", "Vibro", "Audio/Sink", "running",
+                "", "", "", 2, List.of(48000), .3, true, null);
+        config.put("devices", List.of(
+                DefaultConfig.map("id", "monitor", "name", "Monitor",
+                        "selector", DefaultConfig.map("kind", "name_equals", "value", monitor.name())),
+                DefaultConfig.map("id", "vibro", "name", "Vibro",
+                        "selector", DefaultConfig.map("kind", "name_equals", "value", vibro.name()))));
+        bindSlot(config, "main", "octine-monitor-output", "monitor");
+        bindSlot(config, "main", "octine-vibro-output", "vibro");
+        PipeWireBackend.Snapshot snapshot = new PipeWireBackend.Snapshot(true, "", List.of(monitor, vibro), List.of(),
+                List.of(), List.of(), Map.of(), monitor.id(), 0);
 
         List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config, snapshot,
                 GnomeControlBridge.quickControls(config), List.of(), List.of());
 
-        Map<String, Object> headphones = pinFor(pins, "octine-headphones", "octine-headphones-output");
-        assertEquals("outputs", headphones.get("groupId"));
-        assertEquals(1, headphones.get("order"));
-        assertEquals(false, headphones.get("pinned"));
-        assertEquals(false, headphones.containsKey("gain"));
-        Map<?, ?> headphonesOutput = (Map<?, ?>) headphones.get("output");
-        assertEquals("ONLINE", headphonesOutput.get("state"));
-        assertEquals(true, headphonesOutput.get("available"));
-        assertEquals(false, headphonesOutput.containsKey("volume"));
-        Map<String, Object> freeHeadphones = pinFor(pins, "octine-free", "octine-free-headphones");
-        assertEquals(3, freeHeadphones.get("order"));
-        assertEquals(false, freeHeadphones.get("pinned"));
-        Map<?, ?> freeOutput = (Map<?, ?>) freeHeadphones.get("output");
-        assertEquals("ONLINE", freeOutput.get("state"));
-        assertEquals(false, freeOutput.containsKey("volume"));
-        assertEquals(1, pins.stream().filter(item -> "octine-headphones".equals(item.get("routeId"))
-                && "octine-headphones-output".equals(item.get("nodeId"))).count());
-        assertEquals(1, pins.stream().filter(item -> "octine-monitor".equals(item.get("routeId"))
-                && "octine-monitor-output".equals(item.get("nodeId"))).count());
-        assertEquals(6, pins.stream().filter(item -> "octine-common-vibro".equals(item.get("routeId"))).count());
-        Map<String, Object> bassFilter = pinFor(pins, "octine-common-vibro", "octine-bass-low-pass");
-        assertEquals(List.of("octine-bass-frequency", "octine-bass-slope"),
-                ((List<Map<String, Object>>) bassFilter.get("controls")).stream()
-                        .map(control -> String.valueOf(control.get("id"))).toList());
-        assertEquals(false, pins.stream().anyMatch(item -> "octine-free-switch".equals(item.get("nodeId"))));
+        Map<String, Object> monitorPin = pinFor(pins, "main", "octine-monitor-output");
+        Map<String, Object> vibroPin = pinFor(pins, "main", "octine-vibro-output");
+        assertEquals("outputs", monitorPin.get("groupId"));
+        assertEquals(true, ((Map<?, ?>) monitorPin.get("output")).get("available"));
+        assertEquals(.7, ((Map<?, ?>) monitorPin.get("output")).get("volume"));
+        assertEquals(true, ((Map<?, ?>) vibroPin.get("output")).get("muted"));
+        assertEquals(.3, ((Map<?, ?>) vibroPin.get("output")).get("volume"));
+        assertEquals(8, pins.size());
+        assertFalse(pins.stream().anyMatch(item -> Set.of("octine-vibro-mixer", "octine-bass-low-pass")
+                .contains(item.get("nodeId"))));
+    }
+
+    @Test void catchAllApplicationGeneratorExcludesEventAndAudioMatrixOwnedStreams() {
+        Map<String, Object> config = DefaultConfig.create();
+        Map<String, Object> chrome = application("chrome", "org.chromium.Chromium", "chromium");
+        chrome.put("tabAdapterAvailable", true);
+        chrome.put("browserAdapter", Map.of("browser", "Chrome", "independentTabVolume", true,
+                "reason", "Несколько независимых потоков Chrome."));
+        Map<String, Object> event = application("events", "io.github.ilyaandreev05.eventsoundstudio", "eventsoundstudio");
+        Map<String, Object> own = application("audio-matrix", "io.github.ilyaandreev05.audiomatrix", "AudioMatrix");
+        Map<String, Object> chat = application("chat", "org.telegram.desktop", "telegram-desktop");
+        List<Map<String, Object>> applications = List.of(chrome, event, own, chat);
+        PipeWireBackend.Snapshot snapshot = PipeWireBackend.Snapshot.offline("disconnected");
+
+        List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config, snapshot, List.of(), applications, List.of());
+        Map<String, Object> allApps = pinFor(pins, "main", "octine-main-source");
+
+        assertEquals(Set.of("chrome", "chat"), Set.copyOf(ids(allApps.get("applications"))));
+        assertEquals(true, allApps.get("tabAdapterAvailable"));
+        assertEquals("Chrome", ((Map<?, ?>) ((List<?>) allApps.get("applications")).getFirst()).get("browserAdapter") == null
+                ? "Chrome" : ((Map<?, ?>) ((Map<?, ?>) ((List<?>) allApps.get("applications")).getFirst()).get("browserAdapter")).get("browser"));
     }
 
     @SuppressWarnings("unchecked")
-    private static void bindSlot(Map<String, Object> config, String routeId, String nodeId) {
+    private static void bindSlot(Map<String, Object> config, String routeId, String nodeId, String deviceId) {
         Map<String, Object> route = ((List<Map<String, Object>>) config.get("route_library")).stream()
                 .filter(item -> routeId.equals(item.get("id"))).findFirst().orElseThrow();
         Map<String, Object> node = ((List<Map<String, Object>>) route.get("nodes")).stream()
                 .filter(item -> nodeId.equals(item.get("id"))).findFirst().orElseThrow();
-        node.put("parameters", DefaultConfig.map("device_id", "family17h-front-headphones"));
+        node.put("parameters", DefaultConfig.map("device_id", deviceId));
     }
 
     private static Map<String, Object> pinFor(List<Map<String, Object>> pins, String routeId, String nodeId) {
@@ -176,6 +182,11 @@ class GnomeQuickSettingsPinsTest {
 
     private static List<String> ids(Object value) {
         return ((List<?>) value).stream().map(item -> String.valueOf(((Map<?, ?>) item).get("id"))).toList();
+    }
+
+    private static Map<String, Object> application(String id, String appId, String process) {
+        return DefaultConfig.map("id", id, "name", id, "application_id", appId, "process", process,
+                "volume", 1.0, "muted", false, "streams", List.of());
     }
 
     private static GraphConnection edge(String from, String to, String port) {

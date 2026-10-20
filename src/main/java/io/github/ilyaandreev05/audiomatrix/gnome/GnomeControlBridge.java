@@ -32,16 +32,18 @@ import java.util.function.Function;
 public final class GnomeControlBridge implements AutoCloseable {
     public static final String OBJECT_PATH="/org/ilya/AudioMatrix";
     public static final String INTERFACE="org.ilya.AudioMatrix";
-    public static final int API_VERSION=3;
-    private static final java.util.Set<String> SUPPORTED_COMMANDS=java.util.Set.of("open","select_output","toggle_mute",
+    public static final int API_VERSION=4;
+    private static final java.util.Set<String> SUPPORTED_COMMANDS=java.util.Set.of("open",
             "set_output_volume","toggle_output_mute","set_source_volume","toggle_source_mute","set_app_volume","toggle_app_mute","set_stream_volume",
             "set_graph_output_volume","toggle_graph_output_mute","set_graph_gain","toggle_graph_gain_mute","toggle_stream_mute","set_mixer_input_volume","toggle_mixer_input_mute","set_quick_control","toggle_quick_control","set_quick_control_choice",
-            "set_quick_group_collapsed","reorder_quick_group","set_quick_pin_view","set_quick_matrix_view","select_route","set_mode","set_channel_map");
+            "set_quick_group_collapsed","reorder_quick_group","set_quick_pin_view","set_quick_matrix_view","select_route","set_channel_map",
+            "setNodeVolume","setNodeMuted","setRouteEnabled");
     private final PipeWireBackend backend;
     private final Function<Command,CompletableFuture<Void>> commands;
     private final ObjectMapper json=new ObjectMapper();
     private final AtomicBoolean closed=new AtomicBoolean();
     private final AtomicBoolean started=new AtomicBoolean();
+    private final java.util.concurrent.ConcurrentMap<String,Map<String,Object>> pendingCommands=new java.util.concurrent.ConcurrentHashMap<>();
     private final ScheduledExecutorService emitter=Executors.newSingleThreadScheduledExecutor(r->{Thread t=new Thread(r,"audio-matrix-dbus-status");t.setDaemon(true);return t;});
     private volatile Process monitor;
     private volatile String lastState="";
@@ -61,9 +63,22 @@ public final class GnomeControlBridge implements AutoCloseable {
             Map<String,Object> group=groups.computeIfAbsent(key,ignored->{Map<String,Object> created=new LinkedHashMap<>();created.put("id",key);created.put("name",stream.applicationName().isBlank()?stream.description():stream.applicationName());created.put("application_id",appId);created.put("process",process);created.put("streams",new ArrayList<Map<String,Object>>());created.put("volume",Double.isFinite(stream.volume())?Math.max(0,Math.min(1,stream.volume())):1.0);created.put("muted",stream.muted());created.put("tabAdapterAvailable",false);return created;});
             @SuppressWarnings("unchecked") List<Map<String,Object>> children=(List<Map<String,Object>>)group.get("streams");Map<String,Object> child=new LinkedHashMap<>();child.put("id",stream.id());child.put("name",stream.name());child.put("description",stream.description());child.put("volume",Double.isFinite(stream.volume())?Math.max(0,Math.min(1,stream.volume())):1.0);child.put("muted",stream.muted());children.add(child);
         }
+        for (Map<String, Object> group : groups.values()) {
+            @SuppressWarnings("unchecked") List<Map<String, Object>> streams =
+                    (List<Map<String, Object>>) group.get("streams");
+            Map<String, Object> adapter = BrowserAdapterRegistry.capabilities(
+                    String.valueOf(group.get("application_id")), String.valueOf(group.get("process")),
+                    String.valueOf(group.get("name")), streams.size());
+            if (!adapter.isEmpty()) {
+                group.put("browserAdapter", adapter);
+                group.put("tabAdapterAvailable", Boolean.TRUE.equals(adapter.get("independentTabVolume")));
+            }
+        }
         state.put("applications",List.copyOf(groups.values()));
         state.put("quickPins",GnomeQuickSettingsPins.build(config,snapshot,quickControls,
                 List.copyOf(groups.values()),outputs));
+        state.put("graph",GnomeGraphState.build(config,snapshot));
+        state.put("commandState",List.copyOf(pendingCommands.values()));
         try{String payload=json.writeValueAsString(state);if(payload.equals(lastState))return;lastState=payload;emitter.execute(()->emit("State",payload));}catch(Exception ignored){}
     }
     static List<Map<String,Object>> outputDevices(PipeWireBackend.Snapshot snapshot){
@@ -141,8 +156,16 @@ public final class GnomeControlBridge implements AutoCloseable {
         catch(NumberFormatException invalid){return null;}
     }
     void dispatch(Command command){
-        execute(command,commands).thenAccept(result->emitResult(command,result.status(),result.message()));
+        if(!command.requestId().isBlank()){
+            Map<String,Object> pending=new LinkedHashMap<>();pending.put("requestId",command.requestId());pending.put("name",command.name());pending.put("status","pending");pendingCommands.put(command.requestId(),pending);
+            emitLatestState();
+        }
+        execute(command,commands).thenAccept(result->{
+            if(!command.requestId().isBlank()){pendingCommands.remove(command.requestId());emitLatestState();}
+            emitResult(command,result.status(),result.message());
+        });
     }
+    private void emitLatestState(){String payload=lastState;if(!closed.get()&&!payload.isBlank())try{Map<String,Object>state=json.readValue(payload,new com.fasterxml.jackson.core.type.TypeReference<>(){});state.put("commandState",List.copyOf(pendingCommands.values()));emit("State",json.writeValueAsString(state));}catch(Exception ignored){}}
     static CompletableFuture<CommandResult> execute(Command command,Function<Command,CompletableFuture<Void>> handler){
         if(command.apiVersion()!=API_VERSION)return CompletableFuture.completedFuture(new CommandResult("error","Unsupported Audio Matrix D-Bus API version "+command.apiVersion()));
         if(!SUPPORTED_COMMANDS.contains(command.name()))return CompletableFuture.completedFuture(new CommandResult("error","Unsupported command: "+command.name()));

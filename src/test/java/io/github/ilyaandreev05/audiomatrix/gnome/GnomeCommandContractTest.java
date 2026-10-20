@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GnomeCommandContractTest {
     @Test void acceptsRevisionedGroupReorderingWithoutChangingThePayload() {
-        GnomeControlBridge.Command command = new GnomeControlBridge.Command(3, "reorder-1", "17",
+        GnomeControlBridge.Command command = new GnomeControlBridge.Command(4, "reorder-1", "17",
                 "reorder_quick_group", "my arbitrary group\t2");
         AtomicBoolean called = new AtomicBoolean();
 
@@ -27,11 +27,11 @@ class GnomeCommandContractTest {
         assertFalse(GnomeCommandRevision.isStale(command, 17));
     }
 
-    @Test void acceptsRevisionedGraphGainCommandsForSharedPinnedGain() {
-        GnomeControlBridge.Command level = new GnomeControlBridge.Command(3, "gain-1", "9",
-                "set_graph_gain", "octine-common-vibro\toctine-vibro-gain\t0.4");
-        GnomeControlBridge.Command mute = new GnomeControlBridge.Command(3, "gain-2", "9",
-                "toggle_graph_gain_mute", "octine-common-vibro\toctine-vibro-gain");
+    @Test void absoluteGraphCommandsAreIdempotentAndDoNotRejectRapidUpdatesAsStale() {
+        GnomeControlBridge.Command level = new GnomeControlBridge.Command(4, "gain-1", "9",
+                "setNodeVolume", "main\toctine-vibro-gain\t0.4");
+        GnomeControlBridge.Command mute = new GnomeControlBridge.Command(4, "gain-2", "9",
+                "setNodeMuted", "main\toctine-vibro-gain\ttrue");
         List<String> received = new ArrayList<>();
 
         assertEquals("ok", GnomeControlBridge.execute(level, command -> {
@@ -43,9 +43,9 @@ class GnomeCommandContractTest {
             return CompletableFuture.completedFuture(null);
         }).join().status());
 
-        assertEquals(List.of("set_graph_gain=octine-common-vibro\toctine-vibro-gain\t0.4",
-                "toggle_graph_gain_mute=octine-common-vibro\toctine-vibro-gain"), received);
-        assertTrue(GnomeCommandRevision.isStale(level, 10));
-        assertFalse(GnomeCommandRevision.isStale(level, 9));
+        assertEquals(List.of("setNodeVolume=main\toctine-vibro-gain\t0.4",
+                "setNodeMuted=main\toctine-vibro-gain\ttrue"), received);
+        assertFalse(GnomeCommandRevision.isStale(level, 10));
+        assertFalse(GnomeCommandRevision.isStale(mute, 10));
     }
 }
