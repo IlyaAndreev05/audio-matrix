@@ -63,8 +63,7 @@ abstract class PipeWireRoutePart03 extends PipeWireRoutePart02 {
                 sleepUntil(RouteTransitionMath.deadlineNanos(startNanos, durationMs, step, steps));
                 for (FadeNode node : nodes) {
                     double volume = RouteTransitionMath.interpolate(node.from(), node.to(), step, steps);
-                    run(List.of("wpctl", "set-volume", Integer.toString(node.nodeId()), Double.toString(volume),
-                            "--limit", Double.toString(MixLevelMath.maxRouteVolume())), COMMAND_TIMEOUT);
+                    WirePlumberMixerControl.setVolume(node.nodeId(), Math.min(1.0, volume));
                 }
             }
         } catch (Exception error) {

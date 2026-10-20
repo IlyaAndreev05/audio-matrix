@@ -17,14 +17,14 @@ public final class RouteInputSignature {
                                 long connectionGeneration) {
         // Sink node ids are transient; a reconnect must not force a route rebuild by itself.
         List<String> sinks = current.sinks().stream()
-                .filter(node -> !isAudioMatrixOwned(node))
+                .filter(node -> !AudioMatrixOwnedStream.matches(node))
                 .map(node -> node.name() + ":" + node.channels() + ":" + node.identity())
                 .sorted().toList();
         String defaultSink = current.sinks().stream().filter(node -> node.id() == current.defaultSinkId())
                 .map(node -> node.name() + ":" + node.identity()).findFirst().orElse("");
         boolean builtin = String.valueOf(config.get("active_route")).startsWith("octine-");
         List<String> streams = builtin ? List.of() : current.streams().stream()
-                .filter(node -> !isAudioMatrixOwned(node) && !isTransientShellSound(node))
+                .filter(node -> !AudioMatrixOwnedStream.matches(node) && !isTransientShellSound(node))
                 .map(node -> node.id() + ":" + node.name() + ":" + node.applicationId() + ":" + node.processName()
                         + ":" + node.channels() + ":" + node.identity())
                 .sorted().toList();
@@ -47,8 +47,5 @@ public final class RouteInputSignature {
         String process = node.processName() == null ? "" : node.processName();
         return "gnome-shell".equalsIgnoreCase(app) || "gnome-shell".equalsIgnoreCase(process)
                 || process.startsWith("gsd-") || "xdg-desktop-portal".equalsIgnoreCase(app);
-    }
-    private static boolean isAudioMatrixOwned(AudioNode node) {
-        return node.name() != null && node.name().startsWith("audiomatrix_");
     }
 }

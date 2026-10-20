@@ -72,16 +72,15 @@ class RouteInputSignatureTest {
         Map<String, Object> config = DefaultConfig.create();
         List<AudioNode> sinks = List.of(sink(69, "alsa_output.front"));
         String before = signature(config, sinks, List.of());
-        @SuppressWarnings("unchecked")
-        Map<String, Object> common = new LinkedHashMap<>((Map<String, Object>) config.get("common_vibro_graph"));
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> nodes = (List<Map<String, Object>>) common.get("nodes");
+        @SuppressWarnings("unchecked") List<Map<String, Object>> routes =
+                (List<Map<String, Object>>) config.get("route_library");
+        @SuppressWarnings("unchecked") List<Map<String, Object>> nodes =
+                (List<Map<String, Object>>) routes.getFirst().get("nodes");
         Map<String, Object> gain = nodes.stream()
                 .filter(node -> "octine-vibro-gain".equals(node.get("id"))).findFirst().orElseThrow();
         Map<String, Object> parameters = new LinkedHashMap<>((Map<String, Object>) gain.get("parameters"));
         parameters.put("gain", 0.25);
         gain.put("parameters", parameters);
-        config.put("common_vibro_graph", common);
 
         assertNotEquals(before, signature(config, sinks, List.of()));
     }

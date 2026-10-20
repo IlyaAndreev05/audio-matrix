@@ -89,8 +89,9 @@ def wait_for_sink(process, environment, sink_name, log_path):
         result = run(["pw-dump", "-N"], environment)
         if result.returncode == 0:
             nodes = json.loads(result.stdout)
-            if any(node.get("info", {}).get("props", {}).get("node.name") == sink_name for node in nodes):
-                return
+            for node in nodes:
+                if node.get("info", {}).get("props", {}).get("node.name") == sink_name:
+                    return int(node["id"])
         time.sleep(0.1)
     raise RuntimeError(f"Private sink did not appear: {log_path.read_text()[-3000:]}")
 
@@ -136,11 +137,13 @@ def main():
             sink_name = "am_private_route_seed"
             config = create_seed_sink_config(root, sink_name)
             seed = start("seed-sink", ["pipewire", "-c", str(config)])
-            wait_for_sink(seed, environment, sink_name, root / "seed-sink.log")
+            mixer_node_id = wait_for_sink(seed, environment, sink_name, root / "seed-sink.log")
+            environment["AUDIO_MATRIX_LIVE_MIXER_NODE_ID"] = str(mixer_node_id)
             command = [
                 "./gradlew", "test", "--tests",
                 "io.github.ilyaandreev05.audiomatrix.audio.PipeWireSignedMatrixRouteLiveSmokeTest",
                 "--tests", "io.github.ilyaandreev05.audiomatrix.audio.GraphPipeWireRouteLiveSmokeTest",
+                "--tests", "io.github.ilyaandreev05.audiomatrix.audio.WirePlumberMixerControlTest.privatePipeWireAppliesLinearVolumeAndFastMuteWithoutHardware",
                 "--no-configuration-cache", "--no-daemon", "--rerun-tasks",
             ]
             result = subprocess.run(command, env=environment, check=False)

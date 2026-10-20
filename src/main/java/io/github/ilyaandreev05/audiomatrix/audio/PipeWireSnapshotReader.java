@@ -165,7 +165,7 @@ final class PipeWireSnapshotReader {
         var id = ids.matcher(line); var volume = volumes.matcher(line);
         if (!id.find() || !volume.find()) return;
         int nodeId = Integer.parseInt(id.group(1));
-        double value = PipeWireBackend.clamp(Double.parseDouble(volume.group(1)), 0, 1.5);
+        double value = WirePlumberMixerControl.linearFromWpctlCubic(Double.parseDouble(volume.group(1)));
         boolean muted = volume.group(2).toLowerCase(java.util.Locale.ROOT).contains("muted");
         levels.put(nodeId, new PipeWireBackend.LevelState(value, muted));
     }

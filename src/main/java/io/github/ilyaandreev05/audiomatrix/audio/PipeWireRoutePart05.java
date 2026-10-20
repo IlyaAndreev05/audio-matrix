@@ -32,16 +32,15 @@ abstract class PipeWireRoutePart05 extends PipeWireRoutePart04 {
     protected void updateLiveLevels(Plan previous, Plan plan) throws Exception {
         for (BusPlan bus : plan.buses().values()) {
             int id = findNodeId(bus.nodeName());
-            run(List.of("wpctl", "set-volume", Integer.toString(id), Double.toString(bus.volume())), COMMAND_TIMEOUT);
-            run(List.of("wpctl", "set-mute", Integer.toString(id), bus.muted() ? "1" : "0"), COMMAND_TIMEOUT);
+            WirePlumberMixerControl.setVolume(id, bus.volume());
+            WirePlumberMixerControl.setMuted(id, bus.muted());
         }
         for (RoutePlan route : routeLevelUpdateOrder(previous, plan)) {
             int id = findNodeId(route.playbackNodeName());
             double volume = effectiveRoutePlaybackVolume(plan, route);
             boolean muted = effectiveRoutePlaybackMuted(plan, route);
-            run(List.of("wpctl", "set-volume", Integer.toString(id), Double.toString(muted ? 0.0 : volume),
-                    "--limit", Double.toString(MixLevelMath.maxRouteVolume())), COMMAND_TIMEOUT);
-            run(List.of("wpctl", "set-mute", Integer.toString(id), muted ? "1" : "0"), COMMAND_TIMEOUT);
+            WirePlumberMixerControl.setVolume(id, Math.min(1.0, muted ? 0.0 : volume));
+            WirePlumberMixerControl.setMuted(id, muted);
         }
     }
 

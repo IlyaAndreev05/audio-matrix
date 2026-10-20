@@ -77,11 +77,10 @@ public final class PipeWireBackend implements AutoCloseable {
         }, io);
     }
 
-    public CompletableFuture<Void> setVolume(int nodeId, double volume) {
-        return execute("wpctl", "set-volume", Integer.toString(nodeId), Double.toString(clamp(volume, 0, 1)));
-    }
-    public CompletableFuture<Void> setMute(int nodeId, boolean muted) {
-        return execute("wpctl", "set-mute", Integer.toString(nodeId), muted ? "1" : "0");
+    public CompletableFuture<Void> setVolume(int nodeId, double volume) { return WirePlumberMixerControl.setVolumeAsync(nodeId, clamp(volume, 0, 1), io); }
+    public CompletableFuture<Void> setMute(int nodeId, boolean muted) { return WirePlumberMixerControl.setMutedAsync(nodeId, muted, io); }
+    public CompletableFuture<Void> setMute(int nodeId, boolean muted, double savedLevel) {
+        return WirePlumberMixerControl.setMutedAsync(nodeId, muted, savedLevel, io);
     }
     public CompletableFuture<Void> setDefaultOutput(int nodeId) {
         return execute("wpctl", "set-default", Integer.toString(nodeId));

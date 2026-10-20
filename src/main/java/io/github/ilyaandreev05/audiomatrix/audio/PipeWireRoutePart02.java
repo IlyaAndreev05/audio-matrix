@@ -71,17 +71,16 @@ abstract class PipeWireRoutePart02 extends PipeWireRoutePart01 {
             for (String busId : requiredBusIds) {
                 BusPlan bus = plan.buses().get(busId);
                 int nodeId = findNodeId(bus.nodeName());
-                run(List.of("wpctl", "set-volume", Integer.toString(nodeId), Double.toString(bus.volume())), COMMAND_TIMEOUT);
-                run(List.of("wpctl", "set-mute", Integer.toString(nodeId), bus.muted() ? "1" : "0"), COMMAND_TIMEOUT);
+                WirePlumberMixerControl.setVolume(nodeId, bus.volume());
+                WirePlumberMixerControl.setMuted(nodeId, bus.muted());
             }
             for (RoutePlan route : plan.routes()) {
                 int nodeId = findNodeId(route.playbackNodeName());
                 double volume = effectiveRoutePlaybackVolume(plan, route);
                 boolean muted = effectiveRoutePlaybackMuted(plan, route);
                 double initialVolume = fadeInMs > 0 || muted ? 0.0 : volume;
-                run(List.of("wpctl", "set-volume", Integer.toString(nodeId), Double.toString(initialVolume),
-                        "--limit", Double.toString(MixLevelMath.maxRouteVolume())), COMMAND_TIMEOUT);
-                run(List.of("wpctl", "set-mute", Integer.toString(nodeId), muted ? "1" : "0"), COMMAND_TIMEOUT);
+                WirePlumberMixerControl.setVolume(nodeId, Math.min(1.0, initialVolume));
+                WirePlumberMixerControl.setMuted(nodeId, muted);
             }
 
             Map<String, List<String>> inputs = ports("-i");

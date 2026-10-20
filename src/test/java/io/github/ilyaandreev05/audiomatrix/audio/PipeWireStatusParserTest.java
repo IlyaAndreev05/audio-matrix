@@ -17,9 +17,9 @@ class PipeWireStatusParserTest {
                 """;
 
         assertEquals(38, PipeWireBackend.defaultSinkId(status));
-        assertEquals(0.23, PipeWireBackend.levelStates(status).get(38).volume(), 1e-9);
-        assertEquals(0.02, PipeWireBackend.levelStates(status).get(46).volume(), 1e-9);
-        assertEquals(0.45, PipeWireBackend.levelStates(status).get(47).volume(), 1e-9);
+        assertEquals(Math.pow(0.23, 3), PipeWireBackend.levelStates(status).get(38).volume(), 1e-9);
+        assertEquals(Math.pow(0.02, 3), PipeWireBackend.levelStates(status).get(46).volume(), 1e-9);
+        assertEquals(Math.pow(0.45, 3), PipeWireBackend.levelStates(status).get(47).volume(), 1e-9);
     }
 
     @Test void recognizesMutedMarker() {

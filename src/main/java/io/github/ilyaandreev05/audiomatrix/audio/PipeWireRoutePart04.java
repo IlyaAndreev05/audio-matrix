@@ -199,7 +199,7 @@ abstract class PipeWireRoutePart04 extends PipeWireRoutePart03 {
             List<String> eventInputBuses = EventInputStreamPlanner.append(config, buses, streams, this::applicationFilters);
             boolean builtin = GraphCommonVibro.isBuiltinRoute(text(config.get("active_route")));
             if (!builtin) for (AudioNode stream : snapshot.streams()) {
-                if (isTransientShellSound(stream)) continue;
+                if (isTransientShellSound(stream) || AudioMatrixOwnedStream.matches(stream)) continue;
                 boolean eventStream = isEventSoundStudioStream(stream);
                 if (eventStream && !eventInputBuses.isEmpty()) continue;
                 Map<String, Object> rule = eventStream
