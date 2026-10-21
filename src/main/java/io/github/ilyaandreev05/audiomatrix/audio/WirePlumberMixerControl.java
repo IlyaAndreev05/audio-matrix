@@ -10,7 +10,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -27,6 +31,8 @@ final class WirePlumberMixerControl {
     private static BufferedWriter commands;
     private static BufferedReader results;
     private static Path executable;
+    private static final VolumeWriteQueue VOLUME_WRITES =
+            new VolumeWriteQueue(WirePlumberMixerControl::writeVolume);
 
     static {
         Runtime.getRuntime().addShutdownHook(Thread.ofPlatform().name("audio-matrix-mixer-shutdown")
@@ -35,7 +41,160 @@ final class WirePlumberMixerControl {
 
     private WirePlumberMixerControl() {}
 
+    @FunctionalInterface
+    interface VolumeWriter {
+        void write(int nodeId, double level) throws Exception;
+    }
+
+    static final class VolumeWriteQueue {
+        private final VolumeWriter writer;
+        private final Object statesLock = new Object();
+        private final Map<Integer, VolumeState> states = new HashMap<>();
+
+        VolumeWriteQueue(VolumeWriter writer) {
+            this.writer = writer;
+        }
+
+        void setVolume(int nodeId, double level) throws Exception {
+            CompletableFuture<Void> completion = new CompletableFuture<>();
+            VolumeState state;
+            boolean drain;
+            synchronized (statesLock) {
+                state = states.computeIfAbsent(nodeId, ignored -> new VolumeState());
+                synchronized (state) {
+                    state.pendingLevel = level;
+                    state.pendingWrites.add(completion);
+                    drain = !state.draining;
+                    if (drain) {
+                        state.scheduled = false;
+                        state.scheduleToken++;
+                        state.draining = true;
+                    }
+                }
+            }
+            if (drain) drain(nodeId, state);
+            awaitCompletion(completion);
+        }
+
+        CompletableFuture<Void> setVolumeAsync(int nodeId, double level, ExecutorService executor) {
+            CompletableFuture<Void> completion = new CompletableFuture<>();
+            VolumeState state;
+            boolean schedule = false;
+            long token = 0;
+            synchronized (statesLock) {
+                state = states.computeIfAbsent(nodeId, ignored -> new VolumeState());
+                synchronized (state) {
+                    state.pendingLevel = level;
+                    state.pendingWrites.add(completion);
+                    if (!state.draining && !state.scheduled) {
+                        state.scheduled = true;
+                        token = ++state.scheduleToken;
+                        schedule = true;
+                    }
+                }
+            }
+            if (schedule) {
+                long scheduledToken = token;
+                try {
+                    executor.execute(() -> startScheduledDrain(nodeId, state, scheduledToken));
+                } catch (RuntimeException rejection) {
+                    if (failScheduledWrites(nodeId, state, scheduledToken, rejection)) throw rejection;
+                }
+            }
+            return completion;
+        }
+
+        private void startScheduledDrain(int nodeId, VolumeState state, long token) {
+            synchronized (state) {
+                if (!state.scheduled || state.scheduleToken != token || state.draining) return;
+                state.scheduled = false;
+                state.draining = true;
+            }
+            drain(nodeId, state);
+        }
+
+        private void drain(int nodeId, VolumeState state) {
+            Error fatalError = null;
+            while (true) {
+                double level;
+                List<CompletableFuture<Void>> completions;
+                synchronized (state) {
+                    if (state.pendingWrites.isEmpty()) {
+                        state.draining = false;
+                        break;
+                    }
+                    level = state.pendingLevel;
+                    completions = state.pendingWrites;
+                    state.pendingWrites = new ArrayList<>();
+                }
+
+                Throwable failure = null;
+                try {
+                    writer.write(nodeId, level);
+                } catch (Throwable error) {
+                    failure = error;
+                    if (error instanceof Error errorValue && fatalError == null) fatalError = errorValue;
+                }
+                for (CompletableFuture<Void> completion : completions) {
+                    if (failure == null) completion.complete(null);
+                    else completion.completeExceptionally(failure);
+                }
+            }
+            removeIfIdle(nodeId, state);
+            if (fatalError != null) throw fatalError;
+        }
+
+        private boolean failScheduledWrites(int nodeId, VolumeState state, long token, RuntimeException failure) {
+            List<CompletableFuture<Void>> completions;
+            synchronized (state) {
+                if (!state.scheduled || state.scheduleToken != token) return false;
+                state.scheduled = false;
+                completions = state.pendingWrites;
+                state.pendingWrites = new ArrayList<>();
+            }
+            for (CompletableFuture<Void> completion : completions) completion.completeExceptionally(failure);
+            removeIfIdle(nodeId, state);
+            return true;
+        }
+
+        private void removeIfIdle(int nodeId, VolumeState state) {
+            synchronized (statesLock) {
+                synchronized (state) {
+                    if (!state.draining && !state.scheduled && state.pendingWrites.isEmpty()) {
+                        states.remove(nodeId, state);
+                    }
+                }
+            }
+        }
+
+        private static void awaitCompletion(CompletableFuture<Void> completion) throws Exception {
+            try {
+                completion.get();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw interrupted;
+            } catch (ExecutionException failure) {
+                Throwable cause = failure.getCause();
+                if (cause instanceof Exception exception) throw exception;
+                if (cause instanceof Error error) throw error;
+                throw new IllegalStateException(cause);
+            }
+        }
+
+        private static final class VolumeState {
+            private double pendingLevel;
+            private List<CompletableFuture<Void>> pendingWrites = new ArrayList<>();
+            private boolean draining;
+            private boolean scheduled;
+            private long scheduleToken;
+        }
+    }
+
     static void setVolume(int nodeId, double gainLinear) throws Exception {
+        VOLUME_WRITES.setVolume(nodeId, gainLinear);
+    }
+
+    private static void writeVolume(int nodeId, double gainLinear) throws Exception {
         double level = Math.max(0, Math.min(1, gainLinear));
         try {
             send("V " + nodeId + " " + String.format(Locale.ROOT, "%.9f", level));
@@ -71,7 +230,7 @@ final class WirePlumberMixerControl {
     }
 
     static CompletableFuture<Void> setVolumeAsync(int nodeId, double level, ExecutorService executor) {
-        return CompletableFuture.runAsync(() -> runVolume(nodeId, level), executor);
+        return VOLUME_WRITES.setVolumeAsync(nodeId, level, executor);
     }
 
     static CompletableFuture<Void> setMutedAsync(int nodeId, boolean muted, ExecutorService executor) {
@@ -86,10 +245,6 @@ final class WirePlumberMixerControl {
         }, executor);
     }
 
-    private static void runVolume(int nodeId, double level) {
-        try { setVolume(nodeId, level); }
-        catch (Exception error) { throw new java.util.concurrent.CompletionException(error); }
-    }
 
     private static void runMute(int nodeId, boolean muted) {
         try { setMuted(nodeId, muted); }

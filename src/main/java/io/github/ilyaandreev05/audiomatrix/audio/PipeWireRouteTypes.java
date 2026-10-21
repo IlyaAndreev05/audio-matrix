@@ -37,6 +37,20 @@ public abstract class PipeWireRouteTypes {
     public record RouteDiagnostics(int desiredLinks, int observedLinks, int missingLinks,
                                    int unavailableOutputs, int conflictingOutputs,
                                    int commandTimeouts, boolean active) {}
+    public enum BranchKind { ROUTE, BUS, OUTPUT, APPLICATION_STREAM, EVENT_INPUT }
+    public record BranchDiagnostic(String ownerId, BranchKind kind, boolean selected, boolean available,
+                                   boolean processAlive, List<Link> desiredLinks, List<Link> observedLinks,
+                                   String error) {
+        public BranchDiagnostic {
+            desiredLinks = List.copyOf(desiredLinks);
+            observedLinks = List.copyOf(observedLinks);
+            error = error == null ? "" : error;
+        }
+    }
+    /** Runtime-only binding from one exact native capture stream to a generated graph Source. */
+    public record CapturedStreamBinding(String nodeName, String sourceNodeId, String applicationRuleId,
+                                        String parentApplicationId, String parentProcessName,
+                                        String instanceKey, double tabGain, boolean tabMuted) {}
     public record HeadroomEstimate(boolean available, double preLimiterPeakDbfs, double limiterCeilingDbfs,
                                    double postLimiterPeakDbfs, double worstCaseReductionDb, String message) {
         static HeadroomEstimate unavailable(String message) {
@@ -68,8 +82,17 @@ public abstract class PipeWireRouteTypes {
         }
     }
     protected record StreamPlan(AudioNode node, String busId, List<Map<String, Object>> filters, List<String> positions,
-                              String filterProcessKey, String filterInputNodeName, String filterOutputNodeName) {
-        protected StreamPlan { filters = List.copyOf(filters); positions = List.copyOf(positions); }
+                              String filterProcessKey, String filterInputNodeName, String filterOutputNodeName,
+                              String bindingId) {
+        protected StreamPlan {
+            filters = List.copyOf(filters);
+            positions = List.copyOf(positions);
+            bindingId = bindingId == null || bindingId.isBlank() ? busId : bindingId;
+        }
+        protected StreamPlan(AudioNode node, String busId, List<Map<String, Object>> filters, List<String> positions,
+                             String filterProcessKey, String filterInputNodeName, String filterOutputNodeName) {
+            this(node, busId, filters, positions, filterProcessKey, filterInputNodeName, filterOutputNodeName, busId);
+        }
     }
     protected record Plan(Map<String, BusPlan> buses, List<RoutePlan> routes, List<StreamPlan> streams,
                         Map<String, OutputPlan> outputs, List<String> warnings, boolean profileOff,

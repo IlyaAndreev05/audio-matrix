@@ -38,8 +38,7 @@ abstract class PipeWireRouteStaticSupport03 extends PipeWireRouteStaticSupport02
     protected static boolean sameRoutingTopology(Plan previous, Plan next) {
         if (!previous.buses().keySet().equals(next.buses().keySet())
                 || !previous.outputs().keySet().equals(next.outputs().keySet())
-                || previous.routes().size() != next.routes().size()
-                || previous.streams().size() != next.streams().size()) return false;
+                || previous.routes().size() != next.routes().size()) return false;
         for (String id : previous.buses().keySet()) {
             BusPlan left = previous.buses().get(id), right = next.buses().get(id);
             if (!left.nodeName().equals(right.nodeName()) || !left.channelLayout().equals(right.channelLayout())
@@ -72,17 +71,7 @@ abstract class PipeWireRouteStaticSupport03 extends PipeWireRouteStaticSupport02
                     || !left.limiterInputNodeName().equals(right.limiterInputNodeName())
                     || !left.limiterOutputNodeName().equals(right.limiterOutputNodeName())) return false;
         }
-        if (next.streams().size() != previous.streams().size()) return false;
-        Map<String, StreamPlan> nextStreams = new LinkedHashMap<>();
-        next.streams().forEach(stream -> nextStreams.put(stream.node().name(), stream));
-        for (StreamPlan left : previous.streams()) {
-            StreamPlan right = nextStreams.get(left.node().name());
-            if (right == null || left.node().id() != right.node().id() || !left.busId().equals(right.busId())
-                    || !left.filters().equals(right.filters()) || !left.positions().equals(right.positions())
-                    || !left.filterProcessKey().equals(right.filterProcessKey())
-                    || !left.filterInputNodeName().equals(right.filterInputNodeName())
-                    || !left.filterOutputNodeName().equals(right.filterOutputNodeName())) return false;
-        }
+        // Transient stream instances, availability, and level values do not change static topology.
         return true;
     }
 

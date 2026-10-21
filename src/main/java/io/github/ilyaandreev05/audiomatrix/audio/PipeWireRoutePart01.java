@@ -30,20 +30,38 @@ import java.util.concurrent.TimeUnit;
 
 abstract class PipeWireRoutePart01 extends PipeWireRouteContract {
     public CompletableFuture<ApplyReport> apply(Map<String, Object> config, PipeWireBackend.Snapshot snapshot) {
-        return apply(config, snapshot, false);
+        return apply(config, snapshot, Map.of(), false);
+    }
+
+    public CompletableFuture<ApplyReport> apply(Map<String, Object> config, PipeWireBackend.Snapshot snapshot,
+                                                Map<String, CapturedStreamBinding> capturedBindings) {
+        return apply(config, snapshot, capturedBindings, false);
     }
 
     public CompletableFuture<ApplyReport> reapplyAfterReconnect(Map<String, Object> config, PipeWireBackend.Snapshot snapshot) {
-        return apply(config, snapshot, true);
+        return apply(config, snapshot, Map.of(), true);
+    }
+
+    public CompletableFuture<ApplyReport> reapplyAfterReconnect(Map<String, Object> config,
+                                                                PipeWireBackend.Snapshot snapshot,
+                                                                Map<String, CapturedStreamBinding> capturedBindings) {
+        return apply(config, snapshot, capturedBindings, true);
     }
 
     protected CompletableFuture<ApplyReport> apply(Map<String, Object> config, PipeWireBackend.Snapshot snapshot,
-                                                  boolean reconnect) {
+                                                   boolean reconnect) {
+        return apply(config, snapshot, Map.of(), reconnect);
+    }
+
+    protected CompletableFuture<ApplyReport> apply(Map<String, Object> config, PipeWireBackend.Snapshot snapshot,
+                                                   Map<String, CapturedStreamBinding> capturedBindings,
+                                                   boolean reconnect) {
         if (closed) return CompletableFuture.failedFuture(new IllegalStateException("Route manager is closed"));
+        Map<String, CapturedStreamBinding> bindings = capturedBindings == null ? Map.of() : Map.copyOf(capturedBindings);
         return CompletableFuture.supplyAsync(() -> {
             try {
                 // Reconnect uses observed links and process liveness, not an unconditional rebuild.
-                return applyNow(config, snapshot);
+                return applyNow(config, snapshot, bindings);
             }
             catch (Exception e) {
                 status = "Route apply failed: " + message(e)
@@ -135,6 +153,11 @@ abstract class PipeWireRoutePart01 extends PipeWireRouteContract {
     }
 
     protected ApplyReport applyNow(Map<String, Object> config, PipeWireBackend.Snapshot snapshot) throws Exception {
+        return applyNow(config, snapshot, Map.of());
+    }
+
+    protected ApplyReport applyNow(Map<String, Object> config, PipeWireBackend.Snapshot snapshot,
+                                   Map<String, CapturedStreamBinding> capturedBindings) throws Exception {
         commandTimeouts = 0;
         if (snapshot == null || !snapshot.connected()) {
             if (active || !busProcesses.isEmpty() || !routeProcesses.isEmpty() || !filterChainProcesses.isEmpty()) clearNow(false);
@@ -143,7 +166,7 @@ abstract class PipeWireRoutePart01 extends PipeWireRouteContract {
             throw new IOException("PipeWire is not connected");
         }
         requireCommands("pw-loopback", "pw-link", "pw-dump", "wpctl");
-        Plan plan = plan(config, snapshot);
+        Plan plan = plan(config, snapshot, capturedBindings);
         if (plan.routes().stream().anyMatch(route -> !route.filters().isEmpty())
                 || plan.routes().stream().anyMatch(route -> route.channelMatrix() != null)
                 || plan.outputs().values().stream().anyMatch(output -> !output.filters().isEmpty() || !output.limiterFilters().isEmpty())
@@ -155,6 +178,7 @@ abstract class PipeWireRoutePart01 extends PipeWireRouteContract {
             transitionWarnings.clear();
             lastReport = new ApplyReport(0, 0, 0, warnings);
             status = warnings.isEmpty() ? "No active route reaches an output" : String.join("; ", warnings);
+            publishBranchDiagnostics(config, snapshot, plan);
             return lastReport;
         }
         for (RoutePlan route : plan.routes()) {
@@ -165,25 +189,110 @@ abstract class PipeWireRoutePart01 extends PipeWireRouteContract {
         boolean observed = active && processesAlive() && observedGraphMatches();
         if (observed && signature.equals(appliedSignature)) {
             activeTransitionMs = transitionMillis(config);
+            publishBranchDiagnostics(config, snapshot, plan);
             return reportAppliedPlan(plan);
         }
-        if (observed && appliedPlan != null && sameRoutingTopology(appliedPlan, plan)) {
-            try {
-                updateLiveLevels(appliedPlan, plan);
-                activeTransitionMs = transitionMillis(config);
-                appliedPlan = plan;
-                appliedSignature = signature;
-                return reportAppliedPlan(plan);
-            } catch (Exception error) {
-                transitionWarnings.add("live level update failed; graph rebuild used instead: " + message(error));
-            }
-        }
-        int transitionMs = transitionMillis(config);
-        int fadeOutMs = active && appliedPlan != null ? transitionMs / 2 : 0;
-        int fadeInMs = active && appliedPlan != null ? transitionMs - fadeOutMs : transitionMs;
-        skippedStreamCount = 0;
 
-        Map<String, List<Link>> originalBeforeApply = deepLinks(originalStreamLinks);
-        return rebuildPipeWireGraph(plan, signature, transitionMs, fadeOutMs, fadeInMs, originalBeforeApply);
+        // The serialized route worker owns reconciliation. A changed binding, one dead
+        // process, or one missing link is repaired in place; it is not a reason to stop
+        // unrelated buses, routes, filters, and output branches.
+        activeTransitionMs = transitionMillis(config);
+        skippedStreamCount = 0;
+        ApplyReport report = reconcilePipeWireGraph(plan, signature, activeTransitionMs);
+        publishBranchDiagnostics(config, snapshot, plan);
+        return report;
+    }
+    protected void publishBranchDiagnostics(Map<String, Object> config, PipeWireBackend.Snapshot snapshot, Plan plan) {
+        List<BranchDiagnostic> result = new ArrayList<>();
+        Map<String, Object> profile = maps(config.get("profiles")).stream()
+                .filter(item -> String.valueOf(config.get("active_profile")).equals(item.get("id")))
+                .findFirst().orElseGet(() -> maps(config.get("profiles")).stream().findFirst().orElse(Map.of()));
+        Set<String> selectedRoutes = new HashSet<>(strings(profile.get("active_routes")));
+        Map<String, Map<String, Object>> busConfig = new LinkedHashMap<>();
+        for (Map<String, Object> bus : maps(config.get("buses"))) busConfig.put(text(bus.get("id")), bus);
+        Map<String, RoutePlan> planRoutes = new LinkedHashMap<>();
+        plan.routes().forEach(route -> planRoutes.put(route.id(), route));
+        List<AudioNode> physicalSinks = snapshot.sinks().stream()
+                .filter(node -> !AudioMatrixOwnedStream.matches(node)).toList();
+        List<Map<String, Object>> devices = maps(config.get("devices"));
+
+        for (Map<String, Object> configured : maps(config.get("routes"))) {
+            String id = text(configured.get("id"));
+            if (id.isBlank()) continue;
+            boolean selected = !plan.profileOff() && Boolean.TRUE.equals(configured.get("enabled"))
+                    && selectedRoutes.contains(id);
+            String target = text(configured.get("to"));
+            boolean busTarget = busConfig.containsKey(target);
+            AudioNode sink = busTarget ? null : resolveSink(target, profile, physicalSinks, devices, snapshot.defaultSinkId());
+            if (!busTarget && sink == null && configured.get("fallback") != null)
+                sink = resolveSink(text(configured.get("fallback")), profile, physicalSinks, devices, snapshot.defaultSinkId());
+            boolean available = busTarget ? busConfig.containsKey(target) : sink != null;
+            RoutePlan route = planRoutes.get(id);
+            String owner = "route:" + id;
+            Set<Link> desired = new LinkedHashSet<>(linkOwners.getOrDefault(owner, Set.of()));
+            boolean processAlive = processAlive(routeProcesses.get(id));
+            String error = branchErrors.getOrDefault(owner, "");
+            if (route != null) {
+                processAlive &= processAlive(busProcesses.get(route.fromBusId()));
+                if (route.targetBusId() != null) processAlive &= processAlive(busProcesses.get(route.targetBusId()));
+                if (route.sink() != null) {
+                    OutputPlan output = plan.outputs().get(route.sink().name());
+                    if (output != null) {
+                        String outputOwner = "output:" + route.sink().name();
+                        desired.addAll(linkOwners.getOrDefault(outputOwner, Set.of()));
+                        if (!output.filters().isEmpty())
+                            processAlive &= processAlive(filterChainProcesses.get(outputOwner));
+                        if (!output.limiterFilters().isEmpty())
+                            processAlive &= processAlive(filterChainProcesses.get("output-limiter:" + route.sink().name()));
+                        if (error.isBlank()) error = branchErrors.getOrDefault(outputOwner, "");
+                    }
+                }
+            }
+            if (selected && route == null && error.isBlank()) {
+                error = plan.warnings().stream().filter(warning -> warning.startsWith("route " + id + " "))
+                        .findFirst().orElse(available ? "Selected route was not compiled" : "Selected output is unavailable");
+            }
+            List<Link> observed = desired.stream().filter(observedLinks::contains).toList();
+            result.add(new BranchDiagnostic(id, BranchKind.ROUTE, selected, available, processAlive,
+                    new ArrayList<>(desired), observed, error));
+        }
+
+        for (BusPlan bus : plan.buses().values()) {
+            String owner = "bus:" + bus.id();
+            Set<Link> desired = linkOwners.get(owner);
+            if (desired == null) continue;
+            List<Link> observed = desired.stream().filter(observedLinks::contains).toList();
+            result.add(new BranchDiagnostic(bus.id(), BranchKind.BUS, true, true,
+                    processAlive(busProcesses.get(bus.id())), new ArrayList<>(desired), observed,
+                    branchErrors.getOrDefault(owner, "")));
+        }
+
+        Map<String, List<StreamPlan>> streamsByBinding = new LinkedHashMap<>();
+        for (StreamPlan stream : plan.streams())
+            streamsByBinding.computeIfAbsent(stream.bindingId(), ignored -> new ArrayList<>()).add(stream);
+        streamsByBinding.forEach((bindingId, streams) -> {
+            Set<Link> desired = new LinkedHashSet<>();
+            boolean live = false;
+            List<String> errors = new ArrayList<>();
+            for (StreamPlan stream : streams) {
+                String owner = "stream:" + stream.bindingId() + ":" + stream.node().name();
+                desired.addAll(linkOwners.getOrDefault(owner, Set.of()));
+                ManagedProcess filter = stream.filters().isEmpty() ? null
+                        : filterChainProcesses.get(stream.filterProcessKey());
+                live |= stream.node().active() && (stream.filters().isEmpty() || processAlive(filter));
+                String error = branchErrors.get(owner);
+                if (error != null && !error.isBlank()) errors.add(error);
+            }
+            List<Link> observed = desired.stream().filter(observedLinks::contains).toList();
+            BranchKind kind = streams.stream().anyMatch(stream -> EventInputMonitor.NODE_NAME.equals(stream.node().name()))
+                    ? BranchKind.EVENT_INPUT : BranchKind.APPLICATION_STREAM;
+            result.add(new BranchDiagnostic(bindingId, kind, true, true, live,
+                    new ArrayList<>(desired), observed, String.join("; ", errors.stream().distinct().toList())));
+        });
+        branchDiagnosticsSnapshot = List.copyOf(result);
+    }
+
+    private static boolean processAlive(ManagedProcess process) {
+        return process != null && process.process().isAlive();
     }
 }

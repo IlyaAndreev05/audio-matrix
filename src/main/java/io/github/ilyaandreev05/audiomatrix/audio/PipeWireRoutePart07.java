@@ -30,15 +30,34 @@ import java.util.concurrent.TimeUnit;
 
 abstract class PipeWireRoutePart07 extends PipeWireRoutePart06 {
     protected String signature(Plan plan, PipeWireBackend.Snapshot snapshot) {
+        List<String> busPlans = plan.buses().values().stream()
+                .map(bus -> bus.id() + ":" + bus.nodeName() + ":" + bus.channelLayout() + ":" + bus.positions()
+                        + ":" + bus.volume() + ":" + bus.muted())
+                .sorted().toList();
+        List<String> routePlans = plan.routes().stream()
+                .map(route -> route.id() + ":" + route.fromBusId() + ":" + route.targetBusId() + ":"
+                        + sinkIdentity(route.sink()) + ":" + route.channelMap() + ":" + route.positions() + ":"
+                        + route.channelMatrix() + ":" + route.delayMs() + ":" + route.priority() + ":"
+                        + route.filters().hashCode() + ":" + route.volume() + ":" + route.gainDb() + ":" + route.muted())
+                .sorted().toList();
         List<String> streamPlans = plan.streams().stream()
-                .map(stream -> stream.node().name() + ":" + stream.busId() + ":" + stream.positions() + ":" + stream.filters().hashCode())
+                .map(stream -> stream.bindingId() + ":" + stream.node().name() + ":" + stream.busId()
+                        + ":" + stream.positions() + ":" + stream.filters().hashCode())
                 .sorted().toList();
         List<String> outputPlans = plan.outputs().values().stream()
-                .map(output -> output.sink().name() + ":" + output.positions() + ":" + output.filters().hashCode() + ":" + output.limiterFilters().hashCode())
+                .map(output -> sinkIdentity(output.sink()) + ":" + output.positions() + ":"
+                        + output.filters().hashCode() + ":" + output.limiterFilters().hashCode())
                 .sorted().toList();
-        List<String> sinkNames = snapshot.sinks().stream().filter(sink -> !sink.name().startsWith("audiomatrix_")).map(AudioNode::name).sorted().toList();
-        return plan.masterVolume() + ":" + plan.masterMuted() + ":" + plan.buses().hashCode() + ":" + plan.routes().hashCode()
-                + ":" + streamPlans + ":" + outputPlans + ":" + sinkNames + ":" + snapshot.defaultSinkId();
+        List<String> sinkIdentities = snapshot.sinks().stream().filter(sink -> !AudioMatrixOwnedStream.matches(sink))
+                .map(PipeWireRoutePart07::sinkIdentity).sorted().toList();
+        return busPlans + ":" + routePlans + ":" + streamPlans + ":" + outputPlans + ":" + sinkIdentities
+                + ":" + plan.masterVolume() + ":" + plan.masterMuted();
+    }
+
+    private static String sinkIdentity(AudioNode sink) {
+        if (sink == null) return "";
+        DeviceIdentity identity = sink.identity();
+        return identity != null && identity.reliable() ? identity.fingerprint() : sink.name();
     }
 
     protected boolean processesAlive() {
@@ -47,6 +66,9 @@ abstract class PipeWireRoutePart07 extends PipeWireRoutePart06 {
                 && filterChainProcesses.values().stream().allMatch(process -> process.process().isAlive());
     }
 
+    public List<BranchDiagnostic> branchDiagnostics() {
+        return branchDiagnosticsSnapshot;
+    }
     public synchronized CompletableFuture<Void> closeAsync() {
         if (closeFuture != null) return closeFuture;
         closed = true;
@@ -57,6 +79,11 @@ abstract class PipeWireRoutePart07 extends PipeWireRoutePart06 {
                 stopOwnedProcesses();
                 restoreAllOriginal();
                 originalStreamLinks.clear();
+                linkOwners.clear();
+                branchErrors.clear();
+                branchDiagnosticsSnapshot = List.of();
+                desiredLinks.clear();
+                observedLinks.clear();
                 active = false;
                 appliedSignature = "";
                 status = "Routes stopped; cleanup reported: " + message(error);

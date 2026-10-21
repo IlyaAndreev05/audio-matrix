@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -94,6 +95,50 @@ class PipeWireRouteManagerTest extends PipeWireRouteManagerTestSupport {
         assertEquals(0.25, PipeWireRouteManager.effectiveRoutePlaybackVolume(withNewMaster,
                 withNewMaster.routes().stream().filter(route -> route.sink() != null).findFirst().orElseThrow()), 1e-9);
     }
+
+    @Test
+    void streamInstancesAreNonTopologicalWhileOutputIdentityIsStatic() throws IOException {
+        Map<String, Object> config = chainedBusConfig(false);
+        config.put("graph_default_bus", "main");
+        @SuppressWarnings("unchecked") List<Map<String, Object>> devices =
+                (List<Map<String, Object>>) config.get("devices");
+        Map<String, Object> speaker = devices.stream()
+                .filter(device -> "speaker".equals(device.get("id"))).findFirst().orElseThrow();
+        @SuppressWarnings("unchecked") Map<String, Object> selector =
+                (Map<String, Object>) speaker.get("selector");
+        PipeWireRouteManager manager = new PipeWireRouteManager();
+
+        selector.put("value", "test-output-before");
+        AudioNode beforeSink = sink(41, "test-output-before", "Before");
+        AudioNode beforeStream = new AudioNode(71, "Firefox:before", "Firefox", "Stream/Output/Audio", "running",
+                "Firefox", "firefox", "org.mozilla.firefox", 2, List.of(48000), 0.5, false, null);
+        PipeWireRouteManager.Plan before = manager.plan(config,
+                snapshotWithStreams(List.of(beforeSink), List.of(beforeStream), beforeSink.id()));
+
+        selector.put("value", "test-output-after");
+        AudioNode afterSink = sink(93, "test-output-after", "After");
+        AudioNode afterStream = new AudioNode(108, "Firefox:after", "Different title", "Stream/Output/Audio",
+                "suspended", "Firefox", "firefox", "org.mozilla.firefox", 2, List.of(48000), 0.8, false, null);
+        PipeWireRouteManager.Plan after = manager.plan(config,
+                snapshotWithStreams(List.of(afterSink), List.of(afterStream), afterSink.id()));
+
+        selector.put("value", "test-output-before");
+        PipeWireRouteManager.Plan streamOnly = manager.plan(config,
+                snapshotWithStreams(List.of(beforeSink), List.of(afterStream), beforeSink.id()));
+        PipeWireRouteManager.StreamPlan beforeFirefox = before.streams().stream()
+                .filter(stream -> "org.mozilla.firefox".equals(stream.node().applicationId())).findFirst().orElseThrow();
+        PipeWireRouteManager.StreamPlan afterFirefox = after.streams().stream()
+                .filter(stream -> "org.mozilla.firefox".equals(stream.node().applicationId())).findFirst().orElseThrow();
+        assertNotEquals(before.routes().stream().filter(route -> route.sink() != null).findFirst().orElseThrow().sink().name(),
+                after.routes().stream().filter(route -> route.sink() != null).findFirst().orElseThrow().sink().name());
+        assertNotEquals(beforeFirefox.node().id(), afterFirefox.node().id());
+        assertNotEquals(beforeFirefox.node().name(), afterFirefox.node().name());
+        assertNotEquals(beforeFirefox.node().description(), afterFirefox.node().description());
+        assertNotEquals(beforeFirefox.node().volume(), afterFirefox.node().volume());
+        assertTrue(PipeWireRouteManager.sameRoutingTopology(before, streamOnly));
+        assertFalse(PipeWireRouteManager.sameRoutingTopology(before, after));
+    }
+
 
 @Test
     void switchingGraphOutputUpdatesLiveRouteLevelsWithoutChangingPipeWireTopology() throws IOException {

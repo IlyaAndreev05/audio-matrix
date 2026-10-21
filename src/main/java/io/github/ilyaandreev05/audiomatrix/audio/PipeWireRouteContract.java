@@ -40,9 +40,7 @@ abstract class PipeWireRouteContract extends PipeWireRouteState {
     public abstract HeadroomEstimate estimateHeadroom(Map<String, Object> config, PipeWireBackend.Snapshot snapshot, AudioNode sink) throws IOException;
     public abstract double maximumEqBoostDb(Map<String, Object> config, PipeWireBackend.Snapshot snapshot, AudioNode sink) throws IOException;
     protected abstract ApplyReport applyNow(Map<String, Object> config, PipeWireBackend.Snapshot snapshot) throws Exception;
-    protected abstract ApplyReport rebuildPipeWireGraph(Plan plan, String signature, int transitionMs,
-                                             int fadeOutMs, int fadeInMs,
-                                             Map<String, List<Link>> originalBeforeApply) throws Exception;
+    protected abstract ApplyReport reconcilePipeWireGraph(Plan plan, String signature, int transitionMs) throws Exception;
     protected abstract ApplyReport reportAppliedPlan(Plan plan);
     protected abstract boolean observedGraphMatches() throws Exception;
     protected abstract void confirmDesiredLinks() throws Exception;

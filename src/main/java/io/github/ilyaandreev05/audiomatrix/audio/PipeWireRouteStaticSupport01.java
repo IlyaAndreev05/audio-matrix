@@ -114,9 +114,6 @@ abstract class PipeWireRouteStaticSupport01 extends PipeWireRouteTypes {
         catch (Exception e) { return Integer.toHexString(value.hashCode()); }
     }
 
-    protected static Map<String, List<Link>> deepLinks(Map<String, List<Link>> source) {
-        Map<String, List<Link>> copy = new LinkedHashMap<>(); source.forEach((key, links) -> copy.put(key, List.copyOf(links))); return copy;
-    }
 
     protected static void requireCommands(String... names) throws IOException {
         for (String name : names) {

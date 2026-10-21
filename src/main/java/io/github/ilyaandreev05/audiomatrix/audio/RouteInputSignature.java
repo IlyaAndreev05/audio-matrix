@@ -15,21 +15,18 @@ public final class RouteInputSignature {
 
     public static String create(Map<String, Object> config, PipeWireBackend.Snapshot current,
                                 long connectionGeneration) {
-        // Sink node ids are transient; a reconnect must not force a route rebuild by itself.
-        List<String> sinks = current.sinks().stream()
-                .filter(node -> !AudioMatrixOwnedStream.matches(node))
-                .map(node -> node.name() + ":" + node.channels() + ":" + node.identity())
-                .sorted().toList();
-        String defaultSink = current.sinks().stream().filter(node -> node.id() == current.defaultSinkId())
-                .map(node -> node.name() + ":" + node.identity()).findFirst().orElse("");
-        boolean builtin = String.valueOf(config.get("active_route")).startsWith("octine-");
-        List<String> streams = builtin ? List.of() : current.streams().stream()
-                .filter(node -> !AudioMatrixOwnedStream.matches(node) && !isTransientShellSound(node))
-                .map(node -> node.id() + ":" + node.name() + ":" + node.applicationId() + ":" + node.processName()
-                        + ":" + node.channels() + ":" + node.identity())
-                .sorted().toList();
-        boolean eventInputAvailable = current.sources().stream().anyMatch(EventInputMonitor::isNode);
         try {
+            List<String> sinks = current.sinks().stream()
+                    .filter(node -> !AudioMatrixOwnedStream.matches(node))
+                    .map(RouteInputSignature::sinkInput).sorted().toList();
+            String defaultSink = current.sinks().stream()
+                    .filter(node -> node.id() == current.defaultSinkId())
+                    .map(RouteInputSignature::sinkInput).findFirst().orElse("");
+            List<String> streams = current.streams().stream()
+                    .filter(node -> !AudioMatrixOwnedStream.matches(node))
+                    .filter(node -> !isTransientShellSound(node))
+                    .map(RouteInputSignature::streamInput).sorted().toList();
+            boolean eventInputAvailable = current.sources().stream().anyMatch(EventInputMonitor::isNode);
             byte[] inputs = JSON.writeValueAsBytes(Arrays.asList(
                     config.get("active_profile"), config.get("active_route"), config.get("route_library"),
                     config.get("common_vibro_graph"), config.get("profiles"), config.get("buses"),
@@ -42,6 +39,17 @@ public final class RouteInputSignature {
         }
     }
 
+    private static String sinkInput(AudioNode node) {
+        DeviceIdentity identity = node.identity();
+        return node.name() + "\u0000" + identity + "\u0000" + node.channels() + "\u0000"
+                + (identity == null ? "" : identity.channelPositions()) + "\u0000" + node.state();
+    }
+
+    private static String streamInput(AudioNode node) {
+        return node.id() + "\u0000" + node.name() + "\u0000" + node.applicationId() + "\u0000"
+                + node.processName() + "\u0000" + node.channels() + "\u0000" + node.identity() + "\u0000"
+                + node.state();
+    }
     private static boolean isTransientShellSound(AudioNode node) {
         String app = node.applicationName() == null ? "" : node.applicationName();
         String process = node.processName() == null ? "" : node.processName();

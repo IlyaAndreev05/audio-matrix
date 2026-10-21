@@ -108,15 +108,21 @@ abstract class PipeWireRoutePart06 extends PipeWireRouteReconciliation {
     }
 
     protected void stopProcesses(Map<String, ManagedProcess> processes) {
-        for (ManagedProcess managed : new ArrayList<>(processes.values())) {
-            Process process = managed.process();
-            process.destroy();
-            try { if (!process.waitFor(700, TimeUnit.MILLISECONDS)) { process.destroyForcibly(); process.waitFor(700, TimeUnit.MILLISECONDS); } }
-            catch (InterruptedException e) { Thread.currentThread().interrupt(); process.destroyForcibly(); }
-            try { Files.deleteIfExists(managed.log()); } catch (IOException ignored) {}
-            if (managed.configFile() != null) try { Files.deleteIfExists(managed.configFile()); } catch (IOException ignored) {}
-        }
-        processes.clear();
+        for (String key : new ArrayList<>(processes.keySet())) stopProcess(processes, key);
+    }
+
+    protected void stopProcess(Map<String, ManagedProcess> processes, String key) {
+        ManagedProcess managed = processes.remove(key);
+        if (managed != null) stopManagedProcess(managed);
+    }
+
+    private void stopManagedProcess(ManagedProcess managed) {
+        Process process = managed.process();
+        process.destroy();
+        try { if (!process.waitFor(700, TimeUnit.MILLISECONDS)) { process.destroyForcibly(); process.waitFor(700, TimeUnit.MILLISECONDS); } }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); process.destroyForcibly(); }
+        try { Files.deleteIfExists(managed.log()); } catch (IOException ignored) {}
+        if (managed.configFile() != null) try { Files.deleteIfExists(managed.configFile()); } catch (IOException ignored) {}
     }
 
     protected Path bundledLadspaDirectory() throws IOException {
@@ -158,7 +164,8 @@ abstract class PipeWireRoutePart06 extends PipeWireRouteReconciliation {
         disconnectOwnedLinks();
         stopOwnedProcesses();
         if (restoreStreams) restoreAllOriginal();
-        originalStreamLinks.clear(); desiredLinks.clear(); observedLinks.clear(); skippedStreamCount = 0;
+        originalStreamLinks.clear(); linkOwners.clear(); branchErrors.clear(); branchDiagnosticsSnapshot = List.of();
+        desiredLinks.clear(); observedLinks.clear(); skippedStreamCount = 0;
         active = false; appliedSignature = ""; appliedPlan = null;
         status = transitionWarnings.isEmpty() ? "Routes are not applied"
                 : "Routes are not applied · " + String.join("; ", transitionWarnings);

@@ -31,16 +31,33 @@ import java.util.concurrent.TimeUnit;
 abstract class PipeWireRoutePart05 extends PipeWireRoutePart04 {
     protected void updateLiveLevels(Plan previous, Plan plan) throws Exception {
         for (BusPlan bus : plan.buses().values()) {
-            int id = findNodeId(bus.nodeName());
-            WirePlumberMixerControl.setVolume(id, bus.volume());
-            WirePlumberMixerControl.setMuted(id, bus.muted());
+            BusPlan before = previous == null ? null : previous.buses().get(bus.id());
+            if (before != null && sameBusProcess(before, bus)
+                    && Double.compare(before.volume(), bus.volume()) == 0 && before.muted() == bus.muted()) continue;
+            try {
+                int id = findNodeId(bus.nodeName());
+                WirePlumberMixerControl.setVolume(id, bus.volume());
+                WirePlumberMixerControl.setMuted(id, bus.muted());
+            } catch (Exception error) {
+                transitionWarnings.add("Could not update bus level " + bus.id() + ": " + message(error));
+            }
         }
-        for (RoutePlan route : routeLevelUpdateOrder(previous, plan)) {
-            int id = findNodeId(route.playbackNodeName());
-            double volume = effectiveRoutePlaybackVolume(plan, route);
+        List<RoutePlan> routes = previous == null ? plan.routes() : routeLevelUpdateOrder(previous, plan);
+        for (RoutePlan route : routes) {
+            RoutePlan before = previous == null ? null : previous.routes().stream()
+                    .filter(candidate -> candidate.id().equals(route.id())).findFirst().orElse(null);
+            double volume = Math.min(1.0, effectiveRoutePlaybackVolume(plan, route));
             boolean muted = effectiveRoutePlaybackMuted(plan, route);
-            WirePlumberMixerControl.setVolume(id, Math.min(1.0, muted ? 0.0 : volume));
-            WirePlumberMixerControl.setMuted(id, muted);
+            if (before != null && sameRouteProcess(before, route)
+                    && Double.compare(effectiveRoutePlaybackVolume(previous, before), volume) == 0
+                    && effectiveRoutePlaybackMuted(previous, before) == muted) continue;
+            try {
+                int id = findNodeId(route.playbackNodeName());
+                WirePlumberMixerControl.setVolume(id, volume);
+                WirePlumberMixerControl.setMuted(id, muted);
+            } catch (Exception error) {
+                transitionWarnings.add("Could not update route level " + route.id() + ": " + message(error));
+            }
         }
     }
 
