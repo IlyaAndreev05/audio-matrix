@@ -20,27 +20,13 @@ final class GraphNodeCommand {
     static void setVolume(Map<String, Object> config, String routeId, String nodeId, double volume) {
         if (!Double.isFinite(volume) || volume < 0 || volume > 1)
             throw new IllegalArgumentException("Node volume must be between 0 and 1");
-        mutateLevel(config, routeId, nodeId, node -> {
-            if (node instanceof GainNode gain)
-                return new GainNode(gain.id(), gain.name(), gain.inputs().getFirst().channels(),
-                        volume, false, gain.endpointNodeId());
-            if (node instanceof DeviceSlotNode slot)
-                return new DeviceSlotNode(slot.id(), slot.name(), slot.deviceId(),
-                        slot.inputs().getFirst().channels(), volume, slot.muted());
-            throw new IllegalArgumentException("Node has no volume control");
-        });
+        mutateGain(config, routeId, nodeId, gain -> new GainNode(gain.id(), gain.name(),
+                gain.inputs().getFirst().channels(), volume, gain.muted(), gain.endpointNodeId()));
     }
 
     static void setMuted(Map<String, Object> config, String routeId, String nodeId, boolean muted) {
-        mutateLevel(config, routeId, nodeId, node -> {
-            if (node instanceof GainNode gain)
-                return new GainNode(gain.id(), gain.name(), gain.inputs().getFirst().channels(),
-                        gain.gain(), muted, gain.endpointNodeId());
-            if (node instanceof DeviceSlotNode slot)
-                return new DeviceSlotNode(slot.id(), slot.name(), slot.deviceId(),
-                        slot.inputs().getFirst().channels(), slot.volume(), muted);
-            throw new IllegalArgumentException("Node has no mute control");
-        });
+        mutateGain(config, routeId, nodeId, gain -> new GainNode(gain.id(), gain.name(),
+                gain.inputs().getFirst().channels(), gain.gain(), muted, gain.endpointNodeId()));
     }
 
     static void setRouteEnabled(Map<String, Object> config, String routeId, String nodeId,
@@ -53,6 +39,8 @@ final class GraphNodeCommand {
         if (!router.multiple()) throw new IllegalArgumentException("This route selector is not a MultiSwitch");
         String[] parts = linkId.split("->", -1);
         boolean connected = parts.length == 2
+                && router.inputs().stream().anyMatch(port -> port.id().equals(parts[0]))
+                && router.outputs().stream().anyMatch(port -> port.id().equals(parts[1]))
                 && graph.connections().stream().anyMatch(edge -> edge.enabled()
                         && edge.toNode().equals(router.id()) && edge.toPort().equals(parts[0]))
                 && graph.connections().stream().anyMatch(edge -> edge.enabled()
@@ -68,15 +56,70 @@ final class GraphNodeCommand {
         save(config, routeId, route, changed);
     }
 
-    private static void mutateLevel(Map<String, Object> config, String routeId, String nodeId,
-                                   java.util.function.Function<GraphNode, GraphNode> mutation) {
+    static GraphNode targetNode(Map<String, Object> config, String routeId, String nodeId) {
+        AudioGraph graph = GraphCodec.fromMap(GraphUiRoutes.route(config, routeId));
+        return graph.nodes().stream().filter(item -> item.id().equals(nodeId)
+                        && (item instanceof GainNode || item instanceof DeviceSlotNode))
+                .findFirst().orElseThrow(() -> new IllegalArgumentException("Volume node no longer exists"));
+    }
+
+    static Object propertyValue(Map<String, Object> config, String routeId, String nodeId, String property) {
+        GraphNode node = targetNode(config, routeId, nodeId);
+        if ("volume".equals(property)) {
+            if (node instanceof GainNode gain) return gain.gain();
+            return deviceBinding(config, ((DeviceSlotNode) node).deviceId())
+                    .getOrDefault("volume", 1.0);
+        }
+        if ("muted".equals(property)) {
+            if (node instanceof GainNode gain) return gain.muted();
+            return deviceBinding(config, ((DeviceSlotNode) node).deviceId())
+                    .getOrDefault("mute", false);
+        }
+        throw new IllegalArgumentException("Unsupported node property");
+    }
+
+    static void setDeviceBindingLevel(Map<String, Object> config, String routeId, String nodeId,
+                                     Double volume, Boolean muted) {
+        GraphNode node = targetNode(config, routeId, nodeId);
+        if (!(node instanceof DeviceSlotNode slot))
+            throw new IllegalArgumentException("Node is not a device output");
+        if (volume != null && (!Double.isFinite(volume) || volume < 0 || volume > 1))
+            throw new IllegalArgumentException("Device volume must be between 0 and 1");
+        Map<String, Object> binding = deviceBinding(config, slot.deviceId());
+        if (volume != null) binding.put("volume", volume);
+        if (muted != null) binding.put("mute", muted);
+    }
+
+    static Map<String, Object> deviceBinding(Map<String, Object> config, String reference) {
+        String id = reference != null && reference.startsWith("device:")
+                ? reference.substring("device:".length()) : reference;
+        if (id == null || id.isBlank() || "system_default".equals(id))
+            throw new IllegalArgumentException("Device output has no saved binding");
+        for (Object value : config.get("devices") instanceof List<?> list ? list : List.of()) {
+            if (!(value instanceof Map<?, ?> raw) || !id.equals(raw.get("id"))) continue;
+            @SuppressWarnings("unchecked") Map<String, Object> binding = (Map<String, Object>) raw;
+            if (Boolean.TRUE.equals(binding.get("ignored")))
+                throw new IllegalArgumentException("Device output binding is unavailable");
+            Object role = binding.get("role");
+            if (role instanceof String configuredRole
+                    && !List.of("output", "speaker", "speakers", "subwoofer", "haptic_output")
+                    .contains(configuredRole))
+                throw new IllegalArgumentException("Device binding is not an output");
+            return binding;
+        }
+        throw new IllegalArgumentException("Device output binding no longer exists");
+    }
+
+    private static void mutateGain(Map<String, Object> config, String routeId, String nodeId,
+                                   java.util.function.Function<GainNode, GainNode> mutation) {
         Map<String, Object> route = GraphUiRoutes.route(config, routeId);
         AudioGraph graph = GraphCodec.fromMap(route);
-        GraphNode node = graph.nodes().stream().filter(item -> item.id().equals(nodeId)
-                && (item instanceof GainNode || item instanceof DeviceSlotNode)).findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("Volume node no longer exists"));
-        AudioGraph changed = new AudioGraph(graph.id(), graph.name(), replace(graph.nodes(), node, mutation.apply(node)),
-                graph.connections());
+        GainNode node = graph.nodes().stream().filter(item -> item.id().equals(nodeId)
+                        && item instanceof GainNode)
+                .map(GainNode.class::cast).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Gain node no longer exists"));
+        AudioGraph changed = new AudioGraph(graph.id(), graph.name(),
+                replace(graph.nodes(), node, mutation.apply(node)), graph.connections());
         save(config, routeId, route, changed);
     }
 

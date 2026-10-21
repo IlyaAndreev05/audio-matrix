@@ -160,4 +160,22 @@ class ConfigStoreTest {
             assertEquals("en", ((Map<String, Object>) store.snapshot().get("ui")).get("language"));
         }
     }
+    @Test void revisionBaselinesAreDefensiveAndBoundedToTheMostRecent128Snapshots() throws Exception {
+        try (ConfigStore store = new ConfigStore(temp.resolve("history.json"))) {
+            long initialRevision = store.revision();
+            for (int index = 0; index < 128; index++) {
+                double level = (index % 9) / 10.0;
+                store.updateAsync(config -> ((Map<String, Object>) config.get("mixer"))
+                        .put("global_volume", level)).join();
+            }
+
+            assertNull(store.snapshotAtRevision(initialRevision), "the oldest baseline must be evicted");
+            Map<String, Object> retained = store.snapshotAtRevision(initialRevision + 1);
+            assertNotNull(retained);
+            ((Map<String, Object>) retained.get("mixer")).put("global_volume", -1);
+            assertNotEquals(-1, ((Map<String, Object>) store.snapshotAtRevision(initialRevision + 1)
+                    .get("mixer")).get("global_volume"));
+        }
+    }
+
 }

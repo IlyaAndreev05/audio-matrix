@@ -31,6 +31,7 @@ import java.util.function.Consumer;
 
 public final class ConfigStore implements AutoCloseable {
     private static final TypeReference<LinkedHashMap<String, Object>> MAP_TYPE = new TypeReference<>() {};
+    private static final int REVISION_HISTORY_LIMIT = 128;
     private final Path file;
     private final Path legacyFile;
     private final ObjectMapper mapper;
@@ -41,6 +42,7 @@ public final class ConfigStore implements AutoCloseable {
         Thread t = new Thread(r, "audio-matrix-config-storage"); t.setDaemon(true); return t;
     });
     private final List<Consumer<ConfigEvent>> listeners = new CopyOnWriteArrayList<>();
+    private final LinkedHashMap<Long, Map<String, Object>> revisionHistory = new LinkedHashMap<>();
     private volatile Map<String, Object> current;
     private volatile String fingerprint;
     private volatile long revision;
@@ -75,10 +77,21 @@ public final class ConfigStore implements AutoCloseable {
     public synchronized VersionedConfig snapshot() {
         return new VersionedConfig(deepCopy(current), revision);
     }
+    /** Returns a defensive copy of a retained revision, or {@code null} when it was evicted. */
+    public synchronized Map<String, Object> snapshotAtRevision(long requestedRevision) {
+        Map<String, Object> baseline = revisionHistory.get(requestedRevision);
+        return baseline == null ? null : deepCopy(baseline);
+    }
     public synchronized long revision() { return revision; }
     public String diagnostic() { return diagnostic; }
     public void addListener(Consumer<ConfigEvent> listener) { listeners.add(listener); }
     public void removeListener(Consumer<ConfigEvent> listener) { listeners.remove(listener); }
+
+    private void rememberRevision() {
+        revisionHistory.put(revision, deepCopy(current));
+        while (revisionHistory.size() > REVISION_HISTORY_LIMIT)
+            revisionHistory.remove(revisionHistory.keySet().iterator().next());
+    }
 
     public synchronized void save(Map<String, Object> next) throws IOException, ConfigConflictException, ConfigValidationException {
         long expectedRevision = next instanceof VersionedConfig versioned ? versioned.revision() : revision;
@@ -98,6 +111,7 @@ public final class ConfigStore implements AutoCloseable {
         current = deepCopy(next);
         fingerprint = hash(data);
         revision++;
+        rememberRevision();
         diagnostic = "";
         publish(new ConfigEvent(current, "Configuration saved"));
     }
@@ -210,6 +224,7 @@ public final class ConfigStore implements AutoCloseable {
         current = deepCopy(parsed);
         fingerprint = hash(bytes);
         revision++;
+        rememberRevision();
         diagnostic = "";
         if (notify) publish(new ConfigEvent(current, "External configuration reloaded"));
     }

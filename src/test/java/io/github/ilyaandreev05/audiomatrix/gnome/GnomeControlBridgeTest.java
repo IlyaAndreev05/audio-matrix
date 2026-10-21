@@ -22,6 +22,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 class GnomeControlBridgeTest {
     private final AudioNode selected = new AudioNode(12, "alsa_output.usb-test", "USB test output", "Audio/Sink",
@@ -81,60 +82,82 @@ class GnomeControlBridgeTest {
 
     @Test void decodesEscapedTabFromGdbusCommandSignal() {
         GnomeControlBridge.Command command = GnomeControlBridge.parseCommandLine(
-                "/org/ilya/AudioMatrix: org.ilya.AudioMatrix.Command ('set_channel_map', 'test-route\\tmono_sum')");
+                "/org/ilya/AudioMatrix: org.ilya.AudioMatrix.Command "
+                        + "(uint32 5, 'clientUUID:requestUUID', '41', 'set_channel_map', 'test-route\\tmono_sum')");
 
-        assertEquals(new GnomeControlBridge.Command("set_channel_map", "test-route\tmono_sum"), command);
+        assertEquals(new GnomeControlBridge.Command(5, "clientUUID:requestUUID", "41",
+                "set_channel_map", "test-route\tmono_sum"), command);
+    }
+
+    @Test void parsesOnlyTheExactApiV5CommandTuple() {
+        assertEquals(new GnomeControlBridge.Command(5, "clientUUID:request-22", "41", "open", ""),
+                GnomeControlBridge.parseCommandArguments(
+                        List.of("5", "clientUUID:request-22", "41", "open", "")));
+        assertNull(GnomeControlBridge.parseCommandArguments(List.of("5", "request-22", "open", "")));
+        assertNull(GnomeControlBridge.parseCommandLine(
+                "AudioMatrix.Command (uint32 4, 'clientUUID:request-22', '41', 'open', '')"));
+        assertNull(GnomeControlBridge.parseCommandLine(
+                "AudioMatrix.Command ('open', '')"));
     }
 
     @Test void parsesVersionedCommandAndRequestIdFromGdbusSignal() {
         GnomeControlBridge.Command command = GnomeControlBridge.parseCommandLine(
-                "/org/ilya/AudioMatrix: org.ilya.AudioMatrix.Command (uint32 4, 'request-17', 'set_output_volume', 'speaker\\t0.35')");
+                "/org/ilya/AudioMatrix: org.ilya.AudioMatrix.Command "
+                        + "(uint32 5, 'clientUUID:request-17', '40', 'set_output_volume', 'speaker\\t0.35')");
 
-        assertEquals(new GnomeControlBridge.Command(4,"request-17","set_output_volume","speaker\t0.35"),command);
+        assertEquals(new GnomeControlBridge.Command(5, "clientUUID:request-17", "40",
+                "set_output_volume", "speaker\t0.35"), command);
     }
 
-    @Test void parsesMultilineGdbusCommandArguments(){
-        assertEquals(new GnomeControlBridge.Command(4,"request-22","open",""),
-                GnomeControlBridge.parseCommandArguments(List.of("4","request-22","open","")));
-        assertEquals(null,GnomeControlBridge.parseCommandArguments(List.of("3","request-22","open")));
-        assertEquals(new GnomeControlBridge.Command(4,"request-23","41","select_route","route-9"),
-                GnomeControlBridge.parseCommandArguments(List.of("4","request-23","41","select_route","route-9")));
+    @Test void parsesMultilineGdbusCommandArguments() {
+        assertEquals(new GnomeControlBridge.Command(5, "clientUUID:request-22", "41", "open", ""),
+                GnomeControlBridge.parseCommandArguments(List.of("5", "clientUUID:request-22", "41", "open", "")));
+        assertNull(GnomeControlBridge.parseCommandArguments(List.of("4", "clientUUID:request-22", "41", "open", "")));
+        assertEquals(new GnomeControlBridge.Command(5, "clientUUID:request-23", "41", "select_route", "route-9"),
+                GnomeControlBridge.parseCommandArguments(
+                        List.of("5", "clientUUID:request-23", "41", "select_route", "route-9")));
     }
 
     @Test void revisionedGraphEditsRejectStaleSnapshots() {
         GnomeControlBridge.Command command = GnomeControlBridge.parseCommandLine(
-                "AudioMatrix.Command (uint32 4, 'request-24', '41', 'select_route', 'route-9')");
+                "AudioMatrix.Command (uint32 5, 'clientUUID:request-24', '41', 'select_route', 'route-9')");
 
-        assertEquals(new GnomeControlBridge.Command(4, "request-24", "41", "select_route", "route-9"), command);
+        assertEquals(new GnomeControlBridge.Command(5, "clientUUID:request-24", "41", "select_route", "route-9"), command);
         assertTrue(GnomeCommandRevision.isStale(command, 42));
         assertFalse(GnomeCommandRevision.isStale(command, 41));
     }
 
-    @Test void versionedCommandAcknowledgesOnlyAfterItsHandlerCompletes(){
-        CompletableFuture<Void> operation=new CompletableFuture<>();
-        CompletableFuture<GnomeControlBridge.CommandResult> result=GnomeControlBridge.execute(
-                new GnomeControlBridge.Command(4,"request-18","set_output_volume","speaker\t0.35"),ignored->operation);
+    @Test void versionedCommandAcknowledgesOnlyAfterItsHandlerCompletes() {
+        CompletableFuture<Void> operation = new CompletableFuture<>();
+        CompletableFuture<GnomeControlBridge.CommandResult> result = GnomeControlBridge.execute(
+                new GnomeControlBridge.Command(5, "clientUUID:request-18", "40",
+                        "set_output_volume", "speaker\t0.35"), ignored -> operation);
 
         assertFalse(result.isDone());
         operation.complete(null);
-        assertEquals(new GnomeControlBridge.CommandResult("ok","Applied"),result.join());
+        assertEquals(new GnomeControlBridge.CommandResult("ok", "Applied"), result.join());
     }
 
-    @Test void versionedCommandReturnsActionFailuresAndRejectsOldOrUnknownCommands(){
-        GnomeControlBridge.CommandResult failed=GnomeControlBridge.execute(
-                new GnomeControlBridge.Command(4,"request-19","set_output_volume","speaker\t0.35"),
-                ignored->CompletableFuture.failedFuture(new IllegalStateException("output disconnected"))).join();
-        AtomicBoolean called=new AtomicBoolean();
-        GnomeControlBridge.CommandResult oldApi=GnomeControlBridge.execute(
-                new GnomeControlBridge.Command(3,"request-20","open",""),ignored->{called.set(true);return CompletableFuture.completedFuture(null);}).join();
-        GnomeControlBridge.CommandResult unknown=GnomeControlBridge.execute(
-                new GnomeControlBridge.Command(4,"request-21","delete_everything",""),ignored->{called.set(true);return CompletableFuture.completedFuture(null);}).join();
+    @Test void versionedCommandReturnsActionFailuresAndRejectsOldOrUnknownCommands() {
+        GnomeControlBridge.CommandResult failed = GnomeControlBridge.execute(
+                new GnomeControlBridge.Command(5, "clientUUID:request-19", "40",
+                        "set_output_volume", "speaker\t0.35"),
+                ignored -> CompletableFuture.failedFuture(new IllegalStateException("output disconnected"))).join();
+        AtomicBoolean called = new AtomicBoolean();
+        GnomeControlBridge.CommandResult oldApi = GnomeControlBridge.execute(
+                new GnomeControlBridge.Command(4, "clientUUID:request-20", "40", "open", ""),
+                ignored -> { called.set(true); return CompletableFuture.completedFuture(null); }).join();
+        GnomeControlBridge.CommandResult unknown = GnomeControlBridge.execute(
+                new GnomeControlBridge.Command(5, "clientUUID:request-21", "40",
+                        "delete_everything", ""),
+                ignored -> { called.set(true); return CompletableFuture.completedFuture(null); }).join();
 
-        assertEquals(new GnomeControlBridge.CommandResult("error","output disconnected"),failed);
-        assertEquals("error",oldApi.status());
-        assertEquals("error",unknown.status());
+        assertEquals(new GnomeControlBridge.CommandResult("error", "output disconnected"), failed);
+        assertEquals("error", oldApi.status());
+        assertEquals("error", unknown.status());
         assertFalse(called.get());
     }
+
 
     @Test void publishesPinnedControlsByStableParameterIdsForTheActiveRouteOnly(){
         Map<String,Object> config=DefaultConfig.create();List<String> stereo=List.of("FL","FR");

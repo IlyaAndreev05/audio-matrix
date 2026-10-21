@@ -24,6 +24,7 @@ abstract class AppShellUiPart29 extends AppShellUiPart28 {
             return CompletableFuture.failedFuture(new IllegalStateException("GNOME command is based on an old Audio Matrix revision"));
         return switch (command.name()) {
             case "select_route" -> updateRouteConfigCommand(t("Выбран маршрут из GNOME", "Route selected from GNOME"), config -> GraphRouteLibrary.activate(config, command.value()));
+            case "select_profile" -> selectGnomeProfile(command.value());
             case "set_quick_group_collapsed" -> setGnomeQuickGroupCollapsed(command.value());
             case "reorder_quick_group" -> updateRouteConfigCommand(t("Изменён порядок групп GNOME", "GNOME group order changed"), config -> GnomeGroupOrder.apply(config, command.value()));
             case "set_quick_pin_view" -> setGnomeQuickPinView(command.value());
@@ -41,22 +42,49 @@ abstract class AppShellUiPart29 extends AppShellUiPart28 {
             case "set_quick_control" -> setGnomeQuickControl(command.value(),false);
             case "toggle_quick_control" -> setGnomeQuickControl(command.value(),true);
             case "set_quick_control_choice" -> setGnomeQuickControlChoice(command.value());
-            case "setNodeVolume", "setNodeMuted", "setRouteEnabled" ->
-                    GnomeGraphNodeCommandExecutor.execute(command.name(), command.value(), store, backend, snapshot,
-                            physicalSinks(), this::updateGraphRuntimeThenStore,
-                            error -> Platform.runLater(() -> setNotice(t("Настройка применена, но не сохранена: ",
-                                    "Runtime setting applied but could not be saved: ") + rootMessage(error), true)),
-                            () -> Platform.runLater(() -> setNotice(t("Настройка применена.", "Setting applied."), false)));
             case "set_graph_gain" -> updateRouteConfigCommand(t("Изменить Gain из GNOME", "Change graph Gain from GNOME"), config -> GraphGainCommand.set(config, command.value(), false));
-            case "toggle_graph_gain_mute" -> updateRouteConfigCommand(t("Изменить Mute Gain из GNOME", "Change graph Gain mute from GNOME"), config -> GraphGainCommand.set(config, command.value(), true));
+            case "toggle_graph_gain_mute" -> updateRouteConfigCommand(t("Изменить Mute Gain from GNOME", "Change graph Gain mute from GNOME"), config -> GraphGainCommand.set(config, command.value(), true));
             case "set_channel_map" -> setGnomeChannelMap(command.value());
             default -> CompletableFuture.failedFuture(new IllegalArgumentException("Unsupported command: "+command.name()));
         };
     }
 
-    private CompletableFuture<Void> updateGraphRuntimeThenStore(java.util.function.Consumer<Map<String, Object>> change) {
-        return GnomeNodeCommandHandler.applyRuntimeThenStore(store, change, routeManager.active() && snapshot.connected(), candidate -> routeManager.apply(runtimeDspConfig(candidate, snapshot), snapshot), error -> Platform.runLater(() -> setNotice(t("Настройка применена, но не сохранена: ", "Runtime setting applied but could not be saved: ") + rootMessage(error), true)), () -> Platform.runLater(() -> setNotice(t("Настройка применена.", "Setting applied."), false)));
+    private CompletableFuture<Void> selectGnomeProfile(String value) {
+        GnomeNodeCommandHandler.Payload payload = GnomeNodeCommandHandler.parse("select_profile", value);
+        if (!(payload instanceof GnomeNodeCommandHandler.SelectProfile profile))
+            return CompletableFuture.failedFuture(new IllegalArgumentException("Profile command is malformed"));
+        return updateGraphRuntimeThenStore(config -> GraphProfileLibrary.activateProfile(config, profile.profileId()));
     }
+
+    protected CompletableFuture<Void> updateGraphRuntimeThenStore(java.util.function.Consumer<Map<String, Object>> change) {
+        return GnomeNodeCommandHandler.applyRuntimeThenStore(store, change,
+                routeManager.active() && snapshot.connected(),
+                candidate -> applyRuntimeGraph(candidate, snapshot, false, false, true),
+                candidate -> applyRuntimeGraph(candidate, snapshot, false, false, false),
+                error -> Platform.runLater(() -> setNotice(t("Настройка применена, но не сохранена: ",
+                        "Runtime setting applied but could not be saved: ") + rootMessage(error), true)),
+                () -> Platform.runLater(() -> setNotice(t("Настройка применена.", "Setting applied."), false)));
+    }
+    @Override
+    protected CompletableFuture<Void> setGraphNodeVolume(String routeId, String nodeId,
+            String instanceKey, double value) {
+        GnomeNodeCommandHandler.Target target =
+                new GnomeNodeCommandHandler.Target(routeId, nodeId, instanceKey);
+        return handleGnomeCommand(new GnomeControlBridge.Command(GnomeControlBridge.API_VERSION,
+                "graph-editor:" + java.util.UUID.randomUUID(), Long.toString(store.revision()),
+                "setNodeVolume", GnomeNodeCommandHandler.encodeVolume(target, value)));
+    }
+
+    @Override
+    protected CompletableFuture<Void> setGraphNodeMuted(String routeId, String nodeId,
+            String instanceKey, boolean muted) {
+        GnomeNodeCommandHandler.Target target =
+                new GnomeNodeCommandHandler.Target(routeId, nodeId, instanceKey);
+        return handleGnomeCommand(new GnomeControlBridge.Command(GnomeControlBridge.API_VERSION,
+                "graph-editor:" + java.util.UUID.randomUUID(), Long.toString(store.revision()),
+                "setNodeMuted", GnomeNodeCommandHandler.encodeMuted(target, muted)));
+    }
+
 
     protected CompletableFuture<Void> setGnomeQuickGroupCollapsed(String value) {
         String[] fields = value.split("\\t", 2);

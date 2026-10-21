@@ -93,10 +93,10 @@ class GnomeGraphOutputGainTest {
 
     @Test void graphOutputCommandsAreAcceptedAndRejectStaleRevision() {
         GnomeControlBridge.Command command = GnomeControlBridge.parseCommandLine(
-                "AudioMatrix.Command (uint32 4, 'request-green', '12', 'set_graph_output_volume', 'family-route\\tgreen\\tgreen-gain\\t0.31')");
+                "AudioMatrix.Command (uint32 5, 'client-1:request-green', '12', 'set_graph_output_volume', 'family-route\\tgreen\\tgreen-gain\\t0.31')");
 
-        assertEquals(new GnomeControlBridge.Command(4, "request-green", "12", "set_graph_output_volume",
-                "family-route\tgreen\tgreen-gain\t0.31"), command);
+        assertEquals(new GnomeControlBridge.Command(5, "client-1:request-green", "12",
+                "set_graph_output_volume", "family-route\tgreen\tgreen-gain\t0.31"), command);
         assertEquals("ok", GnomeControlBridge.execute(command,
                 ignored -> CompletableFuture.completedFuture(null)).join().status());
         assertEquals(true, GnomeCommandRevision.isStale(command, 13));

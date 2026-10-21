@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GnomeCommandContractTest {
     @Test void acceptsRevisionedGroupReorderingWithoutChangingThePayload() {
-        GnomeControlBridge.Command command = new GnomeControlBridge.Command(4, "reorder-1", "17",
+        GnomeControlBridge.Command command = new GnomeControlBridge.Command(5, "client-1:reorder-1", "17",
                 "reorder_quick_group", "my arbitrary group\t2");
         AtomicBoolean called = new AtomicBoolean();
 
@@ -25,27 +25,46 @@ class GnomeCommandContractTest {
         assertTrue(called.get());
         assertTrue(GnomeCommandRevision.isStale(command, 18));
         assertFalse(GnomeCommandRevision.isStale(command, 17));
+        GnomeControlBridge.Command missingRevision = new GnomeControlBridge.Command(5,
+                "client-1:reorder-2", "", "reorder_quick_group", "my arbitrary group\t1");
+        assertTrue(GnomeCommandRevision.isStale(missingRevision, 17));
     }
 
     @Test void absoluteGraphCommandsAreIdempotentAndDoNotRejectRapidUpdatesAsStale() {
-        GnomeControlBridge.Command level = new GnomeControlBridge.Command(4, "gain-1", "9",
-                "setNodeVolume", "main\toctine-vibro-gain\t0.4");
-        GnomeControlBridge.Command mute = new GnomeControlBridge.Command(4, "gain-2", "9",
-                "setNodeMuted", "main\toctine-vibro-gain\ttrue");
+        String volume = "{\"target\":{\"routeId\":\"main\",\"nodeId\":\"octine-vibro-gain\",\"instanceKey\":\"\"},\"value\":0.4}";
+        String mute = "{\"target\":{\"routeId\":\"main\",\"nodeId\":\"octine-vibro-gain\",\"instanceKey\":\"\"},\"muted\":true}";
+        GnomeControlBridge.Command level = new GnomeControlBridge.Command(5, "client-1:gain-1", "9",
+                "setNodeVolume", volume);
+        GnomeControlBridge.Command muteCommand = new GnomeControlBridge.Command(5, "client-1:gain-2", "9",
+                "setNodeMuted", mute);
         List<String> received = new ArrayList<>();
 
         assertEquals("ok", GnomeControlBridge.execute(level, command -> {
             received.add(command.name() + "=" + command.value());
             return CompletableFuture.completedFuture(null);
         }).join().status());
-        assertEquals("ok", GnomeControlBridge.execute(mute, command -> {
+        assertEquals("ok", GnomeControlBridge.execute(muteCommand, command -> {
             received.add(command.name() + "=" + command.value());
             return CompletableFuture.completedFuture(null);
         }).join().status());
 
-        assertEquals(List.of("setNodeVolume=main\toctine-vibro-gain\t0.4",
-                "setNodeMuted=main\toctine-vibro-gain\ttrue"), received);
+        assertEquals(List.of("setNodeVolume=" + volume, "setNodeMuted=" + mute), received);
         assertFalse(GnomeCommandRevision.isStale(level, 10));
-        assertFalse(GnomeCommandRevision.isStale(mute, 10));
+        assertFalse(GnomeCommandRevision.isStale(muteCommand, 10));
     }
+    @Test void absoluteSetterRevisionAllowsDisjointChangesButRejectsOverlapsAndEvictedBaselines() {
+        GnomeControlBridge.Command stale = new GnomeControlBridge.Command(5, "client-1:request-1", "9",
+                "setNodeVolume", "{\"target\":{\"routeId\":\"main\",\"nodeId\":\"gain\",\"instanceKey\":\"\"},\"value\":0.4}");
+
+        assertDoesNotThrow(() -> GnomeCommandRevision.requireAbsoluteSetterRevision(stale, 10,
+                true, 0.2, 0.2, false));
+        assertThrows(IllegalStateException.class, () -> GnomeCommandRevision.requireAbsoluteSetterRevision(stale, 10,
+                true, 0.2, 0.3, false));
+        assertDoesNotThrow(() -> GnomeCommandRevision.requireAbsoluteSetterRevision(stale, 10,
+                true, 0.2, 0.3, true));
+        assertThrows(IllegalStateException.class, () -> GnomeCommandRevision.requireAbsoluteSetterRevision(stale, 10,
+                false, 0.2, 0.2, true));
+        assertEquals("client-1", GnomeCommandRevision.clientId(stale));
+    }
+
 }
