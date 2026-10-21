@@ -196,7 +196,7 @@ abstract class AppShellUiPart20 extends AppShellUiPart19 {
         if (mixerSink != null) backend.setMute(mixerSink.id(), muted).thenRun(this::refreshBackend);
     }
 
-    protected void refreshBackend() { backend.refresh().thenAccept(next -> Platform.runLater(() -> { snapshot = next;syncSystemMasterFromDefaultSink(next,store.snapshot());updateMeterTarget();applyConfiguredDeviceRules(next,store.snapshot());applyConfiguredStreamRules(next,store.snapshot());maybeApplyConfiguredRoutes(store.snapshot(),next);showPage(currentPage); })); }
+    protected void refreshBackend() { backend.refresh().thenAccept(next -> Platform.runLater(() -> { snapshot = next;syncSystemMasterFromDefaultSink(next,store.snapshot());updateMeterTarget();applyConfiguredDeviceRules(next,store.snapshot());applyConfiguredStreamRules(next,store.snapshot());maybeApplyConfiguredRoutes(store.snapshot(),next);if(currentPage==Page.GRAPH)refreshGraphPageRuntime();else showPage(currentPage); })); }
 
     protected void saveDefaultOutput(AudioNode sink) {
         updateConfig(config -> {Map<String,Object> device=ensureDevice(config,sink);activeProfile(config).put("default_output",device.get("id"));});

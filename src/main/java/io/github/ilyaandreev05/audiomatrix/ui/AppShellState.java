@@ -39,7 +39,11 @@ abstract class AppShellState extends AppShellContract02 {
     protected final ArrayDeque<RouteHistoryEntry> routeHistory = new ArrayDeque<>();
     protected final ArrayDeque<RouteHistoryEntry> routeRedoHistory = new ArrayDeque<>();
     protected final ThemeManager themes;
-    protected final GnomeControlBridge gnomeBridge;
+    protected GnomeControlBridge gnomeBridge;
+    protected List<BrowserAdapter> browserAdapters=List.of();
+    protected BrowserSocketServer browserSocketServer;
+    private boolean runtimeInitialized;
+    protected final ConcurrentMap<String,DynamicInstanceRegistry.ReconcileResult> dynamicGraphStates=new ConcurrentHashMap<>();
     protected final ExecutorService archiveIo = Executors.newSingleThreadExecutor(r -> { Thread thread = new Thread(r, "audio-matrix-config-archive"); thread.setDaemon(true); return thread; });
     protected final ExecutorService calibrationIo = Executors.newVirtualThreadPerTaskExecutor();
     protected final VBox sidebar = new VBox(8);
@@ -92,6 +96,25 @@ abstract class AppShellState extends AppShellContract02 {
         this.backend = backend;
         this.themes = themes;
         this.streamRuleApplier = new ApplicationStreamRuleApplier(backend);
-        this.gnomeBridge = new GnomeControlBridge(backend, this::handleGnomeCommand);
+    }
+
+    /** Attaches the shared browser transport before the shell or bridge starts. */
+    protected final void initializeRuntime(BrowserSocketServer server) {
+        if(runtimeInitialized)throw new IllegalStateException("Audio Matrix runtime was already initialized");
+        browserSocketServer=server;
+        browserAdapters=List.copyOf(BrowserAdapterRegistry.createAdapters(server));
+        gnomeBridge=new GnomeControlBridge(this::handleGnomeCommand,browserAdapters);
+        runtimeInitialized=true;
+    }
+
+    protected DynamicInstanceRegistry.ReconcileResult dynamicGraphState(String routeId) {
+        return dynamicGraphStates.get(routeId);
+    }
+
+    protected void setDynamicGraphState(String routeId,DynamicInstanceRegistry.ReconcileResult result) {
+        if(routeId==null||routeId.isBlank())throw new IllegalArgumentException("Route id is required");
+        if(result==null)dynamicGraphStates.remove(routeId);
+        else dynamicGraphStates.put(routeId,result);
+        if(currentPage==Page.GRAPH)Platform.runLater(this::refreshGraphPageRuntime);
     }
 }

@@ -36,6 +36,8 @@ abstract class AppShellUiPart01 extends AppShellState {
     protected AppShellUiPart01(ConfigStore store, PipeWireBackend backend, ThemeManager themes) {
         super(store, backend, themes);
     }
+    private double graphPageScrollH;
+    private double graphPageScrollV;
 
     protected void initializeShell() {
 
@@ -81,8 +83,8 @@ abstract class AppShellUiPart01 extends AppShellState {
             updateMeterTarget();
             connection.setText(next.connected() ? t("PipeWire подключён", "PipeWire connected") : t("PipeWire недоступен", "PipeWire unavailable"));
             connection.getStyleClass().removeAll("accent", "danger", "warning");
-            connection.getStyleClass().add(next.connected() ? "accent" : "danger");
-            showPage(currentPage);
+            if(currentPage==Page.GRAPH)refreshGraphPageRuntime();
+            else showPage(currentPage);
             publishGnomeState();
         }));
     }
@@ -127,6 +129,9 @@ abstract class AppShellUiPart01 extends AppShellState {
     }
 
     protected void showPage(Page page) {
+        if(currentPage==Page.GRAPH&&body.getCenter() instanceof ScrollPane previousGraphScroll){
+            graphPageScrollH=previousGraphScroll.getHvalue();graphPageScrollV=previousGraphScroll.getVvalue();
+        }
         currentPage = page;
         if (page == Page.DSP) backend.monitorOutput(selectedSink);
         else {
@@ -152,6 +157,9 @@ abstract class AppShellUiPart01 extends AppShellState {
         scroll.setFitToWidth(true); scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
         scroll.getStyleClass().add("page-scroll");
         body.setCenter(scroll);
+        if(page==Page.GRAPH)Platform.runLater(()->{
+            if(currentPage==Page.GRAPH&&body.getCenter()==scroll){scroll.setHvalue(graphPageScrollH);scroll.setVvalue(graphPageScrollV);}
+        });
         if (notice.isVisible()) body.setBottom(notice);
     }
 }

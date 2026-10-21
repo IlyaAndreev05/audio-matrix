@@ -44,6 +44,7 @@ abstract class AppShellContract01 extends AppShellBase {
     protected abstract Node deviceRow(AudioNode node, String status, boolean output);
     protected abstract VBox routesPage();
     protected abstract VBox graphPage();
+    protected abstract void refreshGraphPageRuntime();
     protected abstract VBox graphCanvasCard(AudioGraph graph);
     protected abstract double graphCanvasNodeHeight(GraphNode node);
     protected abstract HBox graphRouterCanvas(RouterNode router,VBox inputButtons,VBox outputButtons);
@@ -81,6 +82,8 @@ abstract class AppShellContract01 extends AppShellBase {
     protected abstract void updateGraph(String routeId,Consumer<List<GraphNode>> nodeChange);
     protected abstract void saveGraph(String routeId,AudioGraph graph);
     protected abstract void updateGraphNodeParameters(String routeId,String nodeId,Consumer<Map<String,Object>> change);
+    protected abstract CompletableFuture<Void> setGraphNodeVolume(String routeId,String nodeId,String instanceKey,double value);
+    protected abstract CompletableFuture<Void> setGraphNodeMuted(String routeId,String nodeId,String instanceKey,boolean muted);
     protected abstract void updateGraphMixerInput(String routeId,String nodeId,String port,Double gain,Boolean muted);
     protected abstract void removeGraphNode(String routeId,String nodeId);
     protected abstract void connectGraphNodes(String routeId,GraphNode source,AudioPort sourcePort,GraphNode target,AudioPort targetPort);

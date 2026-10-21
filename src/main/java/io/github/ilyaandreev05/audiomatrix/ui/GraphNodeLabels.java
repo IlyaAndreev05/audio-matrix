@@ -3,7 +3,7 @@ package io.github.ilyaandreev05.audiomatrix.ui;
 import io.github.ilyaandreev05.audiomatrix.graph.DynamicGeneratorNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
 import io.github.ilyaandreev05.audiomatrix.graph.MixerNode;
-import io.github.ilyaandreev05.audiomatrix.graph.SwitchNode;
+import io.github.ilyaandreev05.audiomatrix.graph.RouterNode;
 import java.util.function.BiFunction;
 
 final class GraphNodeLabels {
@@ -12,11 +12,11 @@ final class GraphNodeLabels {
     static String typeName(GraphNode node, BiFunction<String, String, String> translate) {
         if (node instanceof DynamicGeneratorNode) return translate.apply("Генератор источников", "Dynamic generator");
         if (node instanceof MixerNode) return translate.apply("Merge · сумматор", "Merge mixer");
-        if (node instanceof SwitchNode) return "MultiSwitch";
+        if (node instanceof RouterNode router && router.multiple()) return "MultiSwitch";
         return switch (node.type()) {
             case "source" -> translate.apply("Источник", "Source");
             case "output" -> translate.apply("Выход", "Output");
-            case "device_slot" -> translate.apply("Слот устройства", "Device slot");
+            case "device_slot" -> translate.apply("Выход", "Output");
             case "gain" -> "Volume";
             case "gate" -> translate.apply("Затвор", "Gate");
             case "selector" -> translate.apply("Переключатель", "Selector");

@@ -100,7 +100,8 @@ abstract class AppShellUiPart18 extends AppShellUiPart17 {
 
     protected void publishGnomeState() {
         var configState = store.snapshot();
-        gnomeBridge.publishState(snapshot, configState, configState.revision());
+        String activeRoute=String.valueOf(configState.getOrDefault("active_route",""));
+        gnomeBridge.publishState(snapshot, configState, configState.revision(), dynamicGraphState(activeRoute));
     }
 
     protected void applyRoutes() {
