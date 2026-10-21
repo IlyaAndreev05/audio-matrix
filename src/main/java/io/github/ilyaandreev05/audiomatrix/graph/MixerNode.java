@@ -27,13 +27,23 @@ public final class MixerNode extends GraphNode {
         this.inputMutes = Collections.unmodifiableMap(mutes);
     }
     private static List<AudioPort> ports(List<String> channels, Map<String, Double> gains) {
-        if (gains == null || gains.size() < 2) throw new IllegalArgumentException("A mixer needs at least two named inputs");
+        if (gains == null || gains.isEmpty()) throw new IllegalArgumentException("A mixer needs at least one named input");
         List<AudioPort> ports = new ArrayList<>();
         gains.keySet().forEach(id -> ports.add(new AudioPort(id, AudioPort.Direction.INPUT, channels, false)));
         ports.add(new AudioPort("out", AudioPort.Direction.OUTPUT, channels, false));
         return ports;
     }
     public Map<String, Double> inputGains() { return inputGains; }
+    /** Returns a copy with one effective-only fan-in port, preserving configured input levels. */
+    public MixerNode withAdditionalInput(String inputId) {
+        if (inputId == null || inputId.isBlank()) throw new IllegalArgumentException("Mixer input id must not be blank");
+        if (inputGains.containsKey(inputId)) return this;
+        Map<String, Double> gains = new LinkedHashMap<>(inputGains);
+        gains.put(inputId, 1.0);
+        Map<String, Boolean> mutes = new LinkedHashMap<>(inputMutes);
+        mutes.put(inputId, false);
+        return new MixerNode(id(), name(), inputs().getFirst().channels(), gains, mutes);
+    }
     public Map<String, Boolean> inputMutes() { return inputMutes; }
     public boolean inputMuted(String port) { return inputMutes.getOrDefault(port, false); }
     @Override public String type() { return "mixer"; }

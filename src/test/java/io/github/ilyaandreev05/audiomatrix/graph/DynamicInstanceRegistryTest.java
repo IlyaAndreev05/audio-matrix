@@ -180,7 +180,7 @@ class DynamicInstanceRegistryTest {
 
         assertFalse(parentState.available());
         assertFalse(parentState.bindingAvailable());
-        assertTrue(parentState.runtimeBinding().get(\"streams\") instanceof List<?> streams && streams.isEmpty());
+        assertTrue(parentState.runtimeBinding().get("streams") instanceof List<?> streams && streams.isEmpty());
         assertTrue(tabState.available());
         assertTrue(tabState.bindingAvailable());
         assertFalse(tabState.controlAvailable());

@@ -49,6 +49,7 @@ public final class GraphRouteLibrary {
         int index = indexOf(routes, graph.id());
         if (index >= 0) routes.set(index, encoded); else routes.add(encoded);
         GraphEndpointGainQuickControls.ensure(config, graph, freshEndpoints, migratedEndpoints);
+        GraphGeneratorComposites.ensureRoute(config, graph);
         return graph.id();
     }
 
@@ -89,18 +90,19 @@ public final class GraphRouteLibrary {
         AudioGraph original = GraphCodec.fromMap(source);
         String newRouteId = id("route");
         Map<String, String> nodeIds = new HashMap<>();
-        original.nodes().forEach(node -> nodeIds.put(node.id(), id(node.type())));
+        original.nodes().forEach(node -> nodeIds.put(node.id(),
+                GraphHapticChain.keepsCanonicalId(node.id()) ? node.id() : id(node.type())));
+        GraphDynamicCopyRemapper.Mapping generatedIds = GraphDynamicCopyRemapper.create(original, nodeIds);
+        nodeIds.putAll(generatedIds.nodeIds());
+        Map<String, String> portIds = generatedIds.portIds();
         List<GraphNode> nodes = original.nodes().stream()
-                .map(node -> GraphNodeCopies.copy(node, nodeIds.get(node.id()), nodeIds)).toList();
+                .map(node -> GraphNodeCopies.copy(node, nodeIds.get(node.id()), nodeIds, portIds)).toList();
         List<GraphConnection> edges = original.connections().stream().map(edge -> new GraphConnection(
-                id("link"), nodeIds.get(edge.fromNode()), edge.fromPort(), nodeIds.get(edge.toNode()), edge.toPort(), edge.enabled(), edge.gain())).toList();
+                id("link"), nodeIds.get(edge.fromNode()), portIds.getOrDefault(edge.fromPort(), edge.fromPort()),
+                nodeIds.get(edge.toNode()), portIds.getOrDefault(edge.toPort(), edge.toPort()),
+                edge.enabled(), edge.gain())).toList();
         AudioGraph copy = new AudioGraph(newRouteId, newName == null || newName.isBlank() ? original.name() + " (копия)" : newName, nodes, edges);
-        Map<String,Object> layouts=mutableMap(config,"graph_ui_layout");Map<String,Object> sourceLayout=map(layouts.get(routeId));Map<String,Object> copiedLayout=new LinkedHashMap<>();
-        sourceLayout.forEach((oldNode,value)->{String newNode=nodeIds.get(oldNode);if(newNode!=null)copiedLayout.put(newNode,deepValue(value));});
-        if(!copiedLayout.isEmpty())layouts.put(newRouteId,copiedLayout);
-        io.github.ilyaandreev05.audiomatrix.config.GraphMatrixViewSettings.duplicateRoute(
-                config, routeId, newRouteId, nodeIds);
-        Map<String,Object> scales=mutableMap(config,"graph_ui_scale");Object scale=scales.get(routeId);if(scale instanceof Number)scales.put(newRouteId,scale);
+        GraphRouteCopyState.copy(config, routeId, newRouteId, nodeIds);
         GraphSubgraphLibrary.duplicateRoute(config, routeId, newRouteId, nodeIds);
         GraphQuickControls.duplicate(config,routeId,newRouteId,nodeIds);
         saveRoute(config, copy, targetGroupId, targetProfileId);

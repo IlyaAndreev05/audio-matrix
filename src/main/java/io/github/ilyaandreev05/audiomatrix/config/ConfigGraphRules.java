@@ -1,16 +1,10 @@
 package io.github.ilyaandreev05.audiomatrix.config;
 
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
-import io.github.ilyaandreev05.audiomatrix.graph.DeviceSlotNode;
-import io.github.ilyaandreev05.audiomatrix.graph.DynamicGeneratorNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCommonVibro;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
-import io.github.ilyaandreev05.audiomatrix.graph.GraphSubgraph;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphValidator;
-import io.github.ilyaandreev05.audiomatrix.graph.OutputNode;
-import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -96,159 +90,19 @@ final class ConfigGraphRules {
         validateGraphUiScales(config,routeIds,errors);
         validateGraphSubgraphs(config,graphs,routeIds,errors);
     }
-    /**
-     * Two slots in one graph must not share a physical output, and the active route must not
-     * double the always-applied Vibro output. Inactive routes may pre-bind shared hardware so
-     * their outputs stay visible in the controls without becoming part of the applied graph.
-     */
     static void validatePhysicalAssignments(Map<String,AudioGraph> graphs,String activeRoute,List<String> errors){
-        String commonId=GraphCommonVibro.COMMON_ROUTE_ID, vibroDevice="";
-        AudioGraph common=graphs.get(commonId);
-        if(common!=null)for(GraphNode node:common.nodes())
-            if(node instanceof DeviceSlotNode slot&&GraphCommonVibro.VIBRO_OUTPUT_ID.equals(slot.id()))
-                vibroDevice=deviceReference(slot.deviceId());
-        for(Map.Entry<String,AudioGraph> entry:graphs.entrySet()){
-            String routeId=entry.getKey();Set<String> assigned=new HashSet<>();
-            boolean applied=commonId.equals(routeId)||routeId.equals(activeRoute);
-            for(GraphNode node:entry.getValue().nodes()){
-                String device=deviceId(node);
-                if(device.isBlank()||"system_default".equals(device))continue;
-                if(!assigned.add(device))errors.add("graph "+routeId+" node "+node.id()+" duplicates physical output "+device);
-                if(applied&&!commonId.equals(routeId)&&!vibroDevice.isBlank()&&device.equals(vibroDevice))
-                    errors.add("graph "+routeId+" node "+node.id()+" reuses the Vibro physical output "+device);
-            }
-        }
+        ConfigGraphPhysicalRules.validate(graphs,activeRoute,errors);
     }
 
-    private static String deviceId(GraphNode node){
-        if(node instanceof DeviceSlotNode slot)return deviceReference(slot.deviceId());
-        if(node instanceof OutputNode output)return deviceReference(output.deviceId());
-        return "";
-    }
-
-    private static String deviceReference(String deviceId){
-        return deviceId!=null&&deviceId.startsWith("device:")?deviceId.substring("device:".length()):deviceId;
-    }
     static void validateGraphSubgraphs(Map<String,Object> config,Map<String,AudioGraph> graphs,Set<String> routeIds,List<String> errors){
-        Object raw=config.get("graph_ui_subgraphs");
-        Map<?,?> byRoute;
-        if(raw==null)byRoute=Map.of();
-        else if(raw instanceof Map<?,?> map)byRoute=map;
-        else{errors.add("graph_ui_subgraphs must be an object");byRoute=Map.of();}
-        Set<String> subgraphRoutes=new HashSet<>();
-        for(Map.Entry<?,?> entry:byRoute.entrySet()){
-            String routeId=String.valueOf(entry.getKey());AudioGraph graph=graphs.get(routeId);
-            if(!routeIds.contains(routeId)||graph==null){errors.add("graph_ui_subgraphs references a missing route: "+routeId);continue;}
-            subgraphRoutes.add(routeId);
-            validateSubgraphList(entry.getValue(),graph,"graph_ui_subgraphs["+routeId+"]",errors);
-        }
-        for(Map.Entry<String,AudioGraph> entry:graphs.entrySet())
-            if(routeIds.contains(entry.getKey())&&!subgraphRoutes.contains(entry.getKey()))
-                validateSubgraphList(List.of(),entry.getValue(),"graph_ui_subgraphs["+entry.getKey()+"]",errors);
-        List<Map<String,Object>> copies=ConfigValidationValues.optionalList(config.get("saved_copies"),"saved_copies",new ArrayList<>());
-        for(int i=0;i<copies.size();i++){
-            Map<String,Object> copy=copies.get(i);
-            Object rawRoute=copy.get("route");if(!(rawRoute instanceof Map<?,?> route))continue;
-            Object rawGroups=copy.get("ui_subgraphs");
-            if(rawGroups!=null&&!(rawGroups instanceof List<?>)){errors.add("saved_copies["+i+"].ui_subgraphs must be an array");continue;}
-            List<?> groups=rawGroups instanceof List<?> list?list:List.of();
-            try{Map<String,Object> decoded=new java.util.LinkedHashMap<>();route.forEach((key,value)->decoded.put(String.valueOf(key),value));
-                validateSubgraphList(groups,GraphCodec.fromMap(decoded),"saved_copies["+i+"].ui_subgraphs",errors);
-            }catch(RuntimeException invalid){errors.add("saved_copies["+i+"].ui_subgraphs cannot be checked: "+invalid.getMessage());}
-        }
+        ConfigGraphSubgraphRules.validate(config,graphs,routeIds,errors);
     }
     static void validateSubgraphList(Object raw,AudioGraph graph,String path,List<String> errors){
-        if(!(raw instanceof List<?> list)){errors.add(path+" must be an array");return;}
-        Set<String> graphNodes=graph.nodes().stream().map(GraphNode::id).collect(java.util.stream.Collectors.toSet());
-        Set<String> groupIds=new HashSet<>(),claimedNodes=new HashSet<>();
-        Map<String,GraphSubgraph> groupsById=new java.util.LinkedHashMap<>();
-        List<GraphSubgraph> groups=new ArrayList<>();
-        for(int i=0;i<list.size();i++){
-            if(!(list.get(i) instanceof Map<?,?> map)){errors.add(path+"["+i+"] must be an object");continue;}
-            try{
-                GraphSubgraph group=GraphSubgraph.fromMap(map);
-                groups.add(group);
-                if(!groupIds.add(group.id()))errors.add(path+" contains duplicate id "+group.id());
-                else groupsById.put(group.id(),group);
-                for(String nodeId:group.nodeIds()){
-                    if(!graphNodes.contains(nodeId))errors.add(path+"["+i+"] references a missing node "+nodeId);
-                    if(!claimedNodes.add(nodeId))errors.add(path+" node belongs to more than one subgraph: "+nodeId);
-                }
-            }catch(RuntimeException invalid){errors.add(path+"["+i+"] is invalid: "+invalid.getMessage());}
-        }
-        for(GraphSubgraph group:groups)
-            if(group.parentId()!=null&&!groupIds.contains(group.parentId()))
-                errors.add(path+" subgraph "+group.id()+" references a missing parent "+group.parentId());
-        validateSubgraphGeneratorAssociations(groups,groupsById,graph,path,errors);
-        validateSubgraphParentCycles(groupsById,path,errors);
-    }
-    private static void validateSubgraphParentCycles(Map<String,GraphSubgraph> groups,String path,List<String> errors){
-        Set<String> completed=new HashSet<>();
-        for(String start:groups.keySet()){
-            if(completed.contains(start))continue;
-            Set<String> chain=new HashSet<>();
-            String current=start;
-            while(current!=null&&groups.containsKey(current)&&!completed.contains(current)){
-                if(!chain.add(current)){errors.add(path+" contains a parent cycle involving "+current);break;}
-                current=groups.get(current).parentId();
-            }
-            completed.addAll(chain);
-        }
-    }
-    private static void validateSubgraphGeneratorAssociations(List<GraphSubgraph> groups,
-                                                              Map<String,GraphSubgraph> groupsById,
-                                                              AudioGraph graph,String path,List<String> errors){
-        Map<String,List<String>> ownersByComposite=new java.util.LinkedHashMap<>();
-        for(GraphNode node:graph.nodes()){
-            if(!(node instanceof DynamicGeneratorNode generator))continue;
-            for(Object rawInstance:generator.instances().values()){
-                if(!(rawInstance instanceof Map<?,?> instance))continue;
-                if(!(instance.get("composite_id") instanceof String compositeId)||compositeId.isBlank())continue;
-                ownersByComposite.computeIfAbsent(compositeId,ignored->new ArrayList<>()).add(generator.id());
-            }
-        }
-        for(Map.Entry<String,List<String>> entry:ownersByComposite.entrySet()){
-            GraphSubgraph group=groupsById.get(entry.getKey());
-            if(group==null){
-                errors.add(path+" generator instance references a missing subgraph "+entry.getKey());
-            }else if(entry.getValue().size()!=1||!entry.getValue().getFirst().equals(group.generatorId())){
-                errors.add(path+" generator instance composite_id "+entry.getKey()+" does not match exactly one subgraph generator_id");
-            }
-        }
-        for(GraphSubgraph group:groups){
-            if(group.generatorId()==null)continue;
-            GraphNode owner=graph.nodes().stream().filter(node->group.generatorId().equals(node.id())).findFirst().orElse(null);
-            if(!(owner instanceof DynamicGeneratorNode)){
-                errors.add(path+" subgraph "+group.id()+" references a missing generator "+group.generatorId());
-                continue;
-            }
-            if(ownersByComposite.getOrDefault(group.id(),List.of()).size()!=1)
-                errors.add(path+" subgraph "+group.id()+" must match exactly one generator instance composite_id");
-        }
+        ConfigGraphSubgraphRules.validateList(raw,graph,path,errors);
     }
     static void validateGraphLayouts(Map<String,Object> config,Map<String,AudioGraph> graphs,Set<String> routeIds,List<String> errors){
-        Object value=config.get("graph_ui_layout");if(value==null)return;
-        if(!(value instanceof Map<?,?> layouts)){errors.add("graph_ui_layout must be an object");return;}
-        for(Map.Entry<?,?> entry:layouts.entrySet()){
-            String routeId=String.valueOf(entry.getKey());AudioGraph graph=graphs.get(routeId);
-            if(!routeIds.contains(routeId)||graph==null){errors.add("graph_ui_layout references a missing route: "+routeId);continue;}
-            if(!(entry.getValue() instanceof Map<?,?> nodeLayouts)){errors.add("graph_ui_layout["+routeId+"] must be an object");continue;}
-            Set<String> nodeIds=graph.nodes().stream().map(GraphNode::id).collect(java.util.stream.Collectors.toSet());
-            for(Map.Entry<?,?> nodeEntry:nodeLayouts.entrySet()){
-                String nodeId=String.valueOf(nodeEntry.getKey());if(!nodeIds.contains(nodeId)){errors.add("graph_ui_layout["+routeId+"] references a missing node: "+nodeId);continue;}
-                if(!(nodeEntry.getValue() instanceof Map<?,?> point)){errors.add("graph_ui_layout["+routeId+"]."+nodeId+" must be an object");continue;}
-                for(String axis:List.of("x","y")){Object coordinate=point.get(axis);if(!(coordinate instanceof Number number)||!Double.isFinite(number.doubleValue())||number.doubleValue()<0||number.doubleValue()>10000)errors.add("graph_ui_layout["+routeId+"]."+nodeId+"."+axis+" must be between 0 and 10000");}
-                if(point.size()!=2)errors.add("graph_ui_layout["+routeId+"]."+nodeId+" must only contain x and y");
-            }
-        }
+        ConfigGraphLayoutRules.validateLayouts(config,graphs,routeIds,errors);
     }
     static void validateGraphUiScales(Map<String,Object> config,Set<String> routeIds,List<String> errors){
-        Object value=config.get("graph_ui_scale");if(value==null)return;
-        if(!(value instanceof Map<?,?> scales)){errors.add("graph_ui_scale must be an object");return;}
-        for(Map.Entry<?,?> entry:scales.entrySet()){
-            String routeId=String.valueOf(entry.getKey());Object scale=entry.getValue();
-            if(!routeIds.contains(routeId)){errors.add("graph_ui_scale references a missing route: "+routeId);continue;}
-            if(!(scale instanceof Number number)||!Double.isFinite(number.doubleValue())||number.doubleValue()<0.5||number.doubleValue()>2.0)
-                errors.add("graph_ui_scale["+routeId+"] must be between 0.5 and 2.0");
-        }
+        ConfigGraphLayoutRules.validateUiScales(config,routeIds,errors);
     }}

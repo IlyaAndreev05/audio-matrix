@@ -71,7 +71,6 @@ abstract class PipeWireRouteStaticSupport03 extends PipeWireRouteStaticSupport02
                     || !left.limiterInputNodeName().equals(right.limiterInputNodeName())
                     || !left.limiterOutputNodeName().equals(right.limiterOutputNodeName())) return false;
         }
-        // Transient stream instances, availability, and level values do not change static topology.
         return true;
     }
 

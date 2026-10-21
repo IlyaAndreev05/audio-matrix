@@ -39,11 +39,11 @@ abstract class PipeWireRouteState extends PipeWireRouteStaticSupport04 implement
     protected final Map<String, ManagedProcess> filterChainProcesses = new LinkedHashMap<>();
     protected final Map<String, List<Link>> originalStreamLinks = new LinkedHashMap<>();
     protected final Set<Link> ownedLinks = new LinkedHashSet<>();
-    protected final Map<String, Set<Link>> linkOwners = new LinkedHashMap<>();
-    protected final Map<String, String> branchErrors = new LinkedHashMap<>();
-    protected volatile List<BranchDiagnostic> branchDiagnosticsSnapshot = List.of();
     protected final Set<Link> desiredLinks = new LinkedHashSet<>();
     protected final Set<Link> observedLinks = new HashSet<>();
+    protected final Map<String, Set<Link>> branchOwnedLinks = new LinkedHashMap<>();
+    protected final Map<String, String> processSpecifications = new LinkedHashMap<>();
+    protected volatile Map<String, BranchDiagnostic> branchDiagnostics = Map.of();
     protected int skippedStreamCount;
     protected volatile boolean active;
     protected volatile boolean closed;

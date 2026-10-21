@@ -37,20 +37,19 @@ public abstract class PipeWireRouteTypes {
     public record RouteDiagnostics(int desiredLinks, int observedLinks, int missingLinks,
                                    int unavailableOutputs, int conflictingOutputs,
                                    int commandTimeouts, boolean active) {}
-    public enum BranchKind { ROUTE, BUS, OUTPUT, APPLICATION_STREAM, EVENT_INPUT }
-    public record BranchDiagnostic(String ownerId, BranchKind kind, boolean selected, boolean available,
+    /** One independently reconciled resource branch, addressed only by stable owner identifiers. */
+    public record BranchDiagnostic(String ownerId, String kind, boolean selected, boolean available,
                                    boolean processAlive, List<Link> desiredLinks, List<Link> observedLinks,
-                                   String error) {
+                                   List<String> desiredProcesses, String error) {
         public BranchDiagnostic {
+            ownerId = ownerId == null ? "" : ownerId;
+            kind = kind == null ? "" : kind;
             desiredLinks = List.copyOf(desiredLinks);
             observedLinks = List.copyOf(observedLinks);
+            desiredProcesses = List.copyOf(desiredProcesses);
             error = error == null ? "" : error;
         }
     }
-    /** Runtime-only binding from one exact native capture stream to a generated graph Source. */
-    public record CapturedStreamBinding(String nodeName, String sourceNodeId, String applicationRuleId,
-                                        String parentApplicationId, String parentProcessName,
-                                        String instanceKey, double tabGain, boolean tabMuted) {}
     public record HeadroomEstimate(boolean available, double preLimiterPeakDbfs, double limiterCeilingDbfs,
                                    double postLimiterPeakDbfs, double worstCaseReductionDb, String message) {
         static HeadroomEstimate unavailable(String message) {
@@ -58,7 +57,8 @@ public abstract class PipeWireRouteTypes {
         }
     }
     protected record ManagedProcess(Process process, Path log, List<String> command, Path configFile) {}
-    protected record BusPlan(String id, String nodeName, String channelLayout, List<String> positions, double volume, boolean muted) {}
+    protected record BusPlan(String id, String nodeName, String role, String channelLayout,
+                             List<String> positions, double volume, boolean muted) {}
     protected record RoutePlan(String id, String fromBusId, String targetBusId, AudioNode sink, String channelMap,
                              List<String> positions, ChannelMatrix channelMatrix,
                              double volume, double gainDb, double delayMs, boolean muted, int priority,
@@ -81,18 +81,10 @@ public abstract class PipeWireRouteTypes {
             return sink.name();
         }
     }
-    protected record StreamPlan(AudioNode node, String busId, List<Map<String, Object>> filters, List<String> positions,
-                              String filterProcessKey, String filterInputNodeName, String filterOutputNodeName,
-                              String bindingId) {
-        protected StreamPlan {
-            filters = List.copyOf(filters);
-            positions = List.copyOf(positions);
-            bindingId = bindingId == null || bindingId.isBlank() ? busId : bindingId;
-        }
-        protected StreamPlan(AudioNode node, String busId, List<Map<String, Object>> filters, List<String> positions,
-                             String filterProcessKey, String filterInputNodeName, String filterOutputNodeName) {
-            this(node, busId, filters, positions, filterProcessKey, filterInputNodeName, filterOutputNodeName, busId);
-        }
+    protected record StreamPlan(AudioNode node, String sourceNodeId, String instanceKey, String busId,
+                                List<Map<String, Object>> filters, List<String> positions,
+                                String filterProcessKey, String filterInputNodeName, String filterOutputNodeName) {
+        protected StreamPlan { filters = List.copyOf(filters); positions = List.copyOf(positions); }
     }
     protected record Plan(Map<String, BusPlan> buses, List<RoutePlan> routes, List<StreamPlan> streams,
                         Map<String, OutputPlan> outputs, List<String> warnings, boolean profileOff,

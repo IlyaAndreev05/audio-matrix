@@ -46,32 +46,25 @@ final class UnifiedGraphPins {
         settings.put("groups", groups());
         config.put("quick_settings", settings);
         pin(config, graph, GraphCommonVibro.MAIN_SOURCE_ID, "applications", 0);
-        pin(config, graph, UnifiedGraphConfig.MONITOR_OUTPUT_ID, "outputs", 0);
-        pin(config, graph, GraphCommonVibro.VIBRO_OUTPUT_ID, "outputs", 1);
         pin(config, graph, UnifiedGraphConfig.SWITCH_ID, "routing", 0);
-        pin(config, graph, GraphCommonVibro.VIBRO_GAIN_ID, "routing", 1);
-        pin(config, graph, UnifiedGraphConfig.MUSIC_GAIN_ID, "routing", 2);
-        pin(config, graph, UnifiedGraphConfig.EVENT_SOURCE_ID, "events", 0);
-        pin(config, graph, UnifiedGraphConfig.EVENT_GAIN_ID, "events", 1);
+        pin(config, graph, GraphCommonVibro.VIBRO_GAIN_ID, "outputs", 0);
+        pin(config, graph, UnifiedGraphConfig.EVENT_GAIN_ID, "events", 0);
     }
 
     static void installDefaults(Map<String, Object> config, AudioGraph graph) {
         QuickSettingsConfig.pins(config).clear();
         pin(config, graph, GraphCommonVibro.MAIN_SOURCE_ID, "applications", 0);
-        pin(config, graph, UnifiedGraphConfig.MONITOR_OUTPUT_ID, "outputs", 0);
-        pin(config, graph, GraphCommonVibro.VIBRO_OUTPUT_ID, "outputs", 1);
         pin(config, graph, UnifiedGraphConfig.SWITCH_ID, "routing", 0);
-        pin(config, graph, GraphCommonVibro.VIBRO_GAIN_ID, "routing", 1);
-        pin(config, graph, UnifiedGraphConfig.MUSIC_GAIN_ID, "routing", 2);
-        pin(config, graph, UnifiedGraphConfig.EVENT_SOURCE_ID, "events", 0);
-        pin(config, graph, UnifiedGraphConfig.EVENT_GAIN_ID, "events", 1);
+        pin(config, graph, GraphCommonVibro.VIBRO_GAIN_ID, "outputs", 0);
+        pin(config, graph, UnifiedGraphConfig.EVENT_GAIN_ID, "events", 0);
     }
 
     private static void pin(Map<String, Object> config, AudioGraph graph, String nodeId, String group, int order) {
         if (graph.nodes().stream().noneMatch(node -> node.id().equals(nodeId))) return;
-        if (QuickSettingsConfig.pins(config).stream().anyMatch(item -> UnifiedGraphConfig.ROUTE_ID.equals(item.get("route_id"))
-                && nodeId.equals(item.get("node_id")))) return;
-        QuickSettingsConfig.pinNode(config, UnifiedGraphConfig.ROUTE_ID, nodeId, group, order, "DEFAULT");
+        if (QuickSettingsConfig.pins(config).stream().anyMatch(item ->
+                UnifiedGraphConfig.ROUTE_ID.equals(item.get("route_id")) && nodeId.equals(item.get("node_id"))
+                        && String.valueOf(item.getOrDefault("instance_key", "")).isBlank())) return;
+        QuickSettingsConfig.pinNode(config, UnifiedGraphConfig.ROUTE_ID, nodeId, "", group, order, "DEFAULT");
     }
 
     private static void attachRetainedControls(Map<String, Object> config, AudioGraph graph,
@@ -81,12 +74,16 @@ final class UnifiedGraphPins {
             String controlId = String.valueOf(control.getOrDefault("id", ""));
             Map<String, Object> pin = QuickSettingsConfig.pins(config).stream()
                     .filter(item -> UnifiedGraphConfig.ROUTE_ID.equals(item.get("route_id"))
-                            && nodeId.equals(item.get("node_id"))).findFirst().orElse(null);
+                            && nodeId.equals(item.get("node_id"))
+                            && String.valueOf(item.getOrDefault("instance_key", "")).isBlank())
+                    .findFirst().orElse(null);
             if (pin == null) {
                 pin(config, graph, nodeId, group(nodeId), QuickSettingsConfig.pins(config).size());
                 pin = QuickSettingsConfig.pins(config).stream()
                         .filter(item -> UnifiedGraphConfig.ROUTE_ID.equals(item.get("route_id"))
-                                && nodeId.equals(item.get("node_id"))).findFirst().orElse(null);
+                                && nodeId.equals(item.get("node_id"))
+                                && String.valueOf(item.getOrDefault("instance_key", "")).isBlank())
+                        .findFirst().orElse(null);
             }
             if (pin == null) continue;
             List<String> ids = strings(pin.get("control_ids"));
@@ -98,6 +95,7 @@ final class UnifiedGraphPins {
     private static String group(String id) {
         if (id.equals(UnifiedGraphConfig.EVENT_SOURCE_ID) || id.equals(UnifiedGraphConfig.EVENT_GAIN_ID)) return "events";
         if (id.equals(GraphCommonVibro.MAIN_SOURCE_ID)) return "applications";
+        if (id.equals(GraphCommonVibro.VIBRO_GAIN_ID)) return "outputs";
         if (id.endsWith("output")) return "outputs";
         return "routing";
     }

@@ -31,33 +31,23 @@ import java.util.concurrent.TimeUnit;
 abstract class PipeWireRoutePart07 extends PipeWireRoutePart06 {
     protected String signature(Plan plan, PipeWireBackend.Snapshot snapshot) {
         List<String> busPlans = plan.buses().values().stream()
-                .map(bus -> bus.id() + ":" + bus.nodeName() + ":" + bus.channelLayout() + ":" + bus.positions()
-                        + ":" + bus.volume() + ":" + bus.muted())
+                .map(bus -> bus.id() + ":" + bus.nodeName() + ":" + bus.channelLayout() + ":" + bus.positions())
                 .sorted().toList();
         List<String> routePlans = plan.routes().stream()
                 .map(route -> route.id() + ":" + route.fromBusId() + ":" + route.targetBusId() + ":"
-                        + sinkIdentity(route.sink()) + ":" + route.channelMap() + ":" + route.positions() + ":"
-                        + route.channelMatrix() + ":" + route.delayMs() + ":" + route.priority() + ":"
-                        + route.filters().hashCode() + ":" + route.volume() + ":" + route.gainDb() + ":" + route.muted())
-                .sorted().toList();
-        List<String> streamPlans = plan.streams().stream()
-                .map(stream -> stream.bindingId() + ":" + stream.node().name() + ":" + stream.busId()
-                        + ":" + stream.positions() + ":" + stream.filters().hashCode())
+                        + (route.sink() == null ? "" : route.sink().name() + ":" + route.sink().identity().fingerprint())
+                        + ":" + route.channelMap() + ":" + route.positions() + ":" + route.channelMatrix()
+                        + ":" + route.delayMs() + ":" + route.filters().hashCode())
                 .sorted().toList();
         List<String> outputPlans = plan.outputs().values().stream()
-                .map(output -> sinkIdentity(output.sink()) + ":" + output.positions() + ":"
-                        + output.filters().hashCode() + ":" + output.limiterFilters().hashCode())
+                .map(output -> output.sink().name() + ":" + output.sink().identity().fingerprint() + ":"
+                        + output.positions() + ":" + output.filters().hashCode() + ":"
+                        + output.limiterFilters().hashCode())
                 .sorted().toList();
-        List<String> sinkIdentities = snapshot.sinks().stream().filter(sink -> !AudioMatrixOwnedStream.matches(sink))
-                .map(PipeWireRoutePart07::sinkIdentity).sorted().toList();
-        return busPlans + ":" + routePlans + ":" + streamPlans + ":" + outputPlans + ":" + sinkIdentities
-                + ":" + plan.masterVolume() + ":" + plan.masterMuted();
-    }
-
-    private static String sinkIdentity(AudioNode sink) {
-        if (sink == null) return "";
-        DeviceIdentity identity = sink.identity();
-        return identity != null && identity.reliable() ? identity.fingerprint() : sink.name();
+        List<String> availableOutputs = snapshot.sinks().stream()
+                .filter(sink -> !AudioMatrixOwnedStream.matches(sink))
+                .map(sink -> sink.name() + ":" + sink.identity().fingerprint()).sorted().toList();
+        return busPlans + ":" + routePlans + ":" + outputPlans + ":" + availableOutputs;
     }
 
     protected boolean processesAlive() {
@@ -66,9 +56,6 @@ abstract class PipeWireRoutePart07 extends PipeWireRoutePart06 {
                 && filterChainProcesses.values().stream().allMatch(process -> process.process().isAlive());
     }
 
-    public List<BranchDiagnostic> branchDiagnostics() {
-        return branchDiagnosticsSnapshot;
-    }
     public synchronized CompletableFuture<Void> closeAsync() {
         if (closeFuture != null) return closeFuture;
         closed = true;
@@ -79,11 +66,6 @@ abstract class PipeWireRoutePart07 extends PipeWireRoutePart06 {
                 stopOwnedProcesses();
                 restoreAllOriginal();
                 originalStreamLinks.clear();
-                linkOwners.clear();
-                branchErrors.clear();
-                branchDiagnosticsSnapshot = List.of();
-                desiredLinks.clear();
-                observedLinks.clear();
                 active = false;
                 appliedSignature = "";
                 status = "Routes stopped; cleanup reported: " + message(error);

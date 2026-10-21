@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GraphEndpointGainMigrationTest {
@@ -40,8 +41,9 @@ class GraphEndpointGainMigrationTest {
             assertEquals("main", migrated.get("active_route"));
             AudioGraph graph = GraphCodec.fromMap(route(migrated));
             Map<String, Object> compiled = GraphPipeWireCompiler.compile(graph, migrated);
-            assertTrue(((List<?>) compiled.get("routes")).stream().anyMatch(item ->
-                    "system_default".equals(((Map<?, ?>) item).get("to"))));
+            assertFalse(((List<?>) compiled.get("routes")).stream().anyMatch(item ->
+                    "system_default".equals(((Map<?, ?>) item).get("to"))),
+                    "the shipped graph has no system_default placeholder output");
             assertEquals(List.of(), ConfigValidator.validate(migrated));
         }
     }

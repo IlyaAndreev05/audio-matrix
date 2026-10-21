@@ -89,6 +89,13 @@ public class AudioMatrixApp extends Application {
         try {
             var mapper = mapperFor(path);
             Map<String, Object> config = mapper.readValue(path.toFile(), new com.fasterxml.jackson.core.type.TypeReference<>() {});
+            int schema = config.get("schema_version") instanceof Number number ? number.intValue() : -1;
+            if (schema < io.github.ilyaandreev05.audiomatrix.config.DefaultConfig.SCHEMA_VERSION) {
+                ConfigStore.upgradedInMemory(config);
+                System.out.println("Configuration schema " + schema + " migrates in memory to schema "
+                        + io.github.ilyaandreev05.audiomatrix.config.DefaultConfig.SCHEMA_VERSION
+                        + "; the file itself was not modified.");
+            }
             List<String> errors = ConfigValidator.validate(config);
             if (errors.isEmpty()) {
                 String activeRoute = String.valueOf(config.getOrDefault("active_route", ""));

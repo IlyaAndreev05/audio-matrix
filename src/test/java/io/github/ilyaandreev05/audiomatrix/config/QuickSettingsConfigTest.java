@@ -2,9 +2,6 @@ package io.github.ilyaandreev05.audiomatrix.config;
 
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCommonVibro;
 import org.junit.jupiter.api.Test;
-import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
-import io.github.ilyaandreev05.audiomatrix.graph.DynamicGeneratorNode;
-import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
 
 import java.util.*;
 
@@ -25,13 +22,17 @@ class QuickSettingsConfigTest {
         Map<String, Object> config = DefaultConfig.create();
         List<Map<String, Object>> pins = QuickSettingsConfig.pins(config);
 
-        assertEquals(8, pins.size());
+        assertEquals(4, pins.size());
         assertTrue(pins.stream().anyMatch(pin -> "octine-main-source".equals(pin.get("node_id"))
                 && "applications".equals(pin.get("group_id"))));
-        assertTrue(pins.stream().anyMatch(pin -> "octine-vibro-gain".equals(pin.get("node_id"))
+        assertTrue(pins.stream().anyMatch(pin -> "octine-main-switch".equals(pin.get("node_id"))
                 && "routing".equals(pin.get("group_id"))));
-        assertFalse(pins.stream().anyMatch(pin -> Set.of("octine-vibro-mixer", "octine-bass-low-pass")
-                .contains(pin.get("node_id"))));
+        assertTrue(pins.stream().anyMatch(pin -> "octine-vibro-gain".equals(pin.get("node_id"))
+                && "outputs".equals(pin.get("group_id"))));
+        assertTrue(pins.stream().anyMatch(pin -> "octine-vibro-events-volume".equals(pin.get("node_id"))
+                && "events".equals(pin.get("group_id"))));
+        assertFalse(pins.stream().anyMatch(pin -> Set.of("octine-vibro-mixer", "octine-vibro-limiter",
+                "octine-vibro-music-volume", "octine-bass-low-pass").contains(pin.get("node_id"))));
     }
 
     @Test void migrationDropsBassControlsFromMenuAndKeepsThemInTheArchive() {
@@ -64,90 +65,106 @@ class QuickSettingsConfigTest {
     @Test void aUserControlOnAnExistingNodeKeepsItsIdAndGroupDuringMigration() {
         Map<String, Object> config = DefaultConfig.create();
         config.put("schema_version", 9);
-        config.put("quick_controls", new ArrayList<>(List.of(DefaultConfig.map(
-                "id", "my-overall-strength", "route_id", "main", "node_id", "octine-vibro-gain",
-                "parameter_id", "gain", "section", "My vibration", "group_id", "routing", "order", 4))));
+        config.put("quick_controls", new ArrayList<>(List.of(
+                DefaultConfig.map("id", "my-overall-strength", "route_id", "main", "node_id", "octine-main-switch",
+                        "parameter_id", "active_links", "section", "My vibration", "group_id", "routing", "order", 4),
+                DefaultConfig.map("id", "my-vibro-level", "route_id", "main", "node_id", "octine-vibro-gain",
+                        "parameter_id", "gain", "section", "My vibration", "group_id", "outputs", "order", 5))));
 
         ConfigMigration.upgradeConfig(config);
 
-        Map<String, Object> kept = QuickSettingsConfig.groups(config).stream()
+        Map<String, Object> routing = QuickSettingsConfig.groups(config).stream()
                 .filter(group -> "routing".equals(group.get("id"))).findFirst().orElseThrow();
-        Map<String, Object> control = ConfigValidationValues.optionalList(config.get("quick_controls"),
-                "quick_controls", new ArrayList<>()).stream()
+        Map<String, Object> outputs = QuickSettingsConfig.groups(config).stream()
+                .filter(group -> "outputs".equals(group.get("id"))).findFirst().orElseThrow();
+        List<Map<String, Object>> controls = ConfigValidationValues.optionalList(config.get("quick_controls"),
+                "quick_controls", new ArrayList<>());
+        Map<String, Object> control = controls.stream()
                 .filter(item -> "my-overall-strength".equals(item.get("id"))).findFirst().orElseThrow();
-        assertEquals("Маршрутизация", kept.get("name"));
+        Map<String, Object> level = controls.stream()
+                .filter(item -> "my-vibro-level".equals(item.get("id"))).findFirst().orElseThrow();
+        assertEquals("Маршрутизация", routing.get("name"));
+        assertEquals("Выходные устройства", outputs.get("name"));
         assertEquals("routing", control.get("group_id"));
+        assertEquals("outputs", level.get("group_id"));
+        assertTrue(QuickSettingsConfig.pins(config).stream().anyMatch(pin ->
+                "octine-main-switch".equals(pin.get("node_id"))
+                        && ((List<?>) pin.get("control_ids")).contains("my-overall-strength")));
         assertTrue(QuickSettingsConfig.pins(config).stream().anyMatch(pin ->
                 "octine-vibro-gain".equals(pin.get("node_id"))
-                        && ((List<?>) pin.get("control_ids")).contains("my-overall-strength")));
+                        && ((List<?>) pin.get("control_ids")).contains("my-vibro-level")));
     }
-    @Test void pinDisplayOverridesUnpinWithoutDeletingTheGraphNode() {
+    @Test void generatedChildPinsUseGeneratorIdentityAndUnpinStoresSparseFalse() {
         Map<String, Object> config = DefaultConfig.create();
-        Map<String, Object> existing = QuickSettingsConfig.pins(config).stream()
-                .filter(pin -> "main".equals(pin.get("route_id"))).findFirst().orElseThrow();
-        String routeId = String.valueOf(existing.get("route_id"));
-        String nodeId = String.valueOf(existing.get("node_id"));
-        Map<String, Object> updated = QuickSettingsConfig.updatePin(config, routeId, nodeId, "",
-                String.valueOf(existing.get("group_id")), 6, "EXPANDED",
-                "My Application Source", "audio-x-generic-symbolic", false, true);
-        assertEquals(existing.get("id"), updated.get("id"));
-        assertEquals("My Application Source", updated.get("display_name"));
-        assertEquals("audio-x-generic-symbolic", updated.get("icon"));
-        assertEquals(false, updated.get("show_children"));
-        assertEquals(true, updated.get("show_when_offline"));
-
-        assertTrue(QuickSettingsConfig.unpinNode(config, routeId, nodeId, ""));
-        assertFalse(QuickSettingsConfig.pins(config).stream().anyMatch(pin ->
-                routeId.equals(pin.get("route_id")) && nodeId.equals(pin.get("node_id"))));
-        @SuppressWarnings("unchecked")
-        Map<String, Object> route = ((List<Map<String, Object>>) config.get("route_library")).stream()
-                .filter(item -> routeId.equals(item.get("id"))).findFirst().orElseThrow();
-        assertTrue(((List<Map<String, Object>>) route.get("nodes")).stream()
-                .anyMatch(node -> nodeId.equals(node.get("id"))), "Unpinning never deletes the graph node");
-    }
-
-    @Test void removingAQuickSettingsGroupMovesPinsAndControlsBeforeDeletion() {
-        Map<String, Object> config = DefaultConfig.create();
-        Map<String, Object> created = QuickSettingsConfig.createGroup(config, "Temporary", 10);
-        String groupId = String.valueOf(created.get("id"));
-        Map<String, Object> pin = QuickSettingsConfig.pinNode(config, "main", "octine-main-source",
-                groupId, 9, "COMPACT");
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> controls = (List<Map<String, Object>>) config.get("quick_controls");
-        controls.add(DefaultConfig.map("id", "temporary-control", "route_id", "main",
-                "node_id", "octine-main-source", "parameter_id", "gain", "section", "Temporary",
-                "group_id", groupId, "order", 3));
-
-        QuickSettingsConfig.removeGroup(config, groupId);
-
-        assertFalse(QuickSettingsConfig.groups(config).stream().anyMatch(item -> groupId.equals(item.get("id"))));
-        assertEquals("applications", pin.get("group_id"));
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> movedControls = (List<Map<String, Object>>) config.get("quick_controls");
-        assertEquals("applications", movedControls.getLast().get("group_id"));
-        assertTrue(QuickSettingsConfig.pins(config).contains(pin));
-    }
-    @Test void generatedUnpinUsesTheSparseInstanceOverride() {
-        Map<String, Object> config = DefaultConfig.create();
-        String instanceKey = "app:browser-parent:chrome";
-        QuickSettingsConfig.pinNode(config, "main", "octine-main-source", instanceKey,
-                "applications", 0, "EXPANDED");
-        assertTrue(QuickSettingsConfig.unpinNode(config, "main", "octine-main-source", instanceKey));
-        assertFalse(QuickSettingsConfig.pins(config).stream().anyMatch(pin ->
-                instanceKey.equals(pin.get("instance_key"))));
-
-        @SuppressWarnings("unchecked")
+        String generatorId = "application-generator";
+        String instanceKey = "app:org.example.Player";
+        Map<String, Object> record = io.github.ilyaandreev05.audiomatrix.graph.DynamicInstanceRegistry
+                .seedInstanceRecord(generatorId, instanceKey, List.of("source", "gain"));
+        Map<String, Object> generator = DefaultConfig.map("id", generatorId, "type", "dynamic_generator",
+                "name", "Applications", "channels", List.of("FL", "FR"),
+                "parameters", DefaultConfig.map("registry", "applications",
+                        "instances", new LinkedHashMap<>(Map.of(instanceKey, record))));
         Map<String, Object> route = ((List<Map<String, Object>>) config.get("route_library")).stream()
                 .filter(item -> "main".equals(item.get("id"))).findFirst().orElseThrow();
-        AudioGraph graph = GraphCodec.fromMap(route);
-        DynamicGeneratorNode generator = graph.nodes().stream()
-                .filter(DynamicGeneratorNode.class::isInstance).map(DynamicGeneratorNode.class::cast)
-                .filter(node -> "octine-main-source".equals(node.id())).findFirst().orElseThrow();
-        @SuppressWarnings("unchecked")
-        Map<String, Object> instance = (Map<String, Object>) generator.instances().get(instanceKey);
-        @SuppressWarnings("unchecked")
-        Map<String, Object> overrides = (Map<String, Object>) instance.get("overrides");
-        assertEquals(false, overrides.get("pinned"), "Sparse unpin survives automatic pin defaults");
+        List<Map<String, Object>> nodes = new ArrayList<>((List<Map<String, Object>>) route.get("nodes"));
+        nodes.add(generator);
+        route.put("nodes", nodes);
+
+        QuickSettingsConfig.pinNode(config, "main", generatorId, instanceKey, "applications", 20, "EXPANDED");
+        QuickSettingsConfig.updatePin(config, "main", generatorId, instanceKey, "applications", 20, "EXPANDED",
+                "Player", "audio-x-generic-symbolic", true, true);
+        Map<String, Object> pin = QuickSettingsConfig.pins(config).stream()
+                .filter(item -> generatorId.equals(item.get("node_id")) && instanceKey.equals(item.get("instance_key")))
+                .findFirst().orElseThrow();
+        assertEquals("main", pin.get("route_id"));
+        assertEquals("Player", pin.get("display_name"));
+        assertEquals("audio-x-generic-symbolic", pin.get("icon"));
+        assertEquals(true, pin.get("show_children"));
+        assertEquals(true, pin.get("show_when_offline"));
+
+        QuickSettingsConfig.unpinNode(config, "main", generatorId, instanceKey);
+        assertTrue(QuickSettingsConfig.pins(config).stream().noneMatch(item ->
+                generatorId.equals(item.get("node_id")) && instanceKey.equals(item.get("instance_key"))));
+        assertEquals(java.util.Optional.of(false),
+                io.github.ilyaandreev05.audiomatrix.graph.DynamicInstanceRegistry.instanceOverride(
+                        config, "main", generatorId, instanceKey, "pinned"));
+        assertTrue(((List<Map<String, Object>>) route.get("nodes")).stream()
+                .anyMatch(item -> generatorId.equals(item.get("id"))),
+                "Unpinning presentation must not remove the graph generator");
     }
 
+    @Test void deletingAGroupTransfersPresentationWithoutChangingTheGraph() {
+        Map<String, Object> config = DefaultConfig.create();
+        Map<String, Object> custom = QuickSettingsConfig.createGroup(config, "Custom", 4);
+        String customId = String.valueOf(custom.get("id"));
+        QuickSettingsConfig.pinNode(config, "main", "preserved-node", customId, 0, "DEFAULT");
+        ((List<Map<String, Object>>) config.get("quick_controls")).add(DefaultConfig.map(
+                "id", "preserved-control", "route_id", "main", "node_id", "preserved-node",
+                "group_id", customId, "section", "Custom"));
+        String graphBefore = String.valueOf(config.get("route_library"));
+
+        QuickSettingsConfig.removeGroup(config, customId);
+
+        assertFalse(QuickSettingsConfig.groups(config).stream().anyMatch(group -> customId.equals(group.get("id"))));
+        assertEquals("applications", QuickSettingsConfig.pins(config).stream()
+                .filter(pin -> "preserved-node".equals(pin.get("node_id"))).findFirst().orElseThrow().get("group_id"));
+        assertEquals("applications", ((List<Map<String, Object>>) config.get("quick_controls")).stream()
+                .filter(control -> "preserved-control".equals(control.get("id"))).findFirst().orElseThrow().get("group_id"));
+        assertEquals(graphBefore, String.valueOf(config.get("route_library")));
+    }
+
+    @Test void removingTheLastGroupCreatesAStableUnassignedGroup() {
+        Map<String, Object> config = DefaultConfig.create();
+        Map<String, Object> only = DefaultConfig.map("id", "only-group", "name", "Only", "order", 0,
+                "collapsed", false);
+        Map<String, Object> settings = (Map<String, Object>) config.get("quick_settings");
+        settings.put("groups", new ArrayList<>(List.of(only)));
+
+        QuickSettingsConfig.removeGroup(config, "only-group");
+
+        assertEquals(1, QuickSettingsConfig.groups(config).size());
+        Map<String, Object> replacement = QuickSettingsConfig.groups(config).getFirst();
+        assertEquals("Без группы", replacement.get("name"));
+        assertNotEquals("only-group", replacement.get("id"));
+    }
 }

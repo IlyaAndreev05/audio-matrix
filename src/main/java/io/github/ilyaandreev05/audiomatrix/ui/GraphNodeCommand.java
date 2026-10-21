@@ -10,10 +10,11 @@ import io.github.ilyaandreev05.audiomatrix.graph.GraphRouteLibrary;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphValidator;
 import io.github.ilyaandreev05.audiomatrix.graph.RouterNode;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Idempotent graph controls used by the GNOME API v4. */
+/** Canonical graph and endpoint mutations used by the GNOME API v5 node commands. */
 final class GraphNodeCommand {
     private GraphNodeCommand() {}
 
@@ -59,21 +60,27 @@ final class GraphNodeCommand {
     static GraphNode targetNode(Map<String, Object> config, String routeId, String nodeId) {
         AudioGraph graph = GraphCodec.fromMap(GraphUiRoutes.route(config, routeId));
         return graph.nodes().stream().filter(item -> item.id().equals(nodeId)
-                        && (item instanceof GainNode || item instanceof DeviceSlotNode))
+                        && (item instanceof GainNode || item instanceof DeviceSlotNode
+                            || !savedDeviceId(item).isBlank()))
                 .findFirst().orElseThrow(() -> new IllegalArgumentException("Volume node no longer exists"));
+    }
+
+    /** A saved output is bound to one device: a device slot or an output node with a device binding. */
+    static String savedDeviceId(GraphNode node) {
+        if (node instanceof DeviceSlotNode slot) return slot.deviceId();
+        Object reference = node.parameters().get("device_id");
+        return reference instanceof String value ? value : "";
     }
 
     static Object propertyValue(Map<String, Object> config, String routeId, String nodeId, String property) {
         GraphNode node = targetNode(config, routeId, nodeId);
         if ("volume".equals(property)) {
             if (node instanceof GainNode gain) return gain.gain();
-            return deviceBinding(config, ((DeviceSlotNode) node).deviceId())
-                    .getOrDefault("volume", 1.0);
+            return deviceBinding(config, savedDeviceId(node)).getOrDefault("volume", 1.0);
         }
         if ("muted".equals(property)) {
             if (node instanceof GainNode gain) return gain.muted();
-            return deviceBinding(config, ((DeviceSlotNode) node).deviceId())
-                    .getOrDefault("mute", false);
+            return deviceBinding(config, savedDeviceId(node)).getOrDefault("mute", false);
         }
         throw new IllegalArgumentException("Unsupported node property");
     }
@@ -81,13 +88,40 @@ final class GraphNodeCommand {
     static void setDeviceBindingLevel(Map<String, Object> config, String routeId, String nodeId,
                                      Double volume, Boolean muted) {
         GraphNode node = targetNode(config, routeId, nodeId);
-        if (!(node instanceof DeviceSlotNode slot))
-            throw new IllegalArgumentException("Node is not a device output");
+        String deviceId = savedDeviceId(node);
+        if (deviceId.isBlank()) throw new IllegalArgumentException("Node is not a device output");
         if (volume != null && (!Double.isFinite(volume) || volume < 0 || volume > 1))
             throw new IllegalArgumentException("Device volume must be between 0 and 1");
-        Map<String, Object> binding = deviceBinding(config, slot.deviceId());
+        Map<String, Object> binding = new LinkedHashMap<>(deviceBinding(config, deviceId));
         if (volume != null) binding.put("volume", volume);
         if (muted != null) binding.put("mute", muted);
+        storeDeviceBinding(config, deviceId, binding);
+    }
+
+    /** The endpoint store keeps one binding per device; the graph slot keeps its own level and mute. */
+    private static void storeDeviceBinding(Map<String, Object> config, String reference,
+                                           Map<String, Object> binding) {
+        String id = reference.startsWith("device:") ? reference.substring("device:".length()) : reference;
+        List<Object> devices = devices(config);
+        for (int index = 0; index < devices.size(); index++) {
+            Object value = devices.get(index);
+            if (!(value instanceof Map<?, ?> raw) || !id.equals(raw.get("id"))) continue;
+            try {
+                devices.set(index, binding);
+                return;
+            } catch (UnsupportedOperationException immutable) {
+                List<Object> copy = new ArrayList<>(devices);
+                copy.set(index, binding);
+                config.put("devices", copy);
+                return;
+            }
+        }
+        throw new IllegalArgumentException("Device output binding no longer exists");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Object> devices(Map<String, Object> config) {
+        return config.get("devices") instanceof List<?> list ? (List<Object>) list : new ArrayList<>();
     }
 
     static Map<String, Object> deviceBinding(Map<String, Object> config, String reference) {

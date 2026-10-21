@@ -45,8 +45,7 @@ public final class GnomeCommandRevision {
     public static String clientId(GnomeControlBridge.Command command) {
         String requestId = command.requestId();
         int separator = requestId.indexOf(':');
-        return separator > 0 && separator < requestId.length() - 1
-                ? requestId.substring(0, separator) : requestId;
+        return separator > 0 ? requestId.substring(0, separator) : requestId;
     }
     public static void requireAbsoluteSetterRevision(GnomeControlBridge.Command command, long currentRevision,
             boolean baselineRetained, Object baselineProperty, Object currentProperty,

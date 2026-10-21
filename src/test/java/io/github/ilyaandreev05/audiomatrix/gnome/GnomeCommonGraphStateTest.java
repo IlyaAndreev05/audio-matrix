@@ -16,7 +16,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 class GnomeCommonGraphStateTest {
-    @Test void apiV4PublishesUnifiedGraphHierarchyCapabilitiesAndSavedLevelsOffline() {
+    @Test void apiV5PublishesUnifiedGraphHierarchyCapabilitiesAndSavedLevelsOffline() {
         Map<String, Object> config = DefaultConfig.create();
         AudioGraph graph = GraphCodec.fromMap(((List<Map<String, Object>>) config.get("route_library")).getFirst());
         Map<String, Object> runtime = new LinkedHashMap<>(GraphCodec.toMap(graph));
@@ -27,7 +27,7 @@ class GnomeCommonGraphStateTest {
         ((List<Map<String, Object>>) config.get("route_library")).set(0, runtime);
         PipeWireBackend.Snapshot snapshot = PipeWireBackend.Snapshot.offline("disconnected");
 
-        Map<String, Object> state = GnomeGraphState.build(config, snapshot);
+        Map<String, Object> state = GnomeGraphState.build(config, snapshot, null, Map.of());
         assertEquals("main", state.get("routeId"));
         assertEquals(List.of(), state.get("composites"));
         List<Map<String, Object>> published = (List<Map<String, Object>>) state.get("nodes");

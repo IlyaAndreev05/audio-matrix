@@ -1,12 +1,19 @@
 package io.github.ilyaandreev05.audiomatrix.ui;
 
 import io.github.ilyaandreev05.audiomatrix.config.ConfigStore;
+import io.github.ilyaandreev05.audiomatrix.config.DefaultConfig;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphProfileLibrary;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphRouteLibrary;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.List;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -36,12 +43,56 @@ class GnomeNodeCommandHandlerTest {
                         GnomeNodeCommandHandler.encodeMuted(savedNode, false)));
     }
 
+    @Test void profileSelectionPersistsItsRememberedRouteOnlyAfterRuntimeConfirmation() throws Exception {
+        Map<String, Object> config = DefaultConfig.create();
+        Map<String, Object> secondProfile = GraphProfileLibrary.createProfile(config, "main", "Second");
+        String profileId = String.valueOf(secondProfile.get("id"));
+        GraphRouteLibrary.duplicateRoute(config, "main", "First route", profileId, "");
+        String rememberedRoute = GraphRouteLibrary.duplicateRoute(config, "main", "Remembered route",
+                profileId, "").id();
+        GraphProfileLibrary.activateProfile(config, profileId);
+        GraphRouteLibrary.activate(config, rememberedRoute);
+        GraphProfileLibrary.activateProfile(config, "main");
+
+        try (ConfigStore store = new ConfigStore(temp.resolve("profiles.json"))) {
+            store.save(config);
+            GnomeNodeCommandHandler.Payload parsed = GnomeNodeCommandHandler.parse(
+                    "select_profile", "{\"profileId\":\"" + profileId + "\"}");
+            assertEquals(new GnomeNodeCommandHandler.SelectProfile(profileId), parsed);
+            CompletableFuture<Void> runtime = new CompletableFuture<>();
+            CompletableFuture<Void> command = GnomeNodeCommandHandler.applyRuntimeThenStore(store,
+                    candidate -> GraphProfileLibrary.activateProfile(candidate, profileId), true,
+                    candidate -> {
+                        assertEquals(rememberedRoute, candidate.get("active_route"));
+                        return runtime;
+                    },
+                    ignored -> CompletableFuture.completedFuture(null),
+                    error -> fail(error), () -> {});
+
+            assertFalse(command.isDone());
+            assertEquals("main", store.snapshot().get("active_route"));
+            runtime.complete(null);
+            command.join();
+
+            Map<String, Object> saved = store.snapshot();
+            assertEquals(profileId, saved.get("active_profile"));
+            assertEquals(rememberedRoute, saved.get("active_route"));
+            @SuppressWarnings("unchecked") List<Map<String, Object>> profiles =
+                    (List<Map<String, Object>>) saved.get("profiles");
+            assertEquals(rememberedRoute, profiles.stream()
+                    .filter(profile -> profileId.equals(profile.get("id"))).findFirst().orElseThrow()
+                    .get("selected_route_id"));
+        }
+    }
+
     @Test void rejectsMalformedMissingUnsupportedWrongTypeAndOutOfRangePayloadFields() {
         assertInvalid("setNodeVolume", "not-json");
         assertInvalid("setNodeVolume", "{\"target\":{},\"value\":0.5}");
         assertInvalid("setNodeVolume", "{\"target\":{\"routeId\":\"r\",\"nodeId\":\"g\",\"instanceKey\":\"\"},\"value\":\"0.5\"}");
         assertInvalid("setNodeVolume", "{\"target\":{\"routeId\":\"r\",\"nodeId\":\"g\",\"instanceKey\":\"\"},\"value\":1.01}");
         assertInvalid("setNodeVolume", "{\"target\":{\"routeId\":\"r\",\"nodeId\":\"g\",\"instanceKey\":\"\"},\"value\":0.2,\"extra\":true}");
+        assertInvalid("setNodeVolume", "{\"target\":{\"routeId\":\"r\",\"nodeId\":\"g\",\"instanceKey\":\"\"},\"value\":0.3,\"value\":0.4}");
+        assertInvalid("setNodeVolume", "{\"target\":{\"routeId\":\"r\",\"nodeId\":\"g\",\"instanceKey\":\"\"},\"value\":0.4} {}");
         assertInvalid("setNodeMuted", "{\"target\":{\"routeId\":\"r\",\"nodeId\":\"g\",\"instanceKey\":\"\"},\"muted\":\"false\"}");
         assertInvalid("setRouteEnabled", "{\"routeId\":\"r\",\"switchNodeId\":\"s\",\"linkId\":\"a->b\"}");
         assertInvalid("select_profile", "{\"profileId\":\"p\",\"fallback\":\"default\"}");
@@ -96,6 +147,34 @@ class GnomeNodeCommandHandlerTest {
             assertTrue(saveFailed.get());
             assertTrue(rolledBack.get());
             assertEquals("en", ui(store.snapshot()).get("language"));
+        }
+    }
+
+    @Test void awaitsAsynchronousRollbackAfterAnExternalFingerprintConflict() throws Exception {
+        try (ConfigStore store = new ConfigStore(temp.resolve("delayed-rollback.json"))) {
+            CompletableFuture<Void> rollback = new CompletableFuture<>();
+            CountDownLatch rollbackStarted = new CountDownLatch(1);
+            AtomicBoolean saveFailed = new AtomicBoolean();
+            CompletableFuture<Void> command = GnomeNodeCommandHandler.applyRuntimeThenStore(store,
+                    config -> ui(config).put("language", "en"), true,
+                    candidate -> {
+                        FilesConflict.forceExternalChange(store.path());
+                        return CompletableFuture.completedFuture(null);
+                    },
+                    candidate -> {
+                        assertEquals("ru", ui(candidate).get("language"));
+                        rollbackStarted.countDown();
+                        return rollback;
+                    },
+                    error -> saveFailed.set(true), () -> fail("Failed save must not be reported as saved"));
+
+            assertTrue(rollbackStarted.await(5, TimeUnit.SECONDS));
+            assertTrue(saveFailed.get());
+            assertFalse(command.isDone());
+            assertEquals("ru", ui(store.snapshot()).get("language"));
+            rollback.complete(null);
+            assertThrows(CompletionException.class, command::join);
+            assertEquals("ru", ui(store.snapshot()).get("language"));
         }
     }
 

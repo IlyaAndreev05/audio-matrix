@@ -26,7 +26,7 @@ final class GraphGainCommand {
                 .orElseThrow(() -> new IllegalArgumentException("Pinned Gain no longer exists"));
         GainNode changed = new GainNode(current.id(), current.name(), current.inputs().getFirst().channels(),
                 level == null ? current.gain() : level,
-                toggleMute ? !current.muted() : false, current.endpointNodeId());
+                toggleMute ? !current.muted() : current.muted(), current.endpointNodeId());
         List<GraphNode> nodes = new ArrayList<>(graph.nodes());
         nodes.set(nodes.indexOf(current), changed);
         AudioGraph next = new AudioGraph(graph.id(), graph.name(), nodes, graph.connections());

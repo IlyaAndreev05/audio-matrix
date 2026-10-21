@@ -67,10 +67,18 @@ class ApplicationStreamRuleLiveSmokeTest {
 
             RuleState adjustedChrome = waitForRuleState(backend, chromeId, "chrome", 0.37, true, failure);
             RuleState adjustedTelegram = waitForRuleState(backend, telegramId, "telegram-desktop", 0.62, false, failure);
-            assertEquals(0.37, adjustedChrome.volume(), 0.02);
+            assertEquals(0.0, adjustedChrome.volume(), 0.02, "a muted stream keeps the effective gain at zero");
             assertTrue(adjustedChrome.muted());
-            assertEquals(0.62, adjustedTelegram.volume(), 0.02);
+            assertEquals(Math.cbrt(0.62), adjustedTelegram.volume(), 0.02);
             assertFalse(adjustedTelegram.muted());
+            // Unmuting restores the saved linear level of the muted rule.
+            List<Map<String, Object>> unmutedRules = List.of(
+                    Map.of("id", "chrome-rule-" + suffix, "match", Map.of("process", "chrome"), "volume", 0.37, "mute", false));
+            new ApplicationStreamRuleApplier(backend).apply(backend.refresh().get(5, TimeUnit.SECONDS), unmutedRules,
+                    (stream, error) -> failure.compareAndSet(null, error));
+            RuleState restoredChrome = waitForRuleState(backend, chromeId, "chrome", 0.37, false, failure);
+            assertEquals(Math.cbrt(0.37), restoredChrome.volume(), 0.02, "the saved rule level must survive the mute");
+            assertFalse(restoredChrome.muted());
             String links = run("pw-link", "-l");
             assertTrue(PipeWireLinkOperations.linksFromNode(links, chrome.name()).isEmpty());
             assertTrue(PipeWireLinkOperations.linksFromNode(links, telegram.name()).isEmpty());
@@ -109,6 +117,7 @@ class ApplicationStreamRuleLiveSmokeTest {
     private RuleState waitForRuleState(PipeWireBackend backend, String applicationId, String processBinary,
                                        double volume, boolean muted, AtomicReference<Throwable> failure) throws Exception {
         long deadline = System.nanoTime() + Duration.ofSeconds(8).toNanos();
+        String observed = "none";
         while (System.nanoTime() < deadline) {
             Throwable error = failure.get();
             if (error != null) throw new IOException("Application stream rule failed", error);
@@ -119,16 +128,21 @@ class ApplicationStreamRuleLiveSmokeTest {
                 String control = run("wpctl", "get-volume", Integer.toString(stream.id()));
                 java.util.regex.Matcher actualVolume = java.util.regex.Pattern.compile("Volume: ([0-9.]+)").matcher(control);
                 if (actualVolume.find()) {
+                    // wpctl reports the cubic WirePlumber value while the rule holds the linear gain;
+                    // a muted stream keeps its effective gain at zero.
                     double value = Double.parseDouble(actualVolume.group(1));
                     boolean isMuted = control.contains("MUTED");
-                    if (Math.abs(value - volume) < 0.02 && isMuted == muted) return new RuleState(value, isMuted);
+                    observed = control.trim().replace('\n', ' ');
+                    double expected = muted ? 0.0 : Math.cbrt(volume);
+                    if (Math.abs(value - expected) < 0.02 && isMuted == muted) return new RuleState(value, isMuted);
                 }
             }
             Thread.sleep(200);
         }
         Throwable error = failure.get();
         if (error != null) throw new IOException("Application stream rule failed", error);
-        throw new IOException("Timed out waiting for application rule state for " + processBinary);
+        throw new IOException("Timed out waiting for application rule state for " + processBinary
+                + " expected linear=" + volume + " muted=" + muted + " observed: " + observed);
     }
 
     private static void writeSilence(Path path, int seconds) throws IOException {

@@ -20,6 +20,23 @@ class PipeWireBackendSnapshotFilterTest {
     }
 
     @Test
+    void treatsASinkMonitorAsSignalFeedbackAndNotAnApplicationStream() {
+        AudioNode sink=new AudioNode(12,"alsa_output.pci-0000_09_00.1.hdmi-stereo","BenQ","Audio/Sink","running",
+                "","","",2,java.util.List.of(48000),1.0,false,null);
+        AudioNode monitor=new AudioNode(13,"alsa_output.pci-0000_09_00.1.hdmi-stereo_monitor","Monitor of BenQ",
+                "Stream/Output/Audio","running","","","",2,java.util.List.of(48000),1.0,false,null);
+        AudioNode playback=new AudioNode(14,"Firefox","Firefox","Stream/Output/Audio","running",
+                "Firefox","firefox","org.mozilla.firefox",2,java.util.List.of(48000),1.0,false,null);
+
+        assertTrue(PipeWireSnapshotReader.isSinkMonitor(monitor,java.util.List.of(sink)),
+                "a monitor of a known sink must not be routed as an application");
+        assertFalse(PipeWireSnapshotReader.isSinkMonitor(playback,java.util.List.of(sink)),
+                "a real playback stream stays an application");
+        assertFalse(PipeWireSnapshotReader.isSinkMonitor(monitor,java.util.List.of()),
+                "without a matching sink the node is not treated as a monitor");
+    }
+
+    @Test
     void tracksTheIsolatedEventSinkAsAnInputButExcludesItsDiscardNode() {
         assertTrue(PipeWireBackend.isSnapshotAudioNode("Audio/Sink", "audiomatrix_events"),
                 "the event sink must be tracked so a route can retry when its monitor appears");

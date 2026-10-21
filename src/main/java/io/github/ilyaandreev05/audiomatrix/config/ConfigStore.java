@@ -1,25 +1,11 @@
 package io.github.ilyaandreev05.audiomatrix.config;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 
 import java.io.IOException;
-import java.nio.channels.FileChannel;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.AtomicMoveNotSupportedException;
-import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.nio.file.StandardOpenOption;
-import java.nio.file.attribute.PosixFilePermission;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.ArrayList;
-import java.util.EnumSet;
-import java.util.HexFormat;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -30,8 +16,6 @@ import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
 public final class ConfigStore implements AutoCloseable {
-    private static final TypeReference<LinkedHashMap<String, Object>> MAP_TYPE = new TypeReference<>() {};
-    private static final int REVISION_HISTORY_LIMIT = 128;
     private final Path file;
     private final Path legacyFile;
     private final ObjectMapper mapper;
@@ -42,11 +26,7 @@ public final class ConfigStore implements AutoCloseable {
         Thread t = new Thread(r, "audio-matrix-config-storage"); t.setDaemon(true); return t;
     });
     private final List<Consumer<ConfigEvent>> listeners = new CopyOnWriteArrayList<>();
-    private final LinkedHashMap<Long, Map<String, Object>> revisionHistory = new LinkedHashMap<>();
-    private volatile Map<String, Object> current;
-    private volatile String fingerprint;
-    private volatile long revision;
-    private volatile String diagnostic = "";
+    private final ConfigStoreDocument document = new ConfigStoreDocument();
     private volatile boolean closed;
 
     public ConfigStore(Path file) throws IOException, ConfigValidationException {
@@ -75,52 +55,41 @@ public final class ConfigStore implements AutoCloseable {
     }
     public Path path() { return file; }
     public synchronized VersionedConfig snapshot() {
-        return new VersionedConfig(deepCopy(current), revision);
+        return new VersionedConfig(document.copy(), document.revision());
     }
     /** Returns a defensive copy of a retained revision, or {@code null} when it was evicted. */
     public synchronized Map<String, Object> snapshotAtRevision(long requestedRevision) {
-        Map<String, Object> baseline = revisionHistory.get(requestedRevision);
-        return baseline == null ? null : deepCopy(baseline);
+        return document.snapshotAtRevision(requestedRevision);
     }
-    public synchronized long revision() { return revision; }
-    public String diagnostic() { return diagnostic; }
+    public synchronized long revision() { return document.revision(); }
+    public String diagnostic() { return document.diagnostic(); }
     public void addListener(Consumer<ConfigEvent> listener) { listeners.add(listener); }
     public void removeListener(Consumer<ConfigEvent> listener) { listeners.remove(listener); }
 
-    private void rememberRevision() {
-        revisionHistory.put(revision, deepCopy(current));
-        while (revisionHistory.size() > REVISION_HISTORY_LIMIT)
-            revisionHistory.remove(revisionHistory.keySet().iterator().next());
-    }
-
     public synchronized void save(Map<String, Object> next) throws IOException, ConfigConflictException, ConfigValidationException {
-        long expectedRevision = next instanceof VersionedConfig versioned ? versioned.revision() : revision;
+        long expectedRevision = next instanceof VersionedConfig versioned ? versioned.revision() : document.revision();
         save(next, expectedRevision);
     }
 
     private synchronized void save(Map<String, Object> next, long expectedRevision)
             throws IOException, ConfigConflictException, ConfigValidationException {
-        if (expectedRevision != revision)
+        if (expectedRevision != document.revision())
             throw new ConfigConflictException("Configuration changed since this snapshot was read; reload and resolve the edits before saving.");
         List<String> errors = ConfigValidator.validate(next);
         if (!errors.isEmpty()) throw new ConfigValidationException(errors);
         String diskFingerprint = hash(Files.readAllBytes(file));
-        if (!diskFingerprint.equals(fingerprint)) throw new ConfigConflictException("Configuration changed on disk; reload and resolve the edits before saving.");
+        if (!diskFingerprint.equals(document.fingerprint())) throw new ConfigConflictException("Configuration changed on disk; reload and resolve the edits before saving.");
         byte[] data = mapper.writeValueAsBytes(next);
         atomicWrite(data);
-        current = deepCopy(next);
-        fingerprint = hash(data);
-        revision++;
-        rememberRevision();
-        diagnostic = "";
-        publish(new ConfigEvent(current, "Configuration saved"));
+        document.commit(next, hash(data));
+        publish(new ConfigEvent(document.current(), "Configuration saved"));
     }
 
     public synchronized void requireRevision(long expectedRevision) throws IOException, ConfigConflictException {
-        if (expectedRevision != revision)
+        if (expectedRevision != document.revision())
             throw new ConfigConflictException("Configuration changed since the import preview; review it again before applying.");
         String diskFingerprint = hash(Files.readAllBytes(file));
-        if (!diskFingerprint.equals(fingerprint))
+        if (!diskFingerprint.equals(document.fingerprint()))
             throw new ConfigConflictException("Configuration changed on disk after the import preview; reload and review it before applying.");
     }
 
@@ -140,9 +109,9 @@ public final class ConfigStore implements AutoCloseable {
     public CompletableFuture<Void> updateAsync(Consumer<Map<String, Object>> change) {
         return CompletableFuture.runAsync(() -> {
             synchronized (this) {
-                Map<String, Object> next = deepCopy(current);
+                Map<String, Object> next = document.copy();
                 change.accept(next);
-                try { save(next, revision); }
+                try { save(next, document.revision()); }
                 catch (Exception e) { throw new java.util.concurrent.CompletionException(e); }
             }
         }, storageExecutor);
@@ -152,13 +121,13 @@ public final class ConfigStore implements AutoCloseable {
     public CompletableFuture<ConfigChange> updateWithHistoryAsync(Consumer<Map<String, Object>> change) {
         return CompletableFuture.supplyAsync(() -> {
             synchronized (this) {
-                long beforeRevision = revision;
-                Map<String, Object> before = deepCopy(current);
-                Map<String, Object> next = deepCopy(current);
+                long beforeRevision = document.revision();
+                Map<String, Object> before = document.copy();
+                Map<String, Object> next = document.copy();
                 change.accept(next);
                 try { save(next, beforeRevision); }
                 catch (Exception error) { throw new CompletionException(error); }
-                return new ConfigChange(before, beforeRevision, revision);
+                return new ConfigChange(before, beforeRevision, document.revision());
             }
         }, storageExecutor);
     }
@@ -167,23 +136,23 @@ public final class ConfigStore implements AutoCloseable {
     public CompletableFuture<ConfigChange> saveWithHistoryAsync(Map<String, Object> next) {
         return CompletableFuture.supplyAsync(() -> {
             synchronized (this) {
-                long beforeRevision = revision;
-                Map<String, Object> before = deepCopy(current);
+                long beforeRevision = document.revision();
+                Map<String, Object> before = document.copy();
                 try { save(next); }
                 catch (Exception error) { throw new CompletionException(error); }
-                return new ConfigChange(before, beforeRevision, revision);
+                return new ConfigChange(before, beforeRevision, document.revision());
             }
         }, storageExecutor);
     }
 
     /** Restores a prior snapshot only while the caller's expected revision is still current. */
     public CompletableFuture<Long> restoreIfRevisionAsync(Map<String, Object> previous, long expectedRevision) {
-        Map<String, Object> snapshot = deepCopy(previous);
+        Map<String, Object> snapshot = ConfigFileIO.deepCopy(previous);
         return CompletableFuture.supplyAsync(() -> {
             synchronized (this) {
                 try { save(snapshot, expectedRevision); }
                 catch (Exception error) { throw new CompletionException(error); }
-                return revision;
+                return document.revision();
             }
         }, storageExecutor);
     }
@@ -196,37 +165,16 @@ public final class ConfigStore implements AutoCloseable {
 
     private synchronized void loadAndPublish(boolean notify) throws IOException, ConfigValidationException {
         byte[] bytes = Files.readAllBytes(file);
-        Map<String, Object> parsed;
-        try { parsed = mapper.readValue(bytes, MAP_TYPE); }
-        catch (Exception e) {
-            diagnostic = "Configuration could not be parsed: " + e.getMessage();
-            throw new ConfigValidationException(List.of(diagnostic));
-        }
-        boolean upgraded = parsed.get("schema_version") instanceof Number version
-                && version.intValue() < DefaultConfig.SCHEMA_VERSION;
-        if (upgraded) {
-            try { upgradeConfig(parsed); }
-            catch (RuntimeException invalid) {
-                diagnostic = "Configuration migration failed: " + invalid.getMessage();
-                throw new ConfigValidationException(List.of(diagnostic));
-            }
-        }
-        List<String> errors = ConfigValidator.validate(parsed);
-        if (!errors.isEmpty()) {
-            diagnostic = String.join("; ", errors);
-            throw new ConfigValidationException(errors);
-        }
-        if (upgraded) {
+        ConfigStoreLoader.Prepared prepared;
+        try { prepared = ConfigStoreLoader.prepare(mapper, bytes); }
+        catch (ConfigValidationException invalid) { document.diagnostic(invalid.getMessage()); throw invalid; }
+        if (prepared.upgraded()) {
             backupBeforeSchemaUpgrade(DefaultConfig.SCHEMA_VERSION);
-            bytes = mapper.writeValueAsBytes(parsed);
+            bytes = mapper.writeValueAsBytes(prepared.config());
             atomicWrite(bytes);
         }
-        current = deepCopy(parsed);
-        fingerprint = hash(bytes);
-        revision++;
-        rememberRevision();
-        diagnostic = "";
-        if (notify) publish(new ConfigEvent(current, "External configuration reloaded"));
+        document.commit(prepared.config(), hash(bytes));
+        if (notify) publish(new ConfigEvent(document.current(), "External configuration reloaded"));
     }
 
     private void backupBeforeSchemaUpgrade(int schema) throws IOException {
@@ -242,22 +190,26 @@ public final class ConfigStore implements AutoCloseable {
         ConfigMigration.upgradeConfig(config);
     }
 
+    /** Applies the schema upgrade in memory, exactly like loading the file, without writing it. */
+    public static Map<String, Object> upgradedInMemory(Map<String, Object> config) {
+        ConfigMigration.upgradeConfig(config);
+        return config;
+    }
+
     private void startWatcher() {
         ConfigWatcher.start(file, watcherExecutor, () -> closed, this::diskMatchesCurrent, this::reload,
-                error -> { diagnostic = error.getMessage(); publish(new ConfigEvent(snapshot(), "Configuration rejected: " + diagnostic)); },
-                error -> diagnostic = "Configuration watcher stopped: " + error.getMessage());
+                error -> { document.diagnostic(error.getMessage()); publish(new ConfigEvent(snapshot(), "Configuration rejected: " + document.diagnostic())); },
+                error -> document.diagnostic("Configuration watcher stopped: " + error.getMessage()));
     }
 
     private synchronized boolean diskMatchesCurrent() throws IOException {
-        return fingerprint != null && hash(Files.readAllBytes(file)).equals(fingerprint);
+        return document.fingerprint() != null && hash(Files.readAllBytes(file)).equals(document.fingerprint());
     }
 
     private void atomicWrite(byte[] data) throws IOException {
         ConfigFileIO.atomicWrite(file, data);
     }
     private static String hash(byte[] bytes) { return ConfigFileIO.hash(bytes); }
-    @SuppressWarnings("unchecked")
-    private static Map<String, Object> deepCopy(Map<String, Object> source) { return ConfigFileIO.deepCopy(source); }
     private void publish(ConfigEvent event) { listeners.forEach(listener -> { try { listener.accept(event); } catch (RuntimeException ignored) { } }); }
     @Override public void close() { closed = true; watcherExecutor.shutdownNow(); storageExecutor.shutdownNow(); }
 

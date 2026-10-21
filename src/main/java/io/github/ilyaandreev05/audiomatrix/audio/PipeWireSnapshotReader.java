@@ -79,11 +79,22 @@ final class PipeWireSnapshotReader {
                                                       List<AudioNode> sinks, List<AudioNode> sources,
                                                       List<AudioNode> streams) {
         long now = System.currentTimeMillis();
-        Map<String, AudioNode> recent = recentStreams(previous, streams, now);
-        Map<String, Long> seen = seenStreams(previous, streams, now);
+        List<AudioNode> applications = streams.stream()
+                .filter(node -> !isSinkMonitor(node, sinks)).toList();
+        Map<String, AudioNode> recent = recentStreams(previous, applications, now);
+        Map<String, Long> seen = seenStreams(previous, applications, now);
         return new PipeWireBackend.Snapshot(true, "", List.copyOf(sinks), List.copyOf(sources),
-                List.copyOf(streams), List.copyOf(recent.values()), Collections.unmodifiableMap(seen),
+                List.copyOf(applications), List.copyOf(recent.values()), Collections.unmodifiableMap(seen),
                 defaultSinkId(status), now);
+    }
+
+    /** A sink monitor carries the sink's own signal; it is not an application playback stream. */
+    static boolean isSinkMonitor(AudioNode node, List<AudioNode> sinks) {
+        String name = node.name();
+        String suffix = "_monitor";
+        if (!name.endsWith(suffix) || name.length() == suffix.length()) return false;
+        String sinkName = name.substring(0, name.length() - suffix.length());
+        return sinks.stream().anyMatch(sink -> sink.name().equals(sinkName));
     }
 
     private static Map<String, AudioNode> recentStreams(PipeWireBackend.Snapshot previous,

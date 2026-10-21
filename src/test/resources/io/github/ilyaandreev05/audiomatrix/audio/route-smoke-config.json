@@ -1,0 +1,158 @@
+{
+  "schema_version": 11,
+  "app": "audio-matrix",
+  "active_profile": "main",
+  "active_route": "route-smoke",
+  "ui": {"language": "ru", "theme": "system", "start_minimized": false},
+  "mixer": {"global_volume": 1.0, "global_mute": false, "global_eq": {"enabled": false, "filters": []}},
+  "quick_settings": {
+    "enabled": true,
+    "show_output": true,
+    "show_mode": true,
+    "show_mute": true,
+    "open_full_settings": true,
+    "groups": [
+      {"id": "applications", "name": "Приложения", "order": 0, "collapsed": false},
+      {"id": "outputs", "name": "Выходные устройства", "order": 1, "collapsed": false},
+      {"id": "routing", "name": "Маршрутизация", "order": 2, "collapsed": false},
+      {"id": "events", "name": "Звуки событий", "order": 3, "collapsed": false}
+    ],
+    "pins": []
+  },
+  "engine": {
+    "backend": "pipewire",
+    "apply_on_start": true,
+    "restore_owned_nodes_on_exit": true,
+    "device_loss_policy": "mute",
+    "transition_ms": 120
+  },
+  "devices": [
+    {
+      "id": "am_route_smoke_primary",
+      "name": "Private primary output",
+      "selector": {"kind": "name_equals", "value": "am_route_smoke_primary"},
+      "role": "output",
+      "volume": 1.0,
+      "mute": false
+    },
+    {
+      "id": "am_route_smoke_event",
+      "name": "Private event output",
+      "selector": {"kind": "name_equals", "value": "am_route_smoke_event"},
+      "role": "output",
+      "volume": 1.0,
+      "mute": false
+    }
+  ],
+  "applications": [],
+  "buses": [],
+  "routes": [],
+  "dsp": {
+    "order": ["stream", "bus", "route", "physical_output", "limiter"],
+    "global_eq": {"enabled": false, "filters": []},
+    "devices": {},
+    "route_chains": {},
+    "limiter": {"enabled": false, "ceiling_db": -1.0, "lookahead_ms": 5.0, "release_ms": 50.0}
+  },
+  "profiles": [
+    {
+      "id": "main",
+      "name": "Основной",
+      "mode": "multi-output",
+      "default_output": "",
+      "selected_route_id": "route-smoke",
+      "active_buses": [],
+      "active_routes": [],
+      "device_overrides": {}
+    }
+  ],
+  "calibrations": [],
+  "route_groups": [{"id": "main", "name": "Основной", "profile_id": "main"}],
+  "route_library": [
+    {
+      "id": "route-smoke",
+      "name": "Приватный маршрут smoke",
+      "profile_id": "main",
+      "group_id": "main",
+      "nodes": [
+        {
+          "id": "route-smoke-app-source",
+          "name": "Все приложения",
+          "type": "source",
+          "channels": ["FL", "FR"],
+          "parameters": {"selector": "application:unassigned"}
+        },
+        {
+          "id": "route-smoke-app-gain",
+          "name": "Громкость приложений",
+          "type": "gain",
+          "channels": ["FL", "FR"],
+          "parameters": {"gain": 0.5, "muted": false}
+        },
+        {
+          "id": "route-smoke-app-mixer",
+          "name": "Основной микшер",
+          "type": "mixer",
+          "channels": ["FL", "FR"],
+          "parameters": {"input_gains": {"applications": 1.0}, "input_mutes": {"applications": false}}
+        },
+        {
+          "id": "route-smoke-app-switch",
+          "name": "Мультипереключатель",
+          "type": "switch",
+          "channels": ["FL", "FR"],
+          "parameters": {"output_ports": ["primary"], "active_links": ["in->primary"]}
+        },
+        {
+          "id": "route-smoke-primary-output",
+          "name": "Основной выход",
+          "type": "output",
+          "channels": ["FL", "FR"],
+          "parameters": {"device_id": "am_route_smoke_primary"}
+        },
+        {
+          "id": "route-smoke-event-source",
+          "name": "События",
+          "type": "source",
+          "channels": ["FL", "FR"],
+          "parameters": {"selector": "application:io.github.ilyaandreev05.eventsoundstudio"}
+        },
+        {
+          "id": "route-smoke-event-gain",
+          "name": "Громкость событий",
+          "type": "gain",
+          "channels": ["FL", "FR"],
+          "parameters": {"gain": 0.25, "muted": false}
+        },
+        {
+          "id": "route-smoke-event-output",
+          "name": "Выход событий",
+          "type": "output",
+          "channels": ["FL", "FR"],
+          "parameters": {"device_id": "am_route_smoke_event"}
+        }
+      ],
+      "connections": [
+        {"id": "route-smoke-app-in", "from_node": "route-smoke-app-source", "from_port": "out",
+          "to_node": "route-smoke-app-gain", "to_port": "in", "enabled": true, "gain": 1.0},
+        {"id": "route-smoke-app-merge", "from_node": "route-smoke-app-gain", "from_port": "out",
+          "to_node": "route-smoke-app-mixer", "to_port": "applications", "enabled": true, "gain": 1.0},
+        {"id": "route-smoke-app-switch-in", "from_node": "route-smoke-app-mixer", "from_port": "out",
+          "to_node": "route-smoke-app-switch", "to_port": "in", "enabled": true, "gain": 1.0},
+        {"id": "route-smoke-app-out", "from_node": "route-smoke-app-switch", "from_port": "primary",
+          "to_node": "route-smoke-primary-output", "to_port": "in", "enabled": true, "gain": 1.0},
+        {"id": "route-smoke-event-in", "from_node": "route-smoke-event-source", "from_port": "out",
+          "to_node": "route-smoke-event-gain", "to_port": "in", "enabled": true, "gain": 1.0},
+        {"id": "route-smoke-event-out", "from_node": "route-smoke-event-gain", "from_port": "out",
+          "to_node": "route-smoke-event-output", "to_port": "in", "enabled": true, "gain": 1.0}
+      ]
+    }
+  ],
+  "saved_copies": [],
+  "graph_ui_layout": {},
+  "graph_ui_matrix_views": {},
+  "graph_ui_scale": {},
+  "graph_ui_subgraphs": {},
+  "quick_controls": [],
+  "export": {"include_measurements": true, "include_audio_assets": false}
+}

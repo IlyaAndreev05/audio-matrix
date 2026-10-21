@@ -30,24 +30,33 @@ import java.util.concurrent.TimeUnit;
 
 abstract class PipeWireRouteContract extends PipeWireRouteState {
     public abstract CompletableFuture<ApplyReport> apply(Map<String, Object> config, PipeWireBackend.Snapshot snapshot);
+    public abstract CompletableFuture<ApplyReport> apply(Map<String, Object> config, PipeWireBackend.Snapshot snapshot,
+                                                         Map<String, CapturedStreamBinding> bindings);
     public abstract CompletableFuture<ApplyReport> reapplyAfterReconnect(Map<String, Object> config, PipeWireBackend.Snapshot snapshot);
-    protected abstract CompletableFuture<ApplyReport> apply(Map<String, Object> config, PipeWireBackend.Snapshot snapshot,
-                                                  boolean reconnect);
+    public abstract CompletableFuture<ApplyReport> reapplyAfterReconnect(Map<String, Object> config, PipeWireBackend.Snapshot snapshot,
+                                                                         Map<String, CapturedStreamBinding> bindings);
     public abstract CompletableFuture<Void> clear();
     public abstract boolean active();
     public abstract String status();
     public abstract ApplyReport lastReport();
-    public abstract HeadroomEstimate estimateHeadroom(Map<String, Object> config, PipeWireBackend.Snapshot snapshot, AudioNode sink) throws IOException;
-    public abstract double maximumEqBoostDb(Map<String, Object> config, PipeWireBackend.Snapshot snapshot, AudioNode sink) throws IOException;
-    protected abstract ApplyReport applyNow(Map<String, Object> config, PipeWireBackend.Snapshot snapshot) throws Exception;
-    protected abstract ApplyReport reconcilePipeWireGraph(Plan plan, String signature, int transitionMs) throws Exception;
+    public abstract RouteDiagnostics diagnostics();
+    public abstract Map<String, BranchDiagnostic> branchDiagnostics();
+    public abstract HeadroomEstimate estimateHeadroom(Map<String, Object> config,
+                                                        PipeWireBackend.Snapshot snapshot, AudioNode sink) throws IOException;
+    public abstract double maximumEqBoostDb(Map<String, Object> config,
+                                             PipeWireBackend.Snapshot snapshot, AudioNode sink) throws IOException;
+    protected abstract ApplyReport applyNow(Map<String, Object> config, PipeWireBackend.Snapshot snapshot,
+                                             Map<String, CapturedStreamBinding> bindings) throws Exception;
+    protected abstract ApplyReport reconcilePipeWireGraph(Plan plan, String signature,
+                                                            int transitionMs) throws Exception;
     protected abstract ApplyReport reportAppliedPlan(Plan plan);
     protected abstract boolean observedGraphMatches() throws Exception;
     protected abstract void confirmDesiredLinks() throws Exception;
     protected abstract void refreshObservedLinks() throws Exception;
     protected abstract void fadeRoutePlan(Plan plan, boolean fadeOut, int durationMs);
     protected abstract Plan plan(Map<String, Object> config, PipeWireBackend.Snapshot snapshot) throws IOException;
-    protected abstract void updateLiveLevels(Plan previous, Plan plan) throws Exception;
+    protected abstract Plan plan(Map<String, Object> config, PipeWireBackend.Snapshot snapshot,
+                                 Map<String, CapturedStreamBinding> bindings) throws IOException;
     protected abstract List<Map<String, Object>> routeFilters(Map<String, Object> route, Map<String, Object> config) throws IOException;
     protected abstract List<Map<String, Object>> outputFilters(AudioNode sink, List<Map<String, Object>> devices,
                                             Map<String, Object> config) throws IOException;

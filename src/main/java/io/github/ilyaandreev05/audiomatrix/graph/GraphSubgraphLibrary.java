@@ -62,6 +62,32 @@ public final class GraphSubgraphLibrary {
         items.removeIf(value -> subgraphId.equals(value.get("id")));
         if (items.isEmpty()) byRoute(config).remove(routeId);
     }
+    /** Reparents a user-created group without changing its audio-node membership. */
+    public static void move(Map<String,Object> config, String routeId, String subgraphId, String parentId) {
+        List<Map<String,Object>> items = mutableItems(config, routeId);
+        List<GraphSubgraph> groups = forRoute(config, routeId);
+        GraphSubgraph moving = groups.stream().filter(group -> subgraphId.equals(group.id())).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Subgraph does not exist: " + subgraphId));
+        if (moving.generatorId() != null)
+            throw new IllegalArgumentException("Generator-owned subgraphs are managed by their generator");
+        String destination = parentId == null || parentId.isBlank() ? null : parentId;
+        Map<String,GraphSubgraph> groupsById = new LinkedHashMap<>();
+        groups.forEach(group -> groupsById.put(group.id(), group));
+        GraphSubgraph parent = destination == null ? null : groupsById.get(destination);
+        if (destination != null && parent == null)
+            throw new IllegalArgumentException("Subgraph parent does not exist: " + destination);
+        Set<String> seen = new LinkedHashSet<>();
+        while (parent != null) {
+            if (!seen.add(parent.id())) throw new IllegalArgumentException("Subgraph hierarchy already contains a cycle");
+            if (subgraphId.equals(parent.id()))
+                throw new IllegalArgumentException("A subgraph cannot be moved below itself or one of its descendants");
+            parent = parent.parentId() == null ? null : groupsById.get(parent.parentId());
+        }
+        if (java.util.Objects.equals(moving.parentId(), destination)) return;
+        Map<String,Object> item = items.stream().filter(value -> subgraphId.equals(value.get("id"))).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Subgraph does not exist: " + subgraphId));
+        setParent(item, destination);
+    }
 
     public static void removeNode(Map<String,Object> config, String routeId, String nodeId) {
         Object raw = byRoute(config).get(routeId);
@@ -124,6 +150,11 @@ public final class GraphSubgraphLibrary {
                     parentId, copiedGeneratorIds.get(group.id())).toMap());
         }
         if (!copied.isEmpty()) byRoute(config).put(toRoute, copied);
+    }
+
+    /** Creates the automatic container of every generator instance persisted in the route. */
+    public static void ensureGeneratorComposites(Map<String,Object> config, AudioGraph graph) {
+        GraphGeneratorComposites.ensureRoute(config, graph);
     }
 
     public static List<Map<String,Object>> encoded(List<GraphSubgraph> groups) {

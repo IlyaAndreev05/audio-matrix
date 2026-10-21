@@ -30,20 +30,12 @@ import java.util.concurrent.TimeUnit;
 /** Applies explicitly requested Audio Matrix routing by owning PipeWire loopback nodes and links. */
 
 abstract class PipeWireRoutePart04 extends PipeWireRoutePart03 {
-    private static boolean isTransientShellSound(AudioNode stream) {
-        String app = stream.applicationName() == null ? "" : stream.applicationName();
-        String process = stream.processName() == null ? "" : stream.processName();
-        return "gnome-shell".equalsIgnoreCase(app) || "gnome-shell".equalsIgnoreCase(process)
-                || process.startsWith("gsd-") || "xdg-desktop-portal".equalsIgnoreCase(app);
-    }
-
     protected Plan plan(Map<String, Object> config, PipeWireBackend.Snapshot snapshot) throws IOException {
         return plan(config, snapshot, Map.of());
     }
 
     protected Plan plan(Map<String, Object> config, PipeWireBackend.Snapshot snapshot,
                         Map<String, CapturedStreamBinding> capturedBindings) throws IOException {
-        capturedBindings = capturedBindings == null ? Map.of() : capturedBindings;
         Map<String, Object> profile = maps(config.get("profiles")).stream()
                 .filter(item -> String.valueOf(config.get("active_profile")).equals(item.get("id")))
                 .findFirst().orElseGet(() -> maps(config.get("profiles")).stream().findFirst().orElse(Map.of()));
@@ -55,11 +47,12 @@ abstract class PipeWireRoutePart04 extends PipeWireRoutePart03 {
         Map<String, Map<String, Object>> busConfig = new LinkedHashMap<>();
         for (Map<String, Object> bus : maps(config.get("buses"))) busConfig.put(text(bus.get("id")), bus);
         List<AudioNode> physicalSinks = snapshot.sinks().stream()
-                .filter(node -> !AudioMatrixOwnedStream.matches(node)).toList();
+                .filter(node -> !node.name().startsWith("audiomatrix_")).toList();
+        List<Map<String, Object>> devices = maps(config.get("devices"));
         List<String> warnings = new ArrayList<>();
         unavailableOutputs = 0;
         conflictingOutputs = 0;
-        Set<String> vibroSinkIds = new HashSet<>(), ordinarySinkIds = new HashSet<>();
+        Set<Integer> vibroSinkIds = new HashSet<>(), ordinarySinkIds = new HashSet<>();
         List<RoutePlan> routes = new ArrayList<>();
         Map<String, Set<String>> sourceRolesByBus = new HashMap<>();
         for (String busId : activeBuses) {
@@ -125,10 +118,10 @@ abstract class PipeWireRoutePart04 extends PipeWireRoutePart03 {
             if (channelMatrix != null) PipeWireFilterChainConfig.renderMatrix("Audio Matrix channel matrix " + id,
                     routeNodeName("matrix_input", id), routeNodeName("matrix_output", id), channelMatrix);
             if (sink != null) {
+                Set<String> roots = sourceRolesByBus.getOrDefault(from, Set.of());
                 boolean vibro = "vibro".equals(route.get("role"))
                         || "haptic_output".equals(configuredOutputRole(sink, devices)) || roots.contains("effects");
-                String sinkKey = stableSinkKey(sink);
-                if (vibro) vibroSinkIds.add(sinkKey); else ordinarySinkIds.add(sinkKey);
+                if (vibro) vibroSinkIds.add(sink.id()); else ordinarySinkIds.add(sink.id());
             }
             routes.add(new RoutePlan(id, from, targetBus, sink, text(route.get("channel_map"), "stereo"), positions, channelMatrix,
                     number(route.get("volume"), 1), gain, number(route.get("delay_ms"), 0),
@@ -139,7 +132,7 @@ abstract class PipeWireRoutePart04 extends PipeWireRoutePart03 {
         vibroSinkIds.retainAll(ordinarySinkIds);
         conflictingOutputs = vibroSinkIds.size();
         routes.removeIf(route -> {
-            if (route.sink() == null || !vibroSinkIds.contains(stableSinkKey(route.sink()))) return false;
+            if (route.sink() == null || !vibroSinkIds.contains(route.sink().id())) return false;
             warnings.add("route " + route.id() + " skipped: Vibro and ordinary audio share physical output; select separate outputs");
             return true;
         });
@@ -196,50 +189,12 @@ abstract class PipeWireRoutePart04 extends PipeWireRoutePart03 {
         for (String id : neededBusIds) {
             Map<String, Object> bus = busConfig.get(id);
             String layout = text(bus.get("channels"), "stereo");
-            buses.put(id, new BusPlan(id, busNodeName(id), layout, positions(layout),
-                    number(bus.get("volume"), 1), Boolean.TRUE.equals(bus.get("mute"))));
+            buses.put(id, new BusPlan(id, busNodeName(id), text(bus.get("role"), "general"), layout,
+                    positions(layout), number(bus.get("volume"), 1), Boolean.TRUE.equals(bus.get("mute"))));
         }
         List<StreamPlan> streams = new ArrayList<>();
-        if (!profileOff && !routes.isEmpty()) {
-            List<String> eventInputBuses = EventInputStreamPlanner.append(config, buses, streams, this::applicationFilters);
-            for (AudioNode stream : snapshot.streams()) {
-                if (isTransientShellSound(stream)) continue;
-                CapturedStreamBinding binding = capturedBindings.get(stream.name());
-                if (binding != null && !stream.name().equals(binding.nodeName())) binding = null;
-                if (AudioMatrixOwnedStream.matches(stream) && binding == null) continue;
-                boolean eventStream = isEventSoundStudioStream(stream);
-                if (eventStream && !eventInputBuses.isEmpty()) continue;
-                List<Map<String, Object>> applications = maps(config.get("applications"));
-                Map<String, Object> rule = binding != null
-                        ? ApplicationRuleMatcher.find(applications, stream, binding)
-                        : eventStream ? explicitEventApplicationRule(applications)
-                                : ApplicationRuleMatcher.find(applications, stream);
-                if (rule == null && !eventStream && binding == null) {
-                    String defaultBus = text(config.get("graph_default_bus"));
-                    if (!defaultBus.isBlank() && busConfig.containsKey(defaultBus)) rule = Map.of("bus", defaultBus);
-                }
-                if (rule == null && binding == null) continue;
-                String busId = binding == null ? text(rule.get("bus")) : binding.sourceNodeId();
-                if (!buses.containsKey(busId)) {
-                    if (binding != null) warnings.add("Captured stream " + stream.name()
-                            + " has no active generated source " + busId);
-                    continue;
-                }
-                List<Map<String, Object>> filters = rule == null ? List.of() : applicationFilters(rule, config);
-                List<String> positions = streamPositions(stream.channels());
-                String key = "application:" + stream.name();
-                String input = applicationNodeName("dsp_input", stream.name());
-                String output = applicationNodeName("dsp_output", stream.name());
-                if (!filters.isEmpty()) PipeWireFilterChainConfig.render("Audio Matrix application EQ " + stream.applicationName(),
-                        input, output, positions, filters, limiterEnabled(config));
-                String bindingId = binding == null ? busId : binding.sourceNodeId();
-                streams.add(new StreamPlan(stream, busId, filters, positions, key, input, output, bindingId));
-            }
-        }
+        if (!profileOff && !routes.isEmpty())
+            streams = PipeWireRouteStreamPlanner.plan(config, snapshot, buses, capturedBindings, this::applicationFilters);
         return new Plan(buses, routes, streams, outputPlans, warnings, profileOff, masterVolume, masterMuted);
-    }
-    private static String stableSinkKey(AudioNode sink) {
-        DeviceIdentity identity = sink.identity();
-        return identity != null && identity.reliable() ? identity.fingerprint() : sink.name();
     }
 }

@@ -17,6 +17,8 @@ public final class GraphEndpointGainFactory {
         List<GraphConnection> links = new ArrayList<>(graph.connections());
         for (GraphNode endpoint : List.copyOf(nodes)) {
             if (!(endpoint instanceof SourceNode) && !(endpoint instanceof OutputNode)) continue;
+            if (endpoint instanceof SourceNode source
+                    && EventSoundStudioSource.SELECTOR.equals(source.selector())) continue;
             if (gainFor(endpoint.id(), nodes) != null) continue;
             GainNode gain = create(graph, endpoint, nodes);
             nodes.add(gain);

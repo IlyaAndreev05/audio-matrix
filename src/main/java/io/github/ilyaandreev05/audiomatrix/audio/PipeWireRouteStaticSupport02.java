@@ -111,10 +111,7 @@ abstract class PipeWireRouteStaticSupport02 extends PipeWireRouteStaticSupport01
     }
 
     protected static boolean sameSink(AudioNode left, AudioNode right) {
-        if (left == null || right == null) return left == right;
-        DeviceIdentity leftIdentity = left.identity(), rightIdentity = right.identity();
-        String leftKey = leftIdentity != null && leftIdentity.reliable() ? leftIdentity.fingerprint() : left.name();
-        String rightKey = rightIdentity != null && rightIdentity.reliable() ? rightIdentity.fingerprint() : right.name();
-        return leftKey.equals(rightKey);
+        return left == null ? right == null : right != null && left.name().equals(right.name())
+                && java.util.Objects.equals(left.identity(), right.identity());
     }
 }

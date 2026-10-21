@@ -108,21 +108,15 @@ abstract class PipeWireRoutePart06 extends PipeWireRouteReconciliation {
     }
 
     protected void stopProcesses(Map<String, ManagedProcess> processes) {
-        for (String key : new ArrayList<>(processes.keySet())) stopProcess(processes, key);
-    }
-
-    protected void stopProcess(Map<String, ManagedProcess> processes, String key) {
-        ManagedProcess managed = processes.remove(key);
-        if (managed != null) stopManagedProcess(managed);
-    }
-
-    private void stopManagedProcess(ManagedProcess managed) {
-        Process process = managed.process();
-        process.destroy();
-        try { if (!process.waitFor(700, TimeUnit.MILLISECONDS)) { process.destroyForcibly(); process.waitFor(700, TimeUnit.MILLISECONDS); } }
-        catch (InterruptedException e) { Thread.currentThread().interrupt(); process.destroyForcibly(); }
-        try { Files.deleteIfExists(managed.log()); } catch (IOException ignored) {}
-        if (managed.configFile() != null) try { Files.deleteIfExists(managed.configFile()); } catch (IOException ignored) {}
+        for (ManagedProcess managed : new ArrayList<>(processes.values())) {
+            Process process = managed.process();
+            process.destroy();
+            try { if (!process.waitFor(700, TimeUnit.MILLISECONDS)) { process.destroyForcibly(); process.waitFor(700, TimeUnit.MILLISECONDS); } }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); process.destroyForcibly(); }
+            try { Files.deleteIfExists(managed.log()); } catch (IOException ignored) {}
+            if (managed.configFile() != null) try { Files.deleteIfExists(managed.configFile()); } catch (IOException ignored) {}
+        }
+        processes.clear();
     }
 
     protected Path bundledLadspaDirectory() throws IOException {
@@ -164,9 +158,32 @@ abstract class PipeWireRoutePart06 extends PipeWireRouteReconciliation {
         disconnectOwnedLinks();
         stopOwnedProcesses();
         if (restoreStreams) restoreAllOriginal();
-        originalStreamLinks.clear(); linkOwners.clear(); branchErrors.clear(); branchDiagnosticsSnapshot = List.of();
-        desiredLinks.clear(); observedLinks.clear(); skippedStreamCount = 0;
-        active = false; appliedSignature = ""; appliedPlan = null;
+        originalStreamLinks.clear();
+        processSpecifications.clear();
+        branchOwnedLinks.replaceAll((owner, links) -> links.stream().filter(ownedLinks::contains)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new)));
+        branchOwnedLinks.entrySet().removeIf(entry -> entry.getValue().isEmpty());
+        desiredLinks.clear();
+        branchOwnedLinks.values().forEach(desiredLinks::addAll);
+        observedLinks.clear();
+        try { refreshObservedLinks(); }
+        catch (Exception error) { transitionWarnings.add("Could not refresh links after clear: " + message(error)); }
+        Map<String, BranchDiagnostic> remaining = new LinkedHashMap<>();
+        for (Map.Entry<String, Set<Link>> branch : branchOwnedLinks.entrySet()) {
+            List<Link> desired = List.copyOf(branch.getValue());
+            List<Link> observed = desired.stream().filter(observedLinks::contains).toList();
+            String key = branch.getKey();
+            int separator = key.indexOf(':');
+            String kind = separator < 0 ? "branch" : key.substring(0, separator);
+            String ownerId = separator < 0 ? key : key.substring(separator + 1);
+            remaining.put(ownerId, new BranchDiagnostic(ownerId, kind, false, false, false,
+                    desired, observed, List.of(), "Owned links remain after clear"));
+        }
+        branchDiagnostics = Map.copyOf(remaining);
+        skippedStreamCount = 0;
+        active = false;
+        appliedSignature = "";
+        appliedPlan = null;
         status = transitionWarnings.isEmpty() ? "Routes are not applied"
                 : "Routes are not applied · " + String.join("; ", transitionWarnings);
         transitionWarnings.clear();

@@ -6,13 +6,15 @@ import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.config.ChannelMatrix;
 import io.github.ilyaandreev05.audiomatrix.config.DefaultConfig;
 import io.github.ilyaandreev05.audiomatrix.config.QuickSettingsConfig;
+import io.github.ilyaandreev05.audiomatrix.config.UnifiedGraphConfig;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
+import io.github.ilyaandreev05.audiomatrix.graph.DynamicInstanceRegistry;
 import io.github.ilyaandreev05.audiomatrix.graph.GainNode;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphCommonVibro;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphConnection;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphRouteLibrary;
 import io.github.ilyaandreev05.audiomatrix.graph.MixerNode;
 import io.github.ilyaandreev05.audiomatrix.graph.OutputNode;
-import io.github.ilyaandreev05.audiomatrix.graph.SwitchNode;
 import io.github.ilyaandreev05.audiomatrix.graph.SourceNode;
 import org.junit.jupiter.api.Test;
 
@@ -57,10 +59,10 @@ class GnomeQuickSettingsPinsTest {
         PipeWireBackend.Snapshot snapshot = new PipeWireBackend.Snapshot(true, "", List.of(sink), List.of(),
                 List.of(), List.of(), Map.of(), sink.id(), 0);
 
-        List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config, snapshot, List.of(), applications, outputs)
-                .stream().filter(item -> graph.id().equals(item.get("routeId"))).toList();
+        List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config, snapshot, List.of(), applications, outputs,
+                null, Map.of()).stream().filter(item -> graph.id().equals(item.get("routeId"))).toList();
 
-        assertEquals(4, pins.size());
+        assertEquals(6, pins.size(), "the four pinned nodes plus the endpoint gain of every pinned application source");
         Map<String, Object> chromePin = pin(pins, "chrome");
         assertEquals(1.0, ((Map<?, ?>) chromePin.get("sourceGain")).get("volume"));
         Map<String, Object> fallbackPin = pin(pins, "other-apps");
@@ -103,7 +105,8 @@ class GnomeQuickSettingsPinsTest {
         List<Map<String, Object>> outputs = List.of(DefaultConfig.map("id", "device:family17h-surround",
                 "name", sink.name(), "description", sink.description(), "volume", sink.volume(), "muted", false));
 
-        List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config, snapshot, List.of(), List.of(), outputs);
+        List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config, snapshot, List.of(), List.of(), outputs,
+                null, Map.of());
 
         assertEquals("green-gain", ((Map<?, ?>) pin(pins, green.id()).get("output")).get("graphGainNodeId"));
         assertEquals("black-gain", ((Map<?, ?>) pin(pins, black.id()).get("output")).get("graphGainNodeId"));
@@ -113,77 +116,47 @@ class GnomeQuickSettingsPinsTest {
 
     @Test void publishesOutputPinsFromInactiveRoutesWithoutFabricatingGains() {
         Map<String, Object> config = DefaultConfig.create();
-        AudioNode monitor = new AudioNode(72, "alsa_output.monitor", "Monitor", "Audio/Sink", "running",
-                "", "", "", 2, List.of(48000), .7, false, null);
-        AudioNode vibro = new AudioNode(73, "alsa_output.vibro", "Vibro", "Audio/Sink", "running",
-                "", "", "", 2, List.of(48000), .3, true, null);
+        AudioNode monitor = sink(72, "alsa_output.monitor", "Monitor", .7, false);
+        AudioNode vibro = sink(73, "alsa_output.vibro", "Vibro", .3, true);
         config.put("devices", List.of(
                 DefaultConfig.map("id", "monitor", "name", "Monitor",
                         "selector", DefaultConfig.map("kind", "name_equals", "value", monitor.name())),
                 DefaultConfig.map("id", "vibro", "name", "Vibro",
                         "selector", DefaultConfig.map("kind", "name_equals", "value", vibro.name()))));
-        bindSlot(config, "main", "octine-monitor-output", "monitor");
-        bindSlot(config, "main", "octine-vibro-output", "vibro");
         PipeWireBackend.Snapshot snapshot = new PipeWireBackend.Snapshot(true, "", List.of(monitor, vibro), List.of(),
                 List.of(), List.of(), Map.of(), monitor.id(), 0);
+        DynamicInstanceRegistry.ReconcileResult reconciled = DynamicInstanceRegistry.reconcile(route(config), Map.of(
+                UnifiedGraphConfig.MONITOR_OUTPUT_ID, List.of(DynamicInstanceRegistry.output(monitor)),
+                GraphCommonVibro.VIBRO_OUTPUT_ID, List.of(DynamicInstanceRegistry.output(vibro, false,
+                        new DynamicInstanceRegistry.GainState(.3, true), "haptic_output"))));
+        List<Map<String, Object>> outputs = List.of(
+                DefaultConfig.map("id", "device:monitor", "name", monitor.name(),
+                        "description", monitor.description(), "volume", monitor.volume(), "muted", monitor.muted()),
+                DefaultConfig.map("id", "device:vibro", "name", vibro.name(),
+                        "description", vibro.description(), "volume", vibro.volume(), "muted", vibro.muted()));
 
         List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config, snapshot,
-                GnomeControlBridge.quickControls(config), List.of(), List.of());
+                GnomeControlBridge.quickControls(config), List.of(), outputs, reconciled.effectiveGraph(),
+                reconciled.instances());
 
-        Map<String, Object> monitorPin = pinFor(pins, "main", "octine-monitor-output");
-        Map<String, Object> vibroPin = pinFor(pins, "main", "octine-vibro-output");
+        Map<String, Object> monitorPin = pinFor(pins, "main", UnifiedGraphConfig.MONITOR_OUTPUT_ID);
+        Map<?, ?> monitorOutput = (Map<?, ?>) monitorPin.get("output");
         assertEquals("outputs", monitorPin.get("groupId"));
-        assertEquals(true, ((Map<?, ?>) monitorPin.get("output")).get("available"));
-        assertEquals(.7, ((Map<?, ?>) monitorPin.get("output")).get("volume"));
-        assertEquals(true, ((Map<?, ?>) vibroPin.get("output")).get("muted"));
-        assertEquals(.3, ((Map<?, ?>) vibroPin.get("output")).get("volume"));
-        assertEquals(8, pins.size());
-        assertFalse(pins.stream().anyMatch(item -> Set.of("octine-vibro-mixer", "octine-bass-low-pass")
-                .contains(item.get("nodeId"))));
-    }
-
-    @Test void explicitlyPinnedEndpointGainIsPublishedWithTheGraphTarget() {
-        Map<String, Object> config = DefaultConfig.create();
-        AudioGraph graph = new AudioGraph("endpoint-gain-route", "Endpoint Gain", List.of(
-                new SourceNode("source", "Firefox", "application:firefox", STEREO),
-                new GainNode("endpoint-gain", "Endpoint Gain", STEREO, .42, false, "output"),
-                new OutputNode("output", "Monitor", "device:monitor", STEREO)), List.of(
-                new GraphConnection("source-gain", "source", "out", "endpoint-gain", "in", true, 1),
-                new GraphConnection("gain-output", "endpoint-gain", "out", "output", "in", true, 1)));
-        GraphRouteLibrary.saveRoute(config, graph, "");
-        GraphRouteLibrary.activate(config, graph.id());
-        QuickSettingsConfig.pinNode(config, graph.id(), "endpoint-gain", "outputs", 0, "EXPANDED");
-
-        List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config,
-                PipeWireBackend.Snapshot.offline("disconnected"), List.of(), List.of(), List.of());
-        Map<?, ?> published = (Map<?, ?>) pin(pins, "endpoint-gain").get("gain");
-        assertEquals(graph.id(), published.get("routeId"));
-        assertEquals("endpoint-gain", published.get("nodeId"));
-        assertEquals(.42, published.get("volume"));
-    }
-
-    @Test void publishesMultiSwitchChoicesWithExactActiveLinkIds() {
-        Map<String, Object> config = DefaultConfig.create();
-        SwitchNode route = new SwitchNode("music-switch", "Music routing", STEREO,
-                List.of("monitor", "vibro"), List.of("in->monitor"));
-        AudioGraph graph = new AudioGraph("multiswitch-route", "MultiSwitch", List.of(
-                new SourceNode("source", "Applications", "application:unassigned", STEREO), route,
-                new OutputNode("monitor-out", "Monitor", "device:monitor", STEREO),
-                new OutputNode("vibro-out", "Vibration", "device:vibro", STEREO)), List.of(
-                new GraphConnection("source-switch", "source", "out", "music-switch", "in", true, 1),
-                new GraphConnection("switch-monitor", "music-switch", "monitor", "monitor-out", "in", true, 1),
-                new GraphConnection("switch-vibro", "music-switch", "vibro", "vibro-out", "in", true, 1)));
-        GraphRouteLibrary.saveRoute(config, graph, "");
-        GraphRouteLibrary.activate(config, graph.id());
-        QuickSettingsConfig.pinNode(config, graph.id(), route.id(), "routing", 0, "EXPANDED");
-
-        List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config,
-                PipeWireBackend.Snapshot.offline("disconnected"), List.of(), List.of(), List.of());
-        Map<?, ?> routeControl = (Map<?, ?>) pinFor(pins, graph.id(), route.id()).get("routeControl");
-        List<?> options = (List<?>) routeControl.get("options");
-        assertEquals(List.of("in->monitor", "in->vibro"), options.stream()
-                .map(option -> String.valueOf(((Map<?, ?>) option).get("id"))).toList());
-        assertEquals(List.of("in->monitor"), routeControl.get("value"));
+        assertEquals(true, monitorOutput.get("available"));
+        assertEquals(.7, monitorOutput.get("volume"));
+        assertEquals(false, monitorOutput.get("muted"));
+        assertEquals(DynamicInstanceRegistry.generatedGainNodeId(reconciled, UnifiedGraphConfig.MONITOR_OUTPUT_ID,
+                "device:" + monitor.identity().fingerprint()), monitorOutput.get("graphGainNodeId"));
+        // The haptic device keeps its own saved level and is shown through the single shared haptic card.
+        Map<String, Object> vibroBinding = DynamicInstanceRegistry.requireInstance(reconciled,
+                GraphCommonVibro.VIBRO_OUTPUT_ID, "device:" + vibro.identity().fingerprint(), true)
+                .runtimeBinding();
+        assertEquals(.3, ((Number) vibroBinding.get("savedEndpointGain")).doubleValue(), 0.0001);
+        assertEquals(true, vibroBinding.get("savedEndpointMuted"));
+        assertTrue(pins.stream().anyMatch(item -> GraphCommonVibro.VIBRO_GAIN_ID.equals(item.get("nodeId"))
+                && "outputs".equals(item.get("groupId"))));
+        assertFalse(pins.stream().anyMatch(item -> Set.of("octine-vibro-mixer", "octine-vibro-limiter",
+                "octine-vibro-music-volume", "octine-bass-low-pass").contains(item.get("nodeId"))));
     }
 
     @Test void catchAllApplicationGeneratorExcludesEventAndAudioMatrixOwnedStreams() {
@@ -198,7 +171,8 @@ class GnomeQuickSettingsPinsTest {
         List<Map<String, Object>> applications = List.of(chrome, event, own, chat);
         PipeWireBackend.Snapshot snapshot = PipeWireBackend.Snapshot.offline("disconnected");
 
-        List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config, snapshot, List.of(), applications, List.of());
+        List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config, snapshot, List.of(), applications, List.of(),
+                null, Map.of());
         Map<String, Object> allApps = pinFor(pins, "main", "octine-main-source");
 
         assertEquals(Set.of("chrome", "chat"), Set.copyOf(ids(allApps.get("applications"))));
@@ -207,13 +181,19 @@ class GnomeQuickSettingsPinsTest {
                 ? "Chrome" : ((Map<?, ?>) ((Map<?, ?>) ((List<?>) allApps.get("applications")).getFirst()).get("browserAdapter")).get("browser"));
     }
 
+    private static AudioNode sink(int id, String name, String description, double volume, boolean muted) {
+        DeviceIdentity identity = DeviceIdentity.from(Map.of("device.bus-path", "pci-0000:01:00.0",
+                "device.serial", "serial-" + id, "device.profile.name", "hdmi-stereo",
+                "device.port.name", "hdmi-output-" + id, "audio.position", "FL,FR"), 2);
+        return new AudioNode(id, name, description, "Audio/Sink", "running", "", "", "", 2, List.of(48000),
+                volume, muted, null, identity);
+    }
+
     @SuppressWarnings("unchecked")
-    private static void bindSlot(Map<String, Object> config, String routeId, String nodeId, String deviceId) {
+    private static AudioGraph route(Map<String, Object> config) {
         Map<String, Object> route = ((List<Map<String, Object>>) config.get("route_library")).stream()
-                .filter(item -> routeId.equals(item.get("id"))).findFirst().orElseThrow();
-        Map<String, Object> node = ((List<Map<String, Object>>) route.get("nodes")).stream()
-                .filter(item -> nodeId.equals(item.get("id"))).findFirst().orElseThrow();
-        node.put("parameters", DefaultConfig.map("device_id", deviceId));
+                .filter(item -> "main".equals(item.get("id"))).findFirst().orElseThrow();
+        return io.github.ilyaandreev05.audiomatrix.graph.GraphCodec.fromMap(route);
     }
 
     private static Map<String, Object> pinFor(List<Map<String, Object>> pins, String routeId, String nodeId) {

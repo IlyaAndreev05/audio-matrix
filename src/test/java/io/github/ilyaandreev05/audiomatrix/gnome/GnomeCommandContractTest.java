@@ -7,8 +7,10 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GnomeCommandContractTest {
@@ -28,6 +30,15 @@ class GnomeCommandContractTest {
         GnomeControlBridge.Command missingRevision = new GnomeControlBridge.Command(5,
                 "client-1:reorder-2", "", "reorder_quick_group", "my arbitrary group\t1");
         assertTrue(GnomeCommandRevision.isStale(missingRevision, 17));
+        GnomeControlBridge.Command profile = new GnomeControlBridge.Command(5,
+                "client-1:profile-1", "17", "select_profile", "{\"profileId\":\"main\"}");
+        GnomeControlBridge.Command route = new GnomeControlBridge.Command(5,
+                "client-1:route-1", "17", "setRouteEnabled",
+                "{\"routeId\":\"main\",\"switchNodeId\":\"switch\",\"linkId\":\"in->out\",\"enabled\":true}");
+        assertTrue(GnomeCommandRevision.isStale(profile, 18));
+        assertFalse(GnomeCommandRevision.isStale(profile, 17));
+        assertTrue(GnomeCommandRevision.isStale(route, 18));
+        assertFalse(GnomeCommandRevision.isStale(route, 17));
     }
 
     @Test void absoluteGraphCommandsAreIdempotentAndDoNotRejectRapidUpdatesAsStale() {
@@ -65,6 +76,10 @@ class GnomeCommandContractTest {
         assertThrows(IllegalStateException.class, () -> GnomeCommandRevision.requireAbsoluteSetterRevision(stale, 10,
                 false, 0.2, 0.2, true));
         assertEquals("client-1", GnomeCommandRevision.clientId(stale));
+        assertEquals("client-2", GnomeCommandRevision.clientId(new GnomeControlBridge.Command(
+                5, "client-2:", "9", "setNodeMuted", "{}")));
+        assertEquals("one-request", GnomeCommandRevision.clientId(new GnomeControlBridge.Command(
+                5, "one-request", "9", "setNodeMuted", "{}")));
     }
 
 }

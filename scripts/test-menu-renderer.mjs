@@ -1,184 +1,196 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import KeyedSection from '../gnome/audio-matrix-quick-settings/menu-keyed-section.js';
-import {orderedQuickGroups} from '../gnome/audio-matrix-quick-settings/menu-state.js';
-import {captureMenuAnchor, restoreMenuAnchor} from '../gnome/audio-matrix-quick-settings/menu-anchor.js';
+import {orderedQuickGroups, visibleApplicationStreams, visibleBrowserTabs} from '../gnome/audio-matrix-quick-settings/menu-state.js';
+import {captureMenuViewport, restoreMenuViewport} from '../gnome/audio-matrix-quick-settings/menu-viewport.js';
 
 const commands = [];
-let nextSignal = 0;
-class FakeBox {
-    constructor() { this.children = []; }
-    add_child(child) { this.children.push(child); }
-    remove_child(child) { this.children.splice(this.children.indexOf(child), 1); }
-}
-class FakeItem {
-    constructor(label = '', state = undefined) {
-        this.label = typeof label === 'string' ? {text: label} : {text: ''};
-        this.state = state;
-        this.actor = this;
-        this.children = [];
-        this.handlers = new Map();
-        this.blocked = new Set();
-        this.states = [];
-        this.visible = true;
-    }
-    add_child(child) { this.children.push(child); }
-    connect(signal, callback) { const id = ++nextSignal; this.handlers.set(id, {signal, callback}); return id; }
-    block_signal_handler(id) { this.blocked.add(id); }
-    unblock_signal_handler(id) { this.blocked.delete(id); }
-    stop_emission_by_name() {}
+class Actor {
+    constructor() { this.visible = true; this.parent = null; this.y = 0; this.height = 20; }
+    get_parent() { return this.parent; }
+    get_transformed_position() { return [0, this.y]; }
+    get_height() { return this.height; }
     set_style() {}
-    setIcon(icon) { this.icon_name = icon; }
+    remove_child(child) { if (child.parent === this) child.parent = null; }
+}
+class Label {
+    constructor(text = '') { this.text = text; }
+    set_width() {}
+}
+class MenuItem {
+    constructor(label = '', options = {}) {
+        this.label = {text: label};
+        this.actor = new Actor();
+        this.handlers = {};
+        this.children = [];
+        this.states = [];
+        this.options = options;
+        this.reactive = options.reactive ?? true;
+        this.can_focus = options.can_focus ?? true;
+    }
+    set_style() {}
     add_accessible_state(state) { this.states.push(state); }
-    remove_accessible_state(state) { this.states = this.states.filter(item => item !== state); }
+    remove_accessible_state(state) { this.states = this.states.filter(value => value !== state); }
+    setIcon(icon) { this.icon_name = icon; }
     setOrnament(value) { this.ornament = value; }
+    connect(signal, callback) { this.handlers[signal] = callback; return signal; }
+    emit(signal) { this.handlers[signal]?.(); }
+    stop_emission_by_name() {}
+    block_signal_handler() {}
+    unblock_signal_handler() {}
+    set_sensitive(value) { this.sensitive = value; }
+    add_child(child) { this.children.push(child); }
     get_child() { return this.children[0]; }
 }
-class FakeSwitch extends FakeItem {}
-class FakeSubmenu extends FakeItem {
-    constructor(label = '') { super(label); this.menu = new FakeSection(); }
-}
-class FakeSection {
+class Section {
     constructor() {
+        this.actor = new Actor();
         this.items = [];
-        this.box = new FakeBox();
-        this.actor = {visible: true, set_style() {}};
+        this.box = {};
     }
-    addMenuItem(item) { this.items.push(item); this.box.add_child(item.actor); }
+    addMenuItem(item) {
+        if (item.actor?.parent) item.actor.parent.remove_child(item.actor);
+        this.items.push(item);
+        if (item.actor) item.actor.parent = this.actor;
+    }
     removeMenuItem(item) {
-        this.items.splice(this.items.indexOf(item), 1);
-        this.box.remove_child(item.actor);
+        const index = this.items.indexOf(item);
+        if (index >= 0) this.items.splice(index, 1);
+        if (item.actor?.parent === this.actor) item.actor.parent = null;
     }
+    removeAll() { for (const item of [...this.items]) this.removeMenuItem(item); }
 }
-class FakeLabel {
-    constructor(properties = {}) { Object.assign(this, properties); }
+class Switch extends MenuItem {
+    constructor(label, state) { super(label); this.state = state; }
 }
-const fixture = {
-    PopupMenu: {
-        PopupBaseMenuItem: FakeItem,
-        PopupImageMenuItem: FakeItem,
-        PopupMenuItem: FakeItem,
-        PopupMenuSection: FakeSection,
-        PopupSubMenuMenuItem: FakeSubmenu,
-        PopupSwitchMenuItem: FakeSwitch,
-        Ornament: {DOT: 1, NO_DOT: 0},
-    },
-    Atk: {Role: {RADIO_BUTTON: 1}, StateType: {EXPANDABLE: 1, EXPANDED: 2}},
-    St: {Label: FakeLabel},
-    boxLayout: () => new FakeBox(),
-    orderedQuickGroups,
-    AudioMatrixKeyedSection: KeyedSection,
+class Submenu extends MenuItem {
+    constructor(label) { super(label); this.menu = new Section(); }
+}
+const PopupMenu = {
+    PopupMenuSection: Section,
+    PopupMenuItem: MenuItem,
+    PopupImageMenuItem: MenuItem,
+    PopupBaseMenuItem: MenuItem,
+    PopupSwitchMenuItem: Switch,
+    PopupSubMenuMenuItem: Submenu,
+    PopupSeparatorMenuItem: MenuItem,
+    Ornament: {DOT: 1, NO_DOT: 0},
 };
+function removeMenuItem(section, item) { section.removeMenuItem(item); }
+function reorderMenuItems(section, previous, desired) {
+    if (previous.length === desired.length && previous.every((item, index) => item === desired[index])) return;
+    for (const item of previous) removeMenuItem(section, item);
+    for (const item of desired) section.addMenuItem(item);
+}
+const fixture = {PopupMenu, Atk: {StateType: {EXPANDABLE: 1, EXPANDED: 2}, Role: {RADIO_BUTTON: 1}},
+    orderedQuickGroups, visibleApplicationStreams, visibleBrowserTabs, removeMenuItem, reorderMenuItems,
+    applicationIcon: () => 'application-x-executable-symbolic'};
 globalThis.audioMatrixRendererFixture = fixture;
 
-async function loadModule(name, bindings) {
-    const source = (await readFile(new URL(`../gnome/audio-matrix-quick-settings/${name}`, import.meta.url), 'utf8'))
-        .replace(/^import .*;\n/gm, '');
-    const wrapped = `const {${bindings}} = globalThis.audioMatrixRendererFixture;\n${source}`;
-    return (await import(`data:text/javascript;base64,${Buffer.from(wrapped).toString('base64')}`)).default;
+async function loadModule(name, bindings, replacements) {
+    let source = await readFile(new URL(`../gnome/audio-matrix-quick-settings/${name}`, import.meta.url), 'utf8');
+    source = source.replace(/^import .*;\n/gm, line => replacements[line.trim()] || '');
+    source = `const {${bindings}} = globalThis.audioMatrixRendererFixture;\n${source}`;
+    return (await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)).default;
 }
-
-const MenuLinks = await loadModule('menu-links.js', 'PopupMenu, Atk, St, boxLayout');
-const MenuGroups = await loadModule('menu-groups.js', 'PopupMenu, Atk, AudioMatrixKeyedSection, orderedQuickGroups');
-
-const routeControl = {
-    id: 'route:main:music-switch', routeId: 'main', nodeId: 'music-switch', nodeType: 'switch',
-    kind: 'choice', label: 'Music route', multiple: true, value: ['in->monitor'],
-    options: [{id: 'in->monitor', label: 'Monitor'}, {id: 'in->vibro', label: 'Vibration'}],
+const moduleImports = {
+    "import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';": '',
+    "import Atk from 'gi://Atk';": '',
+    "import {orderedQuickGroups} from './menu-state.js';": '',
+    "import {removeMenuItem, reorderMenuItems} from './menu-row-utils.js';": '',
+    "import {visibleApplicationStreams, visibleBrowserTabs} from './menu-state.js';": '',
+    "import {reorderMenuItems} from './menu-row-utils.js';": '',
+    "import {applicationIcon} from './menu-icons.js';": '',
 };
-const routeSection = new FakeSection();
-const keyedRouteSection = new KeyedSection(routeSection);
-const links = new MenuLinks((name, payload) => commands.push([name, payload]));
-keyedRouteSection.begin();
-const firstCard = links.render(routeControl, keyedRouteSection, {multiSwitchDescription: '1 input → multiple outputs'});
-keyedRouteSection.end();
-assert.equal(routeSection.items.length, 1, 'MultiSwitch is a single inline card, not a submenu');
-const cardBody = firstCard.children[0];
-assert.equal(cardBody.children[0].text, 'MultiSwitch', 'The inline card uses the native MultiSwitch label');
-const optionRows = cardBody.children[2].children;
-assert.deepEqual(optionRows.map(row => row.label.text), ['Monitor', 'Vibration']);
-assert.deepEqual(optionRows.map(row => row.state), [true, false]);
+const Links = await loadModule('menu-links.js', 'PopupMenu, Atk', moduleImports);
+const Groups = await loadModule('menu-groups.js',
+    'PopupMenu, Atk, orderedQuickGroups, removeMenuItem, reorderMenuItems', moduleImports);
+const Applications = await loadModule('menu-applications.js',
+    'PopupMenu, visibleApplicationStreams, visibleBrowserTabs, reorderMenuItems, applicationIcon', moduleImports);
 
-links.update(firstCard, {...routeControl, value: ['in->vibro']});
-assert.deepEqual(optionRows.map(row => row.state), [false, true],
-    'A live routeControl State updates the existing checkbox actors');
-optionRows[0].state = true;
-optionRows[0].handlers.get([...optionRows[0].handlers.keys()][0]).callback();
-assert.deepEqual(commands.pop(), ['setRouteEnabled', {
-    routeId: 'main', switchNodeId: 'music-switch', linkId: 'in->monitor', enabled: true,
-}], 'Route toggles dispatch the exact API v5 route JSON payload');
-
+const language = {unmute: 'Unmute', mute: 'Mute', noApplications: 'No applications',
+    outputUnavailable: 'Unavailable', allApplications: 'All applications', mainMixer: 'Main Mixer',
+    vibroOverall: 'Vibro Gain', vibroLimiter: 'Limiter', vibroOutput: 'Vibro output', events: 'Events'};
+const routeControl = {id: 'route:main:multi', routeId: 'main', nodeId: 'multi', nodeType: 'switch',
+    kind: 'choice', label: 'Music routing', multiple: true, value: ['in->monitor'], options: [
+        {id: 'in->monitor', label: 'Monitor'}, {id: 'in->vibro', label: 'Vibro'},
+    ]};
+const linkRows = new Map();
+const links = new Links((name, value) => commands.push([name, value]));
 const disclosures = {
-    groupOpen: () => true, pinOpen: () => true,
-    trackGroup() {}, trackPin() {}, retain() {},
+    groups: new Map(), pins: new Map(),
+    groupOpen: group => !group.collapsed, pinOpen: pin => pin.view !== 'COMPACT',
+    trackGroup(id, header, content) { this.groups.set(id, {header, content}); },
+    trackPin(id, header, content) { this.pins.set(id, {header, content}); },
+    toggleGroup() { return true; }, togglePin() { return true; },
 };
-const indexedRoutes = new Map();
-const groups = new MenuGroups({
-    send: (name, value) => commands.push([name, value]), disclosures,
+const groups = new Groups({send: (name, value) => commands.push([name, value]), disclosures,
     applications: {render() {}}, links, mixer: {render() {}}, output: {render() {}},
-    renderControls() {}, linkRows: indexedRoutes,
-});
-const groupSection = new FakeSection();
-const groupColumn = new KeyedSection(groupSection);
-const routingPin = {
-    id: 'pin-multiswitch', routeId: 'main', nodeId: 'music-switch', nodeType: 'switch',
-    name: 'MultiSwitch', groupId: 'routing', order: 0, view: 'EXPANDED', routeControl,
-};
-groups.render(groupColumn, {
-    quickGroups: [{id: 'routing', name: 'Routing', order: 0, collapsed: false}], quickControls: [],
-}, [routingPin], {multiSwitchDescription: '1 input → multiple outputs'});
-assert.equal(indexedRoutes.get(routeControl.id) instanceof FakeItem, true,
-    'Every pinned MultiSwitch routeControl row is registered for State updates');
-links.update(indexedRoutes.get(routeControl.id), {...routeControl, value: ['in->vibro']});
-const indexedCardRows = indexedRoutes.get(routeControl.id).children[0].children[2].children;
-assert.deepEqual(indexedCardRows.map(row => row.state), [false, true],
-    'The pin → quickPins.routeControl → group → checkbox update pipeline stays live');
+    renderControls() {}, registerLinkRow: (id, row) => linkRows.set(id, row)});
+const column = new Section();
+const state = {quickGroups: [{id: 'routing', name: 'Routing', order: 0, collapsed: false}],
+    quickPins: [{id: 'pin-switch', routeId: 'main', nodeId: 'multi', name: 'MultiSwitch',
+        nodeType: 'switch', groupId: 'routing', order: 0, routeControl}], quickControls: []};
+groups.render(column, state, state.quickPins, language);
+const pinEntry = groups._pinEntries.get('pin-switch');
+const firstPinRow = pinEntry.wrapper;
+const multiSwitch = linkRows.get(routeControl.id);
+assert.ok(multiSwitch, 'An existing pinned routeControl is registered for live updates');
+assert.equal(pinEntry.routeSection.items[0].label.text, 'MultiSwitch');
+assert.equal(pinEntry.routeSection.items[1].label.text, '1 вход → несколько выходов');
+const monitor = pinEntry.routeSection.items[2];
+monitor.state = false;
+monitor.handlers.toggled();
+assert.deepEqual(commands.pop(), ['setRouteEnabled', {
+    routeId: 'main', switchNodeId: 'multi', linkId: 'in->monitor', enabled: false,
+}], 'MultiSwitch publishes the exact route and activeLink endpoint IDs');
+const liveControl = {...routeControl, value: ['in->vibro']};
+links.update(multiSwitch, liveControl);
+assert.equal(monitor.state, false);
+assert.equal(pinEntry.routeSection.items[3].state, true,
+    'A published activeLinks change updates the existing checkbox actors');
+groups.render(column, state, state.quickPins, language);
+assert.equal(groups._pinEntries.get('pin-switch').wrapper, firstPinRow,
+    'A value-only route update preserves the keyed pin row');
 
-function row(key, label) {
-    const item = new FakeItem(label);
-    item._audioMatrixKey = key;
-    item._audioMatrixKind = 'stream';
-    item._audioMatrixPatch = incoming => { item.label.text = incoming.label.text; };
-    return item;
-}
-function reconcile(section, rows) {
-    section.begin();
-    for (const item of rows) section.addMenuItem(item);
-    section.end();
-}
-const streamSection = new FakeSection();
-const keyedStreams = new KeyedSection(streamSection);
-const appRow = row('app:browser', 'Browser');
-const tabOne = row('stream:tab-one', 'First tab');
-const tabTwo = row('stream:tab-two', 'Second tab');
-const footer = row('route:footer', 'Route');
-reconcile(keyedStreams, [appRow, tabOne, tabTwo, footer]);
-const before = captureMenuAnchor([
-    {key: 'app:browser', y: 0, height: 10},
-    {key: 'stream:tab-one', y: 18, height: 10},
-    {key: 'stream:tab-two', y: 34, height: 10},
-    {key: 'route:footer', y: 50, height: 10},
-], 15, 24, 40, 'stream:tab-two');
-reconcile(keyedStreams, [
-    row('app:browser', 'Browser'), row('stream:new', 'New tab'),
-    row('stream:tab-one', 'First tab'), row('stream:tab-two', 'Second tab'), row('route:footer', 'Route'),
-]);
-assert.equal(keyedStreams.item('app:browser'), appRow, 'A structural stream change preserves the app actor');
-assert.equal(keyedStreams.item('stream:tab-one'), tabOne, 'Unchanged stream actors are keyed and reused');
-assert.equal(keyedStreams.item('stream:tab-two'), tabTwo, 'The focused stream actor remains the same object');
-const afterRows = [
-    {key: 'app:browser', y: 0, height: 10},
-    {key: 'stream:new', y: 18, height: 10},
-    {key: 'stream:tab-one', y: 34, height: 10},
-    {key: 'stream:tab-two', y: 50, height: 10},
-    {key: 'route:footer', y: 66, height: 10},
-];
-const restored = restoreMenuAnchor(before, afterRows, 15, {lower: 0, upper: 100, pageSize: 24});
-assert.equal(restored.value, 56, 'The scroll anchor row stays at the same pixel offset');
-assert.equal(restored.focusKey, 'stream:tab-two', 'Keyboard focus follows its stable row ID');
-const removedFocus = restoreMenuAnchor(before, afterRows.filter(item => item.key !== 'stream:tab-two'), 15,
-    {lower: 0, upper: 100, pageSize: 24});
-assert.equal(removedFocus.focusKey, 'route:footer', 'Removing the focus row chooses the nearest surviving neighbor');
+const rowOptions = [];
+const fakeRows = {
+    createLevelRow(options) { const item = new MenuItem(options.name); item.rowOptions = {...options}; return item; },
+    updateLevelRow(item, options) { item.rowOptions = {...item.rowOptions, ...options}; },
+    applicationIcon: () => 'application-x-executable-symbolic',
+};
+const appRenderer = new Applications({rows: fakeRows, send() {}});
+const appSection = new Section();
+const appPin = {id: 'app-source', routeId: 'main', nodeId: 'apps'};
+const appA = {id: 'app:chrome', name: 'Chrome', volume: .7, muted: false,
+    streams: [{id: 'stream-1', name: 'Audio one', volume: .4, muted: false}]};
+appRenderer.render(appPin, [appA], language, appSection);
+const appRow = appSection.items.find(row => row.rowOptions?.id === 'app:app:chrome');
+const streamRow = appSection.items.find(row => row.rowOptions?.id === 'stream:stream-1');
+const appB = {...appA, streams: [...appA.streams, {id: 'stream-2', name: 'Audio two', volume: .2, muted: false}]};
+appRenderer.render(appPin, [appB], language, appSection);
+assert.equal(appSection.items.find(row => row.rowOptions?.id === 'app:app:chrome'), appRow,
+    'Adding a stream retains the existing keyed application row actor');
+assert.equal(appSection.items.find(row => row.rowOptions?.id === 'stream:stream-1'), streamRow,
+    'Adding a stream retains the existing keyed stream row actor');
+assert.equal(appSection.items.length, 3, 'Only the new stream row is inserted');
+
+const scroll = {adjustment: {value: 20, lower: 0, upper: 220, page_size: 50},
+    get_vadjustment() { return this.adjustment; }, get_transformed_position() { return [0, 0]; }};
+const anchorActor = {visible: true, height: 10, get_height() { return this.height; },
+    get_parent() { return scroll; }, get_transformed_position() { return [0, 30 - scroll.adjustment.value]; }};
+const focus = {get_parent: () => anchorActor};
+const viewport = captureMenuViewport(scroll, [
+    {id: 'removed-above', actor: {visible: true, height: 10, get_height() { return 10; }, get_transformed_position: () => [0, -30]}},
+    {id: 'stream:stream-1', actor: anchorActor},
+], focus);
+assert.equal(viewport.anchor.id, 'stream:stream-1');
+scroll.adjustment.upper += 30;
+anchorActor.get_transformed_position = () => [0, 50 - scroll.adjustment.value];
+let focusedActor = null;
+restoreMenuViewport(scroll, viewport, [{id: 'stream:stream-1', actor: anchorActor}], actor => focusedActor = actor);
+assert.equal(anchorActor.get_transformed_position()[1], viewport.anchor.offset,
+    'Structural insertion preserves the stable row anchor pixel offset');
+assert.equal(focusedActor, null, 'A still-mounted focused row keeps its actor and keyboard focus');
 
 delete globalThis.audioMatrixRendererFixture;
-console.log('GNOME behavior checks cover inline MultiSwitch updates and keyed stream scroll/focus preservation');
+console.log('Menu behavior covers keyed stream identity, viewport anchors, and exact MultiSwitch links');

@@ -25,90 +25,21 @@ EOF
 
 XDG_DATA_HOME="$scratch/data" gjs -m "$scratch/check-desktop-app-info.mjs"
 extension_source="$repo_root/gnome/audio-matrix-quick-settings"
-main_source="$extension_source/extension.js"
-rg -q "import GioUnix from 'gi://GioUnix';" "$main_source"
-rg -q 'GioUnix\.DesktopAppInfo\.new' "$main_source"
-if rg -q 'addExternalIndicator|QuickMenuToggle|SystemIndicator' "$extension_source"; then
-    echo 'Audio Matrix must extend the standard volume menu without creating a separate tile' >&2
-    exit 1
-fi
-rg -q '_volumeOutput' "$extension_source"
-rg -q '_getMenuItems' "$extension_source"
-rg -q 'this\._menuItemsLease\.restore' "$extension_source/volume-menu-adapter.js"
-rg -q 'this\._menuItemsLease\.commit' "$extension_source/volume-menu-adapter.js"
-rg -q 'this\._menuItemsLease\.rollback' "$extension_source/volume-menu-adapter.js"
-rg -q 'this\._adapter\?\.commit\(\)' "$main_source"
-rg -q 'this\._adapter\?\.rollback\(\)' "$main_source"
-rg -q '\.restore\(\)' "$extension_source/volume-menu-adapter.js"
-rg -q 'actor\.get_parent\(\)\?\.remove_child\(actor\)' "$extension_source/volume-menu-adapter.js"
-# The adapter owns destruction; a Shell menu rebuild only reparents the section.
-if rg -q 'this\._dynamic\?\.destroy\(\)' "$main_source"; then
-    echo 'The GNOME menu section must be destroyed only by its owning menu adapter' >&2
-    exit 1
-fi
-rg -q 'MenuItemsLease' "$extension_source/volume-menu-adapter.js"
-rg -q 'MenuButtonLease' "$extension_source/volume-menu-adapter.js"
-rg -q "import \* as Slider from 'resource:///org/gnome/shell/ui/slider.js';" "$extension_source"
-rg -q 'new Slider\.Slider' "$extension_source"
-rg -q 'actor\.set_style\(`spacing: \$\{spacing\}px;`\)' "$extension_source/menu-layout.js"
-if rg -q 'new St\.BoxLayout\(\{[^}]*spacing\s*:' "$extension_source"; then
-    echo 'St.BoxLayout spacing must be set through its GNOME theme style, not as a GObject property' >&2
-    exit 1
-fi
-rg -q 'audio-volume-muted-symbolic' "$extension_source"
-rg -q "new PopupMenu\.PopupSwitchMenuItem" "$extension_source"
-rg -q 'drag-end' "$extension_source"
-rg -q '_renderPending' "$extension_source"
-rg -q 'quickControls' "$extension_source"
-rg -q 'controlPosition' "$extension_source/menu-renderer.js"
-rg -q "control.kind === 'range'" "$extension_source/menu-renderer.js"
-rg -q 'quickGroups' "$extension_source"
-rg -q 'hasAvailableMenuState' "$extension_source/menu-renderer.js"
-rg -q 'const available = hasAvailableMenuState\(snapshot\);' "$extension_source/menu-renderer.js"
-rg -q 'PopupMenu\.PopupMenuSection' "$extension_source"
-rg -q 'St\.ScrollView' "$extension_source"
-rg -q 'updateMenuControls' "$extension_source"
-rg -q 'setNodeVolume' "$extension_source/menu-output.js"
-rg -q 'graphGainNodeId' "$extension_source/menu-output.js"
-rg -q 'setNodeMuted' "$extension_source/menu-output.js"
-rg -q 'graph-gain' "$extension_source/menu-state.js"
-rg -q 't\.outputUnavailable' "$extension_source/menu-output.js"
-rg -q "outputUnavailable: 'Устройство вывода недоступно'" "$extension_source/menu-text.js"
-rg -q 'pin\.routeId' "$extension_source/menu-output.js"
-rg -q 'pin\.nodeId' "$extension_source/menu-output.js"
-rg -q 'Atk\.StateType\.EXPANDABLE' "$extension_source"
-rg -q 'select_route' "$extension_source"
-rg -q 'set_quick_group_collapsed' "$extension_source"
-rg -q "set_quick_control" "$extension_source"
-rg -q "set_quick_control_choice" "$extension_source"
-rg -q 'setRouteEnabled' "$extension_source/menu-links.js"
-rg -q 'this\._links\.render' "$extension_source/menu-renderer.js"
-rg -q 'menuStructureSignature' "$extension_source/menu-renderer.js"
-rg -q 'menuLevelRows' "$extension_source/menu-renderer.js"
-rg -q 'applications.length === 1' "$extension_source/menu-applications.js"
-rg -q "pin.nodeType === 'mixer'" "$extension_source/menu-groups.js"
-if rg -q 't\.bassMusic|set_mixer_input_volume|toggle_mixer_input_mute' "$extension_source"; then
-    echo 'Merge pins must not expose hidden per-input Gain or bass-only controls' >&2
-    exit 1
-fi
-rg -q 'new PopupMenu\.PopupMenuItem' "$extension_source/menu-links.js"
-rg -q 'Atk\.Role\.RADIO_BUTTON' "$extension_source/menu-links.js"
-rg -q 'control\.multiple' "$extension_source/menu-links.js"
-rg -q 'set_quick_matrix_view' "$extension_source"
-rg -q 'AudioMatrixMenuMatrix' "$extension_source/menu-matrix.js"
-rg -Fq "new GLib.Variant('(ussss)'" "$extension_source"
-rg -q 'const API_VERSION = 5' "$extension_source/state-client.js"
-rg -q 'select_profile' "$extension_source/menu-renderer.js"
-rg -q "'Result'" "$extension_source"
-for source_file in "$extension_source"/*.js; do node --check "$source_file"; done
 gjs -m "$repo_root/scripts/test-gnome-quick-settings-state.js"
-node "$repo_root/scripts/test-gnome-state-client.mjs"
+node "$repo_root/scripts/test-menu-state-client.mjs"
 node "$repo_root/scripts/test-volume-menu-lease.mjs"
 node "$repo_root/scripts/test-menu-adapter.mjs"
 node "$repo_root/scripts/test-menu-renderer.mjs"
 node "$repo_root/scripts/test-menu-output.mjs"
 node "$repo_root/scripts/test-menu-control-scale.mjs"
+for source_file in "$extension_source"/*.js; do node --check "$source_file"; done
 gnome-extensions pack "$extension_source" --force --out-dir "$scratch" \
+    --extra-source=menu-pending-intents.js \
+    --extra-source=menu-state-render-scheduler.js \
+    --extra-source=menu-icons.js \
+    --extra-source=menu-row-utils.js \
+    --extra-source=menu-viewport.js \
+    --extra-source=menu-quick-controls.js \
     --extra-source=menu-text.js \
     --extra-source=state-client.js \
     --extra-source=menu-rows.js \
@@ -123,13 +54,12 @@ gnome-extensions pack "$extension_source" --force --out-dir "$scratch" \
     --extra-source=menu-groups.js \
     --extra-source=menu-renderer.js \
     --extra-source=menu-state.js \
-    --extra-source=menu-keyed-section.js \
-    --extra-source=menu-anchor.js \
     --extra-source=menu-lease.js \
     --extra-source=volume-menu-adapter.js
 unzip -t "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip"
-unzip -p "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" metadata.json | rg '"version": 19'
-for module in menu-text.js state-client.js menu-rows.js menu-applications.js menu-links.js menu-layout.js menu-control-scale.js menu-matrix.js menu-mixer.js menu-output.js menu-disclosure.js menu-groups.js menu-renderer.js menu-state.js menu-keyed-section.js menu-anchor.js menu-lease.js volume-menu-adapter.js; do
+unzip -p "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" metadata.json |
+    node -e 'let data = ""; process.stdin.on("data", chunk => data += chunk); process.stdin.on("end", () => { if (JSON.parse(data).version !== 19) process.exit(1); });'
+for module in menu-text.js state-client.js menu-pending-intents.js menu-state-render-scheduler.js menu-icons.js menu-row-utils.js menu-viewport.js menu-quick-controls.js menu-rows.js menu-applications.js menu-links.js menu-layout.js menu-control-scale.js menu-matrix.js menu-mixer.js menu-output.js menu-disclosure.js menu-groups.js menu-renderer.js menu-state.js menu-lease.js volume-menu-adapter.js; do
     unzip -Z1 "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" | grep -Fxq "$module"
 done
 

@@ -8,6 +8,7 @@ import shutil
 import socket
 import struct
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -116,15 +117,27 @@ class FakeProcess:
 
 
 class FakeBridge:
-    def __init__(self):
+    def __init__(self, broken=False):
         self.lines = []
+        self.broken = broken
+        self.closed = False
 
     def sendall(self, payload):
+        if self.broken:
+            raise OSError("The Audio Matrix browser socket failed.")
         self.lines.append(bytes(payload))
 
+    def close(self):
+        self.closed = True
 
-class HostTest(unittest.TestCase):
-    def make_host(self, ready=True, startup_timeout=0.2, bridge=None):
+
+def unavailable_java_socket():
+    raise RuntimeError("The Audio Matrix browser socket is unavailable.")
+
+
+class HostTestSupport:
+    def make_host(self, ready=True, startup_timeout=0.2, bridge=None, notify=None,
+                  bridge_connect=None, bridge_reconnect=HOST_MODULE.BRIDGE_RECONNECT_SECONDS):
         processes = []
 
         def fake_popen(command, **kwargs):
@@ -133,45 +146,24 @@ class HostTest(unittest.TestCase):
             return process
 
         checker = ready if callable(ready) else lambda _stream: ready
+        connect = bridge_connect if bridge_connect is not None else unavailable_java_socket
         host = HOST_MODULE.Host(
             popen=fake_popen,
             pwcat="/usr/bin/pw-cat",
             pipewire_ready=checker,
             bridge=bridge,
-            startup_timeout=startup_timeout
+            startup_timeout=startup_timeout,
+            bridge_connect=connect,
+            notify=notify,
+            bridge_reconnect=bridge_reconnect
         )
         return host, processes
 
     def establish_snapshot(self, host):
         host.handle_native_message(envelope("snapshot", []))
 
-    def test_snapshot_is_first_and_events_are_forwarded_as_ordered_jsonl(self):
-        bridge = FakeBridge()
-        host, _ = self.make_host(bridge=bridge)
-        with self.assertRaisesRegex(RuntimeError, "first browser message"):
-            host.handle_native_message(envelope("tab_created"))
 
-        initial = envelope("snapshot", [tab_entry()])
-        created = envelope("tab_created", [tab_entry(18, SESSION_ID_2)])
-        audio = envelope("tab_audio", [tab_entry()])
-        title_update = envelope("tab_updated", [dict(tab_entry(), title="Research https://private.invalid/path")])
-        ack = envelope("ack", [], requestId="java-request-14",
-                       status="error", error="The tab no longer exists.")
-        for message in (initial, created, audio, title_update, ack):
-            host.handle_native_message(message)
-
-        forwarded = [json.loads(line) for line in bridge.lines]
-        self.assertEqual(["snapshot", "tab_created", "tab_audio", "tab_updated", "ack"],
-                         [message["type"] for message in forwarded])
-        self.assertEqual(set(HOST_MODULE.ENVELOPE_FIELDS), set(forwarded[0]))
-        self.assertEqual(set(HOST_MODULE.TAB_FIELDS), set(forwarded[0]["tabs"][0]))
-        self.assertNotIn("url", json.dumps(forwarded).lower())
-        self.assertEqual("Research", forwarded[3]["tabs"][0]["title"])
-
-        forbidden = dict(tab_entry())
-        forbidden["url"] = "https://private.invalid/"
-        with self.assertRaisesRegex(RuntimeError, "unexpected fields"):
-            host.handle_native_message(envelope("tab_updated", [forbidden]))
+class HostTest(HostTestSupport, unittest.TestCase):
 
     def test_pipewire_stream_is_bound_to_stable_tab_identity_and_virtual_sink(self):
         host, _ = self.make_host()
@@ -222,7 +214,7 @@ class HostTest(unittest.TestCase):
         self.assertEqual({}, host.streams)
 
     def test_pcm_ack_is_per_chunk_and_duplicate_stream_or_sequence_is_rejected_locally(self):
-        host, processes = self.make_host()
+        host, processes = self.make_host(bridge=FakeBridge())
         self.establish_snapshot(host)
         started = host.handle_native_message(native_capture("capture-start", title="First"))
         self.assertTrue(started["ok"])
@@ -238,7 +230,8 @@ class HostTest(unittest.TestCase):
                              data=base64.b64encode(frame).decode("ascii"))
         ack = host.handle_native_message(pcm)
         self.assertEqual({"type": "capture-response", "requestId": pcm["requestId"],
-                          "operation": "pcm", "ok": True, "error": ""}, ack)
+                          "operation": "pcm", "ok": True, "error": "",
+                          "bridgeError": ""}, ack)
         self.assertEqual(frame, processes[0].stdin.frames[0])
         self.assertEqual([], processes[1].stdin.frames)
 
@@ -271,6 +264,36 @@ class HostTest(unittest.TestCase):
         self.assertTrue(processes[0].stdin.closed)
         self.assertFalse(processes[1].stdin.closed)
         host.close()
+
+
+class HostBridgeTest(HostTestSupport, unittest.TestCase):
+    def test_snapshot_is_first_and_events_are_forwarded_as_ordered_jsonl(self):
+        bridge = FakeBridge()
+        host, _ = self.make_host(bridge=bridge)
+        with self.assertRaisesRegex(RuntimeError, "first browser message"):
+            host.handle_native_message(envelope("tab_created"))
+
+        initial = envelope("snapshot", [tab_entry()])
+        created = envelope("tab_created", [tab_entry(18, SESSION_ID_2)])
+        audio = envelope("tab_audio", [tab_entry()])
+        title_update = envelope("tab_updated", [dict(tab_entry(), title="Research https://private.invalid/path")])
+        ack = envelope("ack", [], requestId="java-request-14",
+                       status="error", error="The tab no longer exists.")
+        for message in (initial, created, audio, title_update, ack):
+            host.handle_native_message(message)
+
+        forwarded = [json.loads(line) for line in bridge.lines]
+        self.assertEqual(["snapshot", "tab_created", "tab_audio", "tab_updated", "ack"],
+                         [message["type"] for message in forwarded])
+        self.assertEqual(set(HOST_MODULE.ENVELOPE_FIELDS), set(forwarded[0]))
+        self.assertEqual(set(HOST_MODULE.TAB_FIELDS), set(forwarded[0]["tabs"][0]))
+        self.assertNotIn("url", json.dumps(forwarded).lower())
+        self.assertEqual("Research", forwarded[3]["tabs"][0]["title"])
+
+        forbidden = dict(tab_entry())
+        forbidden["url"] = "https://private.invalid/"
+        with self.assertRaisesRegex(RuntimeError, "unexpected fields"):
+            host.handle_native_message(envelope("tab_updated", [forbidden]))
 
     def test_java_command_contract_and_native_message_framing(self):
         bridge = FakeBridge()
@@ -338,6 +361,154 @@ class HostTest(unittest.TestCase):
             self.assertEqual("/run/user/4321/audio-matrix/browser.sock", HOST_MODULE.java_socket_path())
 
 
+class HostOptionalJavaBridgeTest(HostTestSupport, unittest.TestCase):
+    """The Java browser socket is optional for Chrome tab capture."""
+
+    def test_capture_starts_and_stops_without_the_java_socket(self):
+        notes = []
+        host, processes = self.make_host(bridge=None, notify=notes.append)
+        self.establish_snapshot(host)
+        self.assertEqual(HOST_MODULE.BRIDGE_UNAVAILABLE_MESSAGE, host.bridge_error)
+
+        started = host.handle_native_message(native_capture("capture-start", title="Music"))
+        self.assertTrue(started["ok"])
+        self.assertEqual("", started["error"])
+        self.assertEqual(HOST_MODULE.BRIDGE_UNAVAILABLE_MESSAGE, started["bridgeError"])
+        self.assertIn(("chrome", INSTANCE_ID, PROFILE_ID, SESSION_ID), host.streams)
+        self.assertFalse(processes[0].stdin.closed)
+
+        stopped = host.handle_native_message(native_capture("capture-stop", request=9))
+        self.assertTrue(stopped["ok"])
+        self.assertEqual(HOST_MODULE.BRIDGE_UNAVAILABLE_MESSAGE, stopped["bridgeError"])
+        self.assertEqual({}, host.streams)
+        self.assertTrue(processes[0].stdin.closed)
+
+        failures = [note for note in notes if note.get("type") == "bridge-error"]
+        self.assertTrue(failures)
+        self.assertFalse(failures[0]["connected"])
+        self.assertEqual(HOST_MODULE.BRIDGE_UNAVAILABLE_MESSAGE, failures[0]["message"])
+
+    def test_java_disconnect_keeps_the_capture_running(self):
+        notes = []
+        host, _ = self.make_host(bridge=FakeBridge(), notify=notes.append)
+        self.establish_snapshot(host)
+        self.assertEqual("", host.bridge_error)
+        self.assertTrue(host.handle_native_message(native_capture("capture-start", title="Music"))["ok"])
+
+        host.java.disconnect("The Audio Matrix browser socket disconnected.")
+
+        self.assertIsNone(host.bridge)
+        self.assertEqual(HOST_MODULE.BRIDGE_UNAVAILABLE_MESSAGE, host.bridge_error)
+        stopped = host.handle_native_message(native_capture("capture-stop", request=9))
+        self.assertTrue(stopped["ok"])
+        self.assertEqual({}, host.streams)
+        failures = [note for note in notes if note.get("type") == "bridge-error"]
+        self.assertEqual([False], [note["connected"] for note in failures])
+
+    def test_failed_java_forward_is_buffered_and_replayed_after_the_reconnect(self):
+        sockets = []
+        state = {"available": False}
+
+        def connect():
+            if not state["available"]:
+                raise RuntimeError("The Audio Matrix browser socket is unavailable.")
+            socket = FakeBridge()
+            sockets.append(socket)
+            return socket
+
+        host, _ = self.make_host(bridge=None, bridge_connect=connect, bridge_reconnect=0)
+        host.handle_native_message(envelope("snapshot", [tab_entry()]))
+        host.handle_native_message(envelope("tab_created", [tab_entry(18, SESSION_ID_2)]))
+        self.assertEqual([], sockets)
+        self.assertEqual(HOST_MODULE.BRIDGE_UNAVAILABLE_MESSAGE, host.bridge_error)
+
+        state["available"] = True
+        host.handle_native_message(envelope("tab_audio", [tab_entry()]))
+
+        self.assertEqual(1, len(sockets))
+        self.assertEqual(["snapshot", "tab_created", "tab_audio"],
+                         [json.loads(line)["type"] for line in sockets[0].lines])
+        self.assertEqual("", host.bridge_error)
+
+    def test_connected_java_bridge_receives_the_envelopes_in_order(self):
+        bridge = FakeBridge()
+        host, _ = self.make_host(bridge=bridge)
+        host.handle_native_message(envelope("snapshot", [tab_entry()]))
+        host.handle_native_message(envelope("tab_created", [tab_entry(18, SESSION_ID_2)]))
+        host.handle_native_message(envelope("tab_audio", [tab_entry()]))
+        self.assertEqual(["snapshot", "tab_created", "tab_audio"],
+                         [json.loads(line)["type"] for line in bridge.lines])
+        self.assertEqual("", host.bridge_error)
+
+    def test_duplicate_and_malformed_snapshots_are_rejected(self):
+        host, _ = self.make_host(bridge=FakeBridge())
+        host.handle_native_message(envelope("snapshot", [tab_entry()]))
+        with self.assertRaisesRegex(RuntimeError, "only one initial snapshot"):
+            host.handle_native_message(envelope("snapshot", [tab_entry()]))
+        forbidden = dict(tab_entry())
+        forbidden["url"] = "https://private.invalid/"
+        with self.assertRaisesRegex(RuntimeError, "unexpected fields"):
+            host.handle_native_message(envelope("tab_updated", [forbidden]))
+        with self.assertRaisesRegex(RuntimeError, "unsupported"):
+            host.handle_native_message(envelope("tab_updated", [tab_entry()], version=2))
+
+    def test_java_commands_require_the_connected_socket(self):
+        host, _ = self.make_host(bridge=None)
+        self.establish_snapshot(host)
+        command = {
+            "version": 1,
+            "type": "command",
+            "requestId": "java-request-21",
+            "browser": "chrome",
+            "instanceId": INSTANCE_ID,
+            "profileId": PROFILE_ID,
+            "tabs": [],
+            "sessionToken": SESSION_ID,
+            "command": "mute",
+            "muted": True
+        }
+        with self.assertRaisesRegex(RuntimeError, "socket is unavailable"):
+            host.handle_java_line(json.dumps(command).encode("utf-8"))
+
+        connected, _ = self.make_host(bridge=FakeBridge())
+        self.establish_snapshot(connected)
+        self.assertEqual(command, connected.handle_java_line(json.dumps(command).encode("utf-8")))
+
+
+class NativeHostProcessTest(unittest.TestCase):
+    """The native host process keeps running when the Java browser socket is absent."""
+
+    def test_host_process_reports_the_missing_java_socket_and_stays_alive(self):
+        with tempfile.TemporaryDirectory() as runtime_dir:
+            environment = dict(os.environ, XDG_RUNTIME_DIR=runtime_dir)
+            process = subprocess.Popen(
+                [sys.executable, str(MODULE_PATH)],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                env=environment
+            )
+            try:
+                self.assertEqual({"type": "bridge-ready"}, HOST_MODULE.read_message(process.stdout))
+                failure = HOST_MODULE.read_message(process.stdout)
+                self.assertEqual("bridge-error", failure["type"])
+                self.assertFalse(failure["connected"])
+                self.assertEqual(HOST_MODULE.BRIDGE_UNAVAILABLE_MESSAGE, failure["message"])
+
+                payload = json.dumps(envelope("snapshot", [])).encode("utf-8")
+                process.stdin.write(struct.pack("<I", len(payload)) + payload)
+                process.stdin.flush()
+                self.assertIsNone(process.poll())
+
+                process.stdin.close()
+                self.assertEqual(0, process.wait(timeout=10))
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=10)
+                process.stdout.close()
+                if process.stdin and not process.stdin.closed:
+                    process.stdin.close()
+
+
 NODE_BEHAVIORAL_HARNESS = r"""
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -388,6 +559,12 @@ class NativePort {
 
 function clone(value) {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+// The extension runs in its own realm, so its plain objects carry a foreign
+// prototype: compare the serialized shape instead of the object identity.
+function plain(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
 function createHarness(store) {
@@ -674,14 +851,14 @@ async function runExtensionStateTests() {
   assert.equal(failedStart.ok, false);
   assert.equal(restarted.browser.tracks.length, 0);
   const afterHostFailure = await message(restarted, { action: "status" });
-  assert.deepEqual(afterHostFailure.captures, []);
+  assert.deepEqual(plain(afterHostFailure.captures), []);
   restarted.browser.failGetUserMedia = true;
   const failedMedia = await startTab(restarted, 10);
   restarted.browser.failGetUserMedia = false;
   assert.equal(failedMedia.ok, false);
   assert.equal(restarted.browser.tracks.length, 0);
   const afterMediaFailure = await message(restarted, { action: "status" });
-  assert.deepEqual(afterMediaFailure.captures, []);
+  assert.deepEqual(plain(afterMediaFailure.captures), []);
 
   const readinessStart = restarted.browser.timeline.length;
   const started = await startTab(restarted, 10);
@@ -692,7 +869,7 @@ async function runExtensionStateTests() {
   assert.ok(startupSteps.indexOf("host-ready") < startupSteps.indexOf("offscreen-open"));
   assert.ok(startupSteps.indexOf("offscreen-open") < startupSteps.indexOf("worklet-ready"));
   const captureStatus = await message(restarted, { action: "status" });
-  assert.deepEqual(captureStatus.captures, [{ tabId: 10, status: "active" }]);
+  assert.deepEqual(plain(captureStatus.captures), [{ tabId: 10, status: "active" }]);
 
   const firstTrack = restarted.browser.tracks[0];
   const firstContext = restarted.browser.contexts[0];
@@ -724,7 +901,22 @@ async function runExtensionStateTests() {
   assert.equal(firstTrackAfterStart.readyState, "ended");
   assert.equal(secondTrack.readyState, "live");
   const remaining = await message(restarted, { action: "status" });
-  assert.deepEqual(remaining.captures, [{ tabId: 20, status: "active" }]);
+  assert.deepEqual(plain(remaining.captures), [{ tabId: 20, status: "active" }]);
+
+  restarted.port.emit({ type: "bridge-error", connected: false,
+    message: "Audio Matrix is not connected; Chrome tab controls are unavailable." });
+  const bridgeDown = await message(restarted, { action: "status" });
+  assert.equal(bridgeDown.javaBridgeError,
+    "Audio Matrix is not connected; Chrome tab controls are unavailable.");
+  assert.equal(bridgeDown.error, remaining.error);
+  assert.deepEqual(plain(bridgeDown.captures), [{ tabId: 20, status: "active" }]);
+  assert.equal(secondTrack.readyState, "live");
+
+  restarted.port.emit({ type: "bridge-error", connected: true, message: "" });
+  const bridgeUp = await message(restarted, { action: "status" });
+  assert.equal(bridgeUp.javaBridgeError, "");
+  assert.deepEqual(plain(bridgeUp.captures), [{ tabId: 20, status: "active" }]);
+  assert.equal(secondTrack.readyState, "live");
 
   const stopCommandId = crypto.randomUUID();
   restarted.port.emit({
@@ -740,6 +932,11 @@ async function runExtensionStateTests() {
   assert.equal(restarted.browser.contexts.at(-1).state, "closed");
   assert.equal(restarted.browser.store.session.audioMatrixTabCaptures["20"], undefined);
   assert.ok(!restarted.port.sent.some((entry) => Object.hasOwn(entry, "url")));
+
+  restarted.port.emit({ type: "bridge-error", message: "The local capture helper failed." });
+  const fatal = await message(restarted, { action: "status" });
+  assert.equal(fatal.error, "The local capture helper failed.");
+  assert.deepEqual(plain(fatal.captures), []);
 }
 
 function runWorkletQueueTest() {

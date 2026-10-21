@@ -9,6 +9,11 @@ final class GraphNodeCopies {
     private GraphNodeCopies() {}
 
     static GraphNode copy(GraphNode node, String id, Map<String, String> nodeIds) {
+        return copy(node, id, nodeIds, Map.of());
+    }
+
+    static GraphNode copy(GraphNode node, String id, Map<String, String> nodeIds,
+                          Map<String, String> portIds) {
         List<String> channels = node instanceof DynamicGeneratorNode generator ? generator.channels()
                 : node.outputs().isEmpty()
                 ? node.inputs().getFirst().channels()
@@ -20,8 +25,8 @@ final class GraphNodeCopies {
             case "output" -> copyOutput(node, id, channels);
             case "gain" -> copyGain(node, id, channels, nodeIds);
             case "gate" -> copyGate(node, id, channels);
-            case "router" -> copyRouter(node, id, channels);
-            case "switch" -> new SwitchNode(id, node.name(), channels, outputIds(node), links(node));
+            case "router" -> copyRouter(node, id, channels, portIds);
+            case "switch" -> copySwitch(node, id, channels, portIds);
             case "selector" -> new SelectorNode(id, node.name(), channels, inputIds(node), links(node));
             case "multi_selector" -> new MultiSelectorNode(id, node.name(), channels, inputIds(node), links(node));
             case "matrix" -> new MatrixNode(id, node.name(), channels, inputIds(node), outputIds(node), links(node));
@@ -99,9 +104,19 @@ final class GraphNodeCopies {
         return new GateNode(id, node.name(), channels, ((GateNode) node).open());
     }
 
-    private static GraphNode copyRouter(GraphNode node, String id, List<String> channels) {
+    private static GraphNode copyRouter(GraphNode node, String id, List<String> channels,
+                                        Map<String, String> portIds) {
         RouterNode router = (RouterNode) node;
-        return new RouterNode(id, node.name(), channels, channels, router.activeLinks(), router.multiple());
+        List<String> outputs = outputIds(node).stream().map(port -> portIds.getOrDefault(port, port)).toList();
+        return new RouterNode(id, node.name(), inputIds(node), outputs, channels,
+                remapLinks(router.activeLinks(), portIds), router.multiple());
+    }
+
+    private static GraphNode copySwitch(GraphNode node, String id, List<String> channels,
+                                        Map<String, String> portIds) {
+        SwitchNode router = (SwitchNode) node;
+        List<String> outputs = outputIds(node).stream().map(port -> portIds.getOrDefault(port, port)).toList();
+        return new SwitchNode(id, node.name(), channels, outputs, remapLinks(router.activeLinks(), portIds));
     }
 
     private static GraphNode copyFilter(GraphNode node, String id, List<String> channels) {
@@ -122,5 +137,12 @@ final class GraphNodeCopies {
 
     private static List<String> links(GraphNode node) {
         return ((RouterNode) node).activeLinks();
+    }
+    private static List<String> remapLinks(List<String> links, Map<String, String> portIds) {
+        return links.stream().map(link -> {
+            String[] endpoints = link.split("->", 2);
+            if (endpoints.length != 2) return link;
+            return endpoints[0] + "->" + portIds.getOrDefault(endpoints[1], endpoints[1]);
+        }).toList();
     }
 }

@@ -25,6 +25,9 @@ CHUNK_BYTES = MAX_PCM_BYTES
 MAX_BRIDGE_LINE = 1_000_000
 START_TIMEOUT_SECONDS = 3.0
 HEALTH_CHECK_SECONDS = 0.5
+BRIDGE_RECONNECT_SECONDS = 2.0
+BRIDGE_BUFFER_LIMIT = 512
+BRIDGE_UNAVAILABLE_MESSAGE = "Audio Matrix is not connected; Chrome tab controls are unavailable."
 
 ENVELOPE_FIELDS = {
     "version", "type", "requestId", "browser", "instanceId", "profileId", "tabs"
@@ -199,17 +202,14 @@ def pipewire_node_name(capture_stream_key):
     return f"audio-matrix-chrome-{capture_stream_key}"
 
 
-class Host:
-    def __init__(self, popen=subprocess.Popen, pwcat=None, pw_dump=None,
-                 pipewire_ready=None, bridge=None, startup_timeout=START_TIMEOUT_SECONDS):
+class PipeWireCapture:
+    def __init__(self, popen, pwcat, pw_dump, pipewire_ready, startup_timeout):
         self.popen = popen
-        self.pwcat = pwcat or shutil.which("pw-cat")
-        self.pw_dump = pw_dump or shutil.which("pw-dump")
+        self.pwcat = pwcat
+        self.pw_dump = pw_dump
         self.pipewire_ready = pipewire_ready
-        self.bridge = bridge
         self.startup_timeout = startup_timeout
         self.streams = {}
-        self.snapshot_seen = False
         self.next_health_check = 0.0
 
     def command(self, tab_id, title, identity, capture_stream_key):
@@ -379,71 +379,6 @@ class Host:
             raise RuntimeError("The stop request does not match the active Chrome tab capture.")
         self._stop_key(identity)
 
-    def handle_capture(self, message):
-        request_id = message.get("requestId") if isinstance(message, dict) else None
-        operation = {
-            "capture-start": "start",
-            "capture-pcm": "pcm",
-            "capture-stop": "stop"
-        }.get(message.get("type") if isinstance(message, dict) else None, "unknown")
-        try:
-            if operation == "unknown":
-                raise RuntimeError("Unsupported Chrome tab capture message.")
-            require_uuid(request_id, "native request ID")
-            if operation == "start":
-                self.start(message)
-            elif operation == "pcm":
-                self.write_pcm(message)
-            else:
-                self.stop(message)
-            return {
-                "type": "capture-response",
-                "requestId": request_id,
-                "operation": operation,
-                "ok": True,
-                "error": ""
-            }
-        except Exception as error:
-            return {
-                "type": "capture-response",
-                "requestId": request_id if isinstance(request_id, str) else "",
-                "operation": operation,
-                "ok": False,
-                "error": str(error)
-            }
-
-    def forward_envelope(self, message):
-        validate_bridge_envelope(message, self.snapshot_seen)
-        for tab in message["tabs"]:
-            tab["title"] = safe_bridge_title(tab["title"])
-        payload = json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode("utf-8") + b"\n"
-        if len(payload) > MAX_BRIDGE_LINE:
-            raise RuntimeError("The browser bridge envelope is too large.")
-        if self.bridge is None:
-            raise RuntimeError("The Java browser socket is unavailable.")
-        self.bridge.sendall(payload)
-        if message["type"] == "snapshot":
-            self.snapshot_seen = True
-
-    def handle_native_message(self, message):
-        if isinstance(message, dict) and message.get("type") in BRIDGE_TYPES:
-            self.forward_envelope(message)
-            return None
-        if not self.snapshot_seen:
-            raise RuntimeError("A browser snapshot must be sent before native capture messages.")
-        return self.handle_capture(message)
-
-    def handle_java_line(self, line):
-        if not self.snapshot_seen:
-            raise RuntimeError("A browser snapshot must be sent before Java commands.")
-        if len(line) > MAX_BRIDGE_LINE:
-            raise RuntimeError("The Java browser message is too large.")
-        try:
-            message = json.loads(line.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise RuntimeError("The Java browser message is malformed JSON.") from error
-        return validate_java_command(message)
-
     def reap_failed_streams(self):
         now = time.monotonic()
         if now < self.next_health_check:
@@ -466,6 +401,243 @@ class Host:
     def close(self):
         for key in list(self.streams):
             self._stop_key(key)
+
+
+class JavaBridge:
+    """Best-effort link to the Audio Matrix Java browser socket.
+
+    Chrome tab capture never depends on this link. When Audio Matrix is not
+    running, or the socket breaks, the envelope is kept for the next connection
+    and the failure is reported to the extension instead of aborting capture.
+    """
+
+    def __init__(self, connect=None, notify=None, reconnect_seconds=BRIDGE_RECONNECT_SECONDS,
+                 buffer_limit=BRIDGE_BUFFER_LIMIT):
+        self.connect = connect or connect_java_socket
+        self.notify = notify or (lambda message: None)
+        self.reconnect_seconds = reconnect_seconds
+        self.buffer_limit = buffer_limit
+        self.socket = None
+        self.error = ""
+        self.detail = ""
+        self.snapshot = None
+        self.buffered = []
+        self.next_attempt = 0.0
+
+    @property
+    def connected(self):
+        return self.socket is not None
+
+    def report(self, connected, message):
+        self.notify({"type": "bridge-error", "connected": connected, "message": message})
+
+    def fail(self, reason):
+        """Records a bridge failure and reports every new failure once."""
+        if reason == self.detail and self.error:
+            return self.error
+        self.detail = reason
+        self.error = BRIDGE_UNAVAILABLE_MESSAGE
+        print(f"Audio Matrix browser bridge unavailable: {reason}", file=sys.stderr)
+        self.report(False, self.error)
+        return self.error
+
+    def connected_now(self):
+        """Marks the Java socket as available and reports the recovered state."""
+        self.error = ""
+        self.detail = ""
+        self.report(True, "")
+
+    def close(self):
+        socket = self.socket
+        self.socket = None
+        if socket is None:
+            return
+        try:
+            socket.close()
+        except OSError:
+            pass
+
+    def disconnect(self, reason):
+        """Drops the Java socket after a disconnect and reports the failure."""
+        self.close()
+        self.fail(reason)
+
+    def connect_now(self):
+        """Connects to the Java socket and replays the snapshot plus buffered events."""
+        if self.socket is not None:
+            return self.socket
+        now = time.monotonic()
+        if now < self.next_attempt:
+            return None
+        self.next_attempt = now + self.reconnect_seconds
+        try:
+            socket = self.connect()
+        except Exception as error:
+            self.fail(str(error))
+            return None
+        try:
+            if self.snapshot is not None:
+                socket.sendall(self.snapshot)
+            for payload in self.buffered:
+                socket.sendall(payload)
+        except OSError as error:
+            self.fail(f"The Audio Matrix browser socket failed: {error}")
+            try:
+                socket.close()
+            except OSError:
+                pass
+            return None
+        self.buffered = []
+        self.socket = socket
+        self.connected_now()
+        return socket
+
+    def _send(self, payload):
+        socket = self.socket or self.connect_now()
+        if socket is None:
+            self.fail(self.detail or "The Audio Matrix browser socket is unavailable.")
+            return False
+        try:
+            socket.sendall(payload)
+        except OSError as error:
+            self.fail(f"The Audio Matrix browser socket failed: {error}")
+            self.close()
+            return False
+        if self.error:
+            self.connected_now()
+        return True
+
+    def forward(self, payload, snapshot):
+        """Sends one envelope to Java and keeps it for the next connection on failure."""
+        if snapshot:
+            self.snapshot = payload
+            self.buffered = []
+        if self._send(payload):
+            return True
+        if not snapshot:
+            self.buffered.append(payload)
+            if len(self.buffered) > self.buffer_limit:
+                del self.buffered[:len(self.buffered) - self.buffer_limit]
+        return False
+
+
+class Host:
+    def __init__(self, popen=subprocess.Popen, pwcat=None, pw_dump=None,
+                 pipewire_ready=None, bridge=None, startup_timeout=START_TIMEOUT_SECONDS,
+                 bridge_connect=None, notify=None, bridge_reconnect=BRIDGE_RECONNECT_SECONDS):
+        self.capture = PipeWireCapture(
+            popen,
+            pwcat or shutil.which("pw-cat"),
+            pw_dump or shutil.which("pw-dump"),
+            pipewire_ready,
+            startup_timeout
+        )
+        self.java = JavaBridge(connect=bridge_connect, notify=notify,
+                               reconnect_seconds=bridge_reconnect)
+        if bridge is not None:
+            self.java.socket = bridge
+        self.snapshot_seen = False
+
+    @property
+    def bridge(self):
+        return self.java.socket
+
+    @property
+    def bridge_error(self):
+        return self.java.error
+
+    @property
+    def streams(self):
+        return self.capture.streams
+
+    def command(self, tab_id, title, identity, capture_stream_key):
+        return self.capture.command(tab_id, title, identity, capture_stream_key)
+
+    def start(self, message):
+        return self.capture.start(message)
+
+    def write_pcm(self, message):
+        return self.capture.write_pcm(message)
+
+    def stop(self, message):
+        return self.capture.stop(message)
+
+    def reap_failed_streams(self):
+        return self.capture.reap_failed_streams()
+
+    def close(self):
+        self.capture.close()
+        self.java.close()
+
+    def handle_capture(self, message):
+        request_id = message.get("requestId") if isinstance(message, dict) else None
+        operation = {
+            "capture-start": "start",
+            "capture-pcm": "pcm",
+            "capture-stop": "stop"
+        }.get(message.get("type") if isinstance(message, dict) else None, "unknown")
+        try:
+            if operation == "unknown":
+                raise RuntimeError("Unsupported Chrome tab capture message.")
+            require_uuid(request_id, "native request ID")
+            if operation == "start":
+                self.start(message)
+            elif operation == "pcm":
+                self.write_pcm(message)
+            else:
+                self.stop(message)
+            return {
+                "type": "capture-response",
+                "requestId": request_id,
+                "operation": operation,
+                "ok": True,
+                "error": "",
+                "bridgeError": self.bridge_error
+            }
+        except Exception as error:
+            return {
+                "type": "capture-response",
+                "requestId": request_id if isinstance(request_id, str) else "",
+                "operation": operation,
+                "ok": False,
+                "error": str(error),
+                "bridgeError": self.bridge_error
+            }
+
+    def forward_envelope(self, message):
+        validate_bridge_envelope(message, self.snapshot_seen)
+        for tab in message["tabs"]:
+            tab["title"] = safe_bridge_title(tab["title"])
+        payload = json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode("utf-8") + b"\n"
+        if len(payload) > MAX_BRIDGE_LINE:
+            raise RuntimeError("The browser bridge envelope is too large.")
+        snapshot = message["type"] == "snapshot"
+        if snapshot:
+            self.snapshot_seen = True
+        self.java.forward(payload, snapshot)
+        return True
+
+    def handle_native_message(self, message):
+        if isinstance(message, dict) and message.get("type") in BRIDGE_TYPES:
+            self.forward_envelope(message)
+            return None
+        if not self.snapshot_seen:
+            raise RuntimeError("A browser snapshot must be sent before native capture messages.")
+        return self.handle_capture(message)
+
+    def handle_java_line(self, line):
+        if not self.java.connected:
+            raise RuntimeError("The Java browser socket is unavailable.")
+        if not self.snapshot_seen:
+            raise RuntimeError("A browser snapshot must be sent before Java commands.")
+        if len(line) > MAX_BRIDGE_LINE:
+            raise RuntimeError("The Java browser message is too large.")
+        try:
+            message = json.loads(line.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise RuntimeError("The Java browser message is malformed JSON.") from error
+        return validate_java_command(message)
+
 
 
 class NativeMessageDecoder:
@@ -562,21 +734,64 @@ def _write_capture_error(stream, failure):
     })
 
 
-def main():
+def _register_bridge(selector, host, registered):
+    """Keeps the selector in step with the Java socket of the host."""
+    socket = host.bridge
+    fd = socket.fileno() if socket is not None else None
+    if fd == registered:
+        return registered
+    if registered is not None:
+        try:
+            selector.unregister(registered)
+        except (KeyError, ValueError, OSError):
+            pass
+    if fd is None:
+        return None
     try:
-        bridge = connect_java_socket()
-    except Exception as error:
-        write_message(sys.stdout.buffer, {"type": "bridge-error", "message": str(error)})
-        return 1
-    host = Host(bridge=bridge)
+        selector.register(fd, selectors.EVENT_READ, "java")
+    except (KeyError, ValueError, OSError):
+        return None
+    return fd
+
+
+def _read_java_commands(host, buffer):
+    """Reads the pending Java commands and returns them for the extension."""
+    socket = host.bridge
+    if socket is None:
+        return []
+    try:
+        data = socket.recv(65536)
+    except OSError as error:
+        host.java.disconnect(f"The Audio Matrix browser socket failed: {error}")
+        return []
+    if not data:
+        host.java.disconnect("The Audio Matrix browser socket disconnected.")
+        return []
+    buffer.extend(data)
+    if len(buffer) > MAX_BRIDGE_LINE and b"\n" not in buffer:
+        raise RuntimeError("The Java browser message is too large.")
+    commands = []
+    while b"\n" in buffer:
+        line, _, remainder = buffer.partition(b"\n")
+        buffer[:] = remainder
+        if not line:
+            raise RuntimeError("The Java browser socket sent an empty message.")
+        commands.append(host.handle_java_line(bytes(line)))
+    return commands
+
+
+def main():
+    host = Host(notify=lambda message: write_message(sys.stdout.buffer, message))
     selector = selectors.DefaultSelector()
     decoder = NativeMessageDecoder()
     bridge_buffer = bytearray()
     input_fd = sys.stdin.fileno()
+    registered_bridge = None
     try:
         selector.register(input_fd, selectors.EVENT_READ, "native")
-        selector.register(bridge, selectors.EVENT_READ, "java")
         write_message(sys.stdout.buffer, {"type": "bridge-ready"})
+        host.java.connect_now()
+        registered_bridge = _register_bridge(selector, host, registered_bridge)
         running = True
         while running:
             for key, _events in selector.select(timeout=0.1):
@@ -597,29 +812,16 @@ def main():
                                 "requestId": request_id if isinstance(request_id, str) else "",
                                 "operation": "unknown",
                                 "ok": False,
-                                "error": str(error)
+                                "error": str(error),
+                                "bridgeError": host.bridge_error
                             }
                         if reply:
                             write_message(sys.stdout.buffer, reply)
                 else:
-                    data = bridge.recv(65536)
-                    if not data:
-                        write_message(sys.stdout.buffer, {
-                            "type": "bridge-error",
-                            "message": "The Java browser socket disconnected."
-                        })
-                        running = False
-                        break
-                    bridge_buffer.extend(data)
-                    if len(bridge_buffer) > MAX_BRIDGE_LINE and b"\n" not in bridge_buffer:
-                        raise RuntimeError("The Java browser message is too large.")
-                    while b"\n" in bridge_buffer:
-                        line, _, remainder = bridge_buffer.partition(b"\n")
-                        bridge_buffer = bytearray(remainder)
-                        if not line:
-                            raise RuntimeError("The Java browser socket sent an empty message.")
-                        command = host.handle_java_line(bytes(line))
+                    for command in _read_java_commands(host, bridge_buffer):
                         write_message(sys.stdout.buffer, command)
+            host.java.connect_now()
+            registered_bridge = _register_bridge(selector, host, registered_bridge)
             for failure in host.reap_failed_streams():
                 _write_capture_error(sys.stdout.buffer, failure)
     except Exception as error:
@@ -631,7 +833,6 @@ def main():
     finally:
         host.close()
         selector.close()
-        bridge.close()
     return 0
 
 

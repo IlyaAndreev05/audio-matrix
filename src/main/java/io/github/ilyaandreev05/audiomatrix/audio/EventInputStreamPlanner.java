@@ -23,7 +23,7 @@ final class EventInputStreamPlanner {
         for (String busId : busIds) {
             List<Map<String, Object>> appFilters = rule == null ? List.of() : filters.read(rule, config);
             String name = EventInputMonitor.NODE_NAME;
-            streams.add(new PipeWireRouteTypes.StreamPlan(EventInputMonitor.node(), busId, appFilters,
+            streams.add(new PipeWireRouteTypes.StreamPlan(EventInputMonitor.node(), "", "", busId, appFilters,
                     List.of("FL", "FR"), "event-input:" + busId,
                     PipeWireRouteStaticSupport01.applicationNodeName("dsp_input", name),
                     PipeWireRouteStaticSupport01.applicationNodeName("dsp_output", name)));

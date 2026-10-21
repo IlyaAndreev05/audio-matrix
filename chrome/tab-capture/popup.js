@@ -28,7 +28,10 @@ async function refresh() {
       activeLabel.textContent = "No active tab";
       captureButton.disabled = true;
     }
-    status.textContent = state.error || `${tabs.length} tabs · ${captureIds.size} captured`;
+    const problems = [state.error, state.javaBridgeError].filter(Boolean);
+    status.textContent = problems.length
+      ? problems.join(" · ")
+      : `${tabs.length} tabs · ${captureIds.size} captured`;
     list.replaceChildren();
     for (const tab of tabs) {
       const row = document.createElement("li");

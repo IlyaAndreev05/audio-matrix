@@ -18,13 +18,44 @@ public final class GraphCodec {
             encoded.put("id", node.id()); encoded.put("name", node.name()); encoded.put("type", node.type());
             encoded.put("channels", node instanceof DynamicGeneratorNode generator ? generator.channels()
                     : node.outputs().isEmpty() ? node.inputs().getFirst().channels() : node.outputs().getFirst().channels());
-            encoded.put("parameters", node.parameters());
+            encoded.put("parameters", encodedParameters(node));
             nodes.add(encoded);
         }
         List<Map<String, Object>> edges = graph.connections().stream().map(edge -> Map.<String, Object>of(
                 "id", edge.id(), "from_node", edge.fromNode(), "from_port", edge.fromPort(),
                 "to_node", edge.toNode(), "to_port", edge.toPort(), "enabled", edge.enabled(), "gain", edge.gain())).toList();
         return Map.of("id", graph.id(), "name", graph.name(), "nodes", nodes, "connections", edges);
+    }
+
+    /** A saved route owns editable parameters: a device binding is written into them in place. */
+    private static Map<String, Object> encodedParameters(GraphNode node) {
+        Map<String, Object> parameters = mutableParameters(node.parameters());
+        // A saved output keeps its own level and mute; the endpoint store keeps the applied device level.
+        if (node instanceof DynamicGeneratorNode generator && "outputs".equals(generator.registry())) {
+            parameters.putIfAbsent("volume", 1.0);
+            parameters.putIfAbsent("muted", false);
+        }
+        return parameters;
+    }
+
+    private static Map<String, Object> mutableParameters(Map<String, Object> parameters) {
+        Map<String, Object> copy = new LinkedHashMap<>();
+        parameters.forEach((key, value) -> copy.put(key, mutableValue(value)));
+        return copy;
+    }
+
+    private static Object mutableValue(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> copy = new LinkedHashMap<>();
+            map.forEach((key, item) -> copy.put(String.valueOf(key), mutableValue(item)));
+            return copy;
+        }
+        if (value instanceof List<?> list) {
+            List<Object> copy = new ArrayList<>(list.size());
+            list.forEach(item -> copy.add(mutableValue(item)));
+            return copy;
+        }
+        return value;
     }
 
     public static AudioGraph fromMap(Map<String, Object> encoded) {
@@ -70,91 +101,12 @@ public final class GraphCodec {
     }
 
     /**
-     * Additively upgrades schema-10 graph snapshots without rewriting topology or non-generator values.
-     * The returned map is a shallow copy of the config with only graph containers holding dynamic
-     * generators copied and normalized; the input map is left unchanged.
+     * Normalizes legacy generator parameters and appends a missing outputs control node when an
+     * existing application Merge and MultiSwitch can be anchored without changing saved nodes,
+     * edges, IDs, or settings. The input config and graph containers remain unchanged.
      */
     public static Map<String, Object> upgradeSchema10Config(Map<String, Object> config) {
-        Map<String, Object> upgraded = new LinkedHashMap<>(config);
-        if (upgraded.get("route_library") instanceof List<?> routes)
-            upgraded.put("route_library", normalizeRoutes(routes));
-        if (upgraded.get("saved_copies") instanceof List<?> copies)
-            upgraded.put("saved_copies", normalizeSavedCopies(copies));
-        if (upgraded.get("common_vibro_graph") instanceof Map<?, ?> common)
-            upgraded.put("common_vibro_graph", normalizeRoute(common));
-        return upgraded;
-    }
-
-    private static List<Object> normalizeRoutes(List<?> routes) {
-        List<Object> normalized = new ArrayList<>(routes.size());
-        for (Object route : routes)
-            normalized.add(route instanceof Map<?, ?> map ? normalizeRoute(map) : route);
-        return normalized;
-    }
-
-    private static List<Object> normalizeSavedCopies(List<?> copies) {
-        List<Object> normalized = new ArrayList<>(copies.size());
-        for (Object value : copies) {
-            if (!(value instanceof Map<?, ?> rawCopy)) {
-                normalized.add(value);
-                continue;
-            }
-            Map<String, Object> copy = object(rawCopy);
-            if (copy.get("route") instanceof Map<?, ?> route)
-                copy.put("route", normalizeRoute(route));
-            normalized.add(copy);
-        }
-        return normalized;
-    }
-
-    private static Map<String, Object> normalizeRoute(Map<?, ?> rawRoute) {
-        Map<String, Object> route = object(rawRoute);
-        if (!(route.get("nodes") instanceof List<?> rawNodes)) return route;
-        List<Object> nodes = new ArrayList<>(rawNodes.size());
-        for (Object value : rawNodes) {
-            if (!(value instanceof Map<?, ?> rawNode) || !"dynamic_generator".equals(rawNode.get("type"))) {
-                nodes.add(value);
-                continue;
-            }
-            Map<String, Object> node = object(rawNode);
-            Object rawParameters = node.get("parameters");
-            Object rawChannels = node.get("channels");
-            if (!(rawParameters instanceof Map<?, ?> parameterMap)
-                    || !(parameterMap.get("selector") instanceof String selector) || selector.isBlank()
-                    || !(rawChannels instanceof List<?> channelValues)
-                    || channelValues.isEmpty()
-                    || channelValues.stream().anyMatch(channel -> !(channel instanceof String))) {
-                nodes.add(value);
-                continue;
-            }
-            List<String> channels = channelValues.stream().map(String.class::cast).toList();
-            boolean hasHdmiSelectionPolicy =
-                    parameterMap.containsKey("auto_select_trusted_hdmi_on_first_discovery");
-            Map<String, Object> parameters = DynamicGeneratorNode.normalizeParameters(
-                    selector, channels, object(parameterMap));
-            if ("outputs".equals(parameters.get("registry")) && !hasHdmiSelectionPolicy)
-                parameters.put("auto_select_trusted_hdmi_on_first_discovery", Boolean.FALSE);
-            if (!parameters.containsKey("connect_to")) {
-                Map<String, Object> inferred = inferConnectTo(node.get("id"), route.get("connections"));
-                if (inferred != null) parameters.put("connect_to", inferred);
-            }
-            node.put("parameters", parameters);
-            nodes.add(node);
-        }
-        route.put("nodes", nodes);
-        return route;
-    }
-
-    private static Map<String, Object> inferConnectTo(Object rawGeneratorId, Object rawConnections) {
-        if (!(rawGeneratorId instanceof String generatorId) || generatorId.isBlank()) return null;
-        for (Map<String, Object> connection : maps(rawConnections)) {
-            if (!generatorId.equals(connection.get("from_node"))) continue;
-            Object nodeId = connection.get("to_node"), portId = connection.get("to_port");
-            if (nodeId instanceof String node && !node.isBlank()
-                    && portId instanceof String port && !port.isBlank())
-                return new LinkedHashMap<>(Map.of("node_id", node, "port_id", port));
-        }
-        return null;
+        return GraphSchema10Upgrade.upgrade(config);
     }
 
 

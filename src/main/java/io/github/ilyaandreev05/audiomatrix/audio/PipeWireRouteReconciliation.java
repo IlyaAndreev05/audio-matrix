@@ -10,8 +10,7 @@ import java.util.Set;
 abstract class PipeWireRouteReconciliation extends PipeWireRoutePart05 {
     protected boolean observedGraphMatches() throws Exception {
         refreshObservedLinks();
-        return !desiredLinks.isEmpty() && observedLinks.containsAll(desiredLinks)
-                && ownedLinks.stream().filter(link -> !desiredLinks.contains(link)).noneMatch(observedLinks::contains);
+        return !desiredLinks.isEmpty() && observedLinks.containsAll(desiredLinks);
     }
 
     protected void confirmDesiredLinks() throws Exception {

@@ -4,11 +4,13 @@ const IDENTITY_KEY = "audioMatrixBrowserIdentity";
 const SESSION_TOKENS_KEY = "audioMatrixTabSessionTokens";
 const CAPTURES_KEY = "audioMatrixTabCaptures";
 const CAPTURE_KEYS_KEY = "audioMatrixTabCaptureKeys";
+const JAVA_BRIDGE_ERROR_KEY = "audioMatrixJavaBridgeError";
 const NATIVE_REQUEST_TIMEOUT_MS = 5000;
 const PCM_REQUEST_TIMEOUT_MS = 1500;
 
 let nativePort = null;
 let nativeError = "";
+let javaBridgeError = "";
 let bridgeReady = false;
 let bridgeReadyPromise = null;
 let resolveBridgeReady = null;
@@ -64,6 +66,13 @@ function serialOutgoing(task) {
     nativeError = error?.message || "Could not send a browser bridge message.";
   });
   return next;
+}
+
+// The Java browser bridge is optional for capture: the native host keeps the tab
+// audio flowing and reports the Audio Matrix connection state separately.
+function setJavaBridgeError(reason) {
+  javaBridgeError = typeof reason === "string" ? reason : "";
+  chrome.storage.session.set({ [JAVA_BRIDGE_ERROR_KEY]: javaBridgeError }).catch(() => {});
 }
 
 async function getIdentity() {
@@ -357,6 +366,7 @@ function nativeRequest(type, values = {}, timeout = NATIVE_REQUEST_TIMEOUT_MS) {
 }
 
 function resolveNativeRequest(message) {
+  if (typeof message.bridgeError === "string") setJavaBridgeError(message.bridgeError);
   const request = pendingNativeRequests.get(message.requestId);
   if (!request) return;
   pendingNativeRequests.delete(message.requestId);
@@ -458,6 +468,7 @@ function handleBridgeReady(port) {
     const identity = await getIdentity();
     const tabs = await chrome.tabs.query({});
     const entries = (await Promise.all(tabs.map(tabEntry))).filter(Boolean);
+    serializeNativeEnvelope(port, newEnvelope("snapshot", identity, entries));
     reconnectDelay = 500;
     if (reconnectTimer !== null) {
       clearTimeout(reconnectTimer);
@@ -480,8 +491,17 @@ function receiveEvent(port, message) {
     return;
   }
   if (message.type === "bridge-error") {
-    nativeError = message.message || "The Java browser bridge is unavailable.";
-    bridgeReady = false;
+    if (message.connected === true) {
+      setJavaBridgeError("");
+      return;
+    }
+    if (message.connected === false) {
+      // Audio Matrix is not connected: capture keeps running, only the Java-side
+      // tab controls are unavailable until the socket comes back.
+      setJavaBridgeError(message.message || "Audio Matrix is not connected; Chrome tab controls are unavailable.");
+      return;
+    }
+    nativeError = message.message || "The local capture helper failed.";
     failAllCaptures(nativeError).catch(() => {});
     return;
   }
@@ -741,7 +761,13 @@ async function status() {
   const captures = Object.values(records)
     .filter((record) => record.status === "active")
     .map((record) => ({ tabId: record.tabId, status: "active" }));
-  return { captures, error: nativeError || (await chrome.storage.session.get("tabCaptureError")).tabCaptureError || "" };
+  const stored = await chrome.storage.session.get("tabCaptureError");
+  const bridge = await chrome.storage.session.get(JAVA_BRIDGE_ERROR_KEY);
+  return {
+    captures,
+    error: nativeError || stored.tabCaptureError || "",
+    javaBridgeError: javaBridgeError || bridge[JAVA_BRIDGE_ERROR_KEY] || ""
+  };
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

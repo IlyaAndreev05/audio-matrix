@@ -29,38 +29,6 @@ import java.util.concurrent.TimeUnit;
 /** Applies explicitly requested Audio Matrix routing by owning PipeWire loopback nodes and links. */
 
 abstract class PipeWireRoutePart05 extends PipeWireRoutePart04 {
-    protected void updateLiveLevels(Plan previous, Plan plan) throws Exception {
-        for (BusPlan bus : plan.buses().values()) {
-            BusPlan before = previous == null ? null : previous.buses().get(bus.id());
-            if (before != null && sameBusProcess(before, bus)
-                    && Double.compare(before.volume(), bus.volume()) == 0 && before.muted() == bus.muted()) continue;
-            try {
-                int id = findNodeId(bus.nodeName());
-                WirePlumberMixerControl.setVolume(id, bus.volume());
-                WirePlumberMixerControl.setMuted(id, bus.muted());
-            } catch (Exception error) {
-                transitionWarnings.add("Could not update bus level " + bus.id() + ": " + message(error));
-            }
-        }
-        List<RoutePlan> routes = previous == null ? plan.routes() : routeLevelUpdateOrder(previous, plan);
-        for (RoutePlan route : routes) {
-            RoutePlan before = previous == null ? null : previous.routes().stream()
-                    .filter(candidate -> candidate.id().equals(route.id())).findFirst().orElse(null);
-            double volume = Math.min(1.0, effectiveRoutePlaybackVolume(plan, route));
-            boolean muted = effectiveRoutePlaybackMuted(plan, route);
-            if (before != null && sameRouteProcess(before, route)
-                    && Double.compare(effectiveRoutePlaybackVolume(previous, before), volume) == 0
-                    && effectiveRoutePlaybackMuted(previous, before) == muted) continue;
-            try {
-                int id = findNodeId(route.playbackNodeName());
-                WirePlumberMixerControl.setVolume(id, volume);
-                WirePlumberMixerControl.setMuted(id, muted);
-            } catch (Exception error) {
-                transitionWarnings.add("Could not update route level " + route.id() + ": " + message(error));
-            }
-        }
-    }
-
     protected List<Map<String, Object>> routeFilters(Map<String, Object> route, Map<String, Object> config) throws IOException {
         List<Map<String, Object>> filters = new ArrayList<>();
         Map<String, Object> dsp = object(config.get("dsp"));
@@ -92,7 +60,11 @@ abstract class PipeWireRoutePart05 extends PipeWireRoutePart04 {
         String deviceId = null;
         Map<String, Object> outputDevice = Map.of();
         for (Map<String, Object> device : devices) {
-            if (DeviceSelectorMatcher.matches(sink, object(device.get("selector")))) {
+            boolean identityBound = device.get("identity") instanceof Map<?, ?>;
+            boolean matches = identityBound
+                    ? sink.identity().reliable() && DeviceIdentity.fromMap(object(device.get("identity"))).equals(sink.identity())
+                    : DeviceSelectorMatcher.matches(sink, object(device.get("selector")));
+            if (matches) {
                 deviceId = text(device.get("id"));
                 outputDevice = device;
                 break;

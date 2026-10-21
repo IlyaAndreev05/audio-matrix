@@ -53,7 +53,7 @@ class GraphCommonVibroGeneratorTest {
                 && edge.toNode().equals(GraphCommonVibro.MAIN_MIXER_ID)));
         assertFalse(effective.connections().stream().anyMatch(edge -> edge.fromNode().equals(GraphCommonVibro.MAIN_SOURCE_ID)));
 
-        Map<String, Object> compiled = GraphPipeWireCompiler.compile(effective, config);
+        Map<String, Object> compiled = GraphPipeWireCompiler.compile(reconciled, config);
         @SuppressWarnings("unchecked") List<Map<String, Object>> buses = (List<Map<String, Object>>) compiled.get("buses");
         assertTrue(buses.stream().anyMatch(bus -> runtime.nodeIds().get("source").equals(bus.get("id"))));
         assertFalse(buses.stream().anyMatch(bus -> GraphCommonVibro.MAIN_SOURCE_ID.equals(bus.get("id"))));

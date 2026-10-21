@@ -28,6 +28,18 @@ class GraphGainCommandTest {
         assertEquals(List.of(), io.github.ilyaandreev05.audiomatrix.config.ConfigValidator.validate(config));
     }
 
+    @Test void graphGainVolumeDoesNotChangeTheSeparateMuteProperty() {
+        Map<String, Object> config = io.github.ilyaandreev05.audiomatrix.config.DefaultConfig.create();
+        String target = "main\t" + GraphCommonVibro.VIBRO_GAIN_ID;
+        GraphGainCommand.set(config, target + "\t0.35", false);
+        GraphGainCommand.set(config, target, true);
+        GraphGainCommand.set(config, target + "\t0.42", false);
+
+        GainNode saved = gain(config, "main", GraphCommonVibro.VIBRO_GAIN_ID);
+        assertEquals(0.42, saved.gain(), 0.0001);
+        assertTrue(saved.muted(), "setting volume must not implicitly unmute the graph Gain");
+    }
+
     @Test void rejectsInvalidLevelsAndUnknownNodesWithoutChangingTheGraph() {
         Map<String, Object> config = io.github.ilyaandreev05.audiomatrix.config.DefaultConfig.create();
         assertThrows(IllegalArgumentException.class,
@@ -64,23 +76,26 @@ class GraphGainCommandTest {
 
     @Test void routeSwitchCommandsRequireAnExactConnectedInputOutputLink() {
         Map<String, Object> config = io.github.ilyaandreev05.audiomatrix.config.DefaultConfig.create();
+        String switchId = io.github.ilyaandreev05.audiomatrix.config.UnifiedGraphConfig.SWITCH_ID;
 
-        GraphNodeCommand.setRouteEnabled(config, "main",
-                io.github.ilyaandreev05.audiomatrix.config.UnifiedGraphConfig.SWITCH_ID,
-                "in->monitor", false);
-        GraphNodeCommand.setRouteEnabled(config, "main",
-                io.github.ilyaandreev05.audiomatrix.config.UnifiedGraphConfig.SWITCH_ID,
-                "in->vibro", true);
+        GraphNodeCommand.setRouteEnabled(config, "main", switchId, "in->haptic", true);
+        assertEquals(List.of("in->haptic"), switchNode(config).activeLinks());
 
-        RouterNode router = (RouterNode) GraphCodec.fromMap(routes(config).stream()
-                .filter(item -> "main".equals(item.get("id"))).findFirst().orElseThrow()).nodes().stream()
-                .filter(node -> node.id().equals(io.github.ilyaandreev05.audiomatrix.config.UnifiedGraphConfig.SWITCH_ID))
-                .findFirst().orElseThrow();
-        assertEquals(List.of("in->vibro"), router.activeLinks());
         assertThrows(IllegalArgumentException.class, () -> GraphNodeCommand.setRouteEnabled(config, "main",
-                io.github.ilyaandreev05.audiomatrix.config.UnifiedGraphConfig.SWITCH_ID,
-                "monitor->in", true));
-        assertEquals(List.of("in->vibro"), router.activeLinks());
+                switchId, "haptic->in", true));
+        assertThrows(IllegalArgumentException.class, () -> GraphNodeCommand.setRouteEnabled(config, "main",
+                switchId, "in->missing", true));
+        assertThrows(IllegalArgumentException.class, () -> GraphNodeCommand.setRouteEnabled(config, "main",
+                switchId, "in->monitor", true));
+        assertEquals(List.of("in->haptic"), switchNode(config).activeLinks());
+    }
+
+    private static RouterNode switchNode(Map<String, Object> config) {
+        return (RouterNode) GraphCodec.fromMap(routes(config).stream()
+                .filter(item -> "main".equals(item.get("id"))).findFirst().orElseThrow()).nodes().stream()
+                .filter(node -> node.id().equals(
+                        io.github.ilyaandreev05.audiomatrix.config.UnifiedGraphConfig.SWITCH_ID))
+                .findFirst().orElseThrow();
     }
 
     @SuppressWarnings("unchecked")

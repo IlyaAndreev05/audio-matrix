@@ -42,7 +42,9 @@ final class BrowserSocketFiles {
 
     static void removeAbandonedSocket(Path socket) throws IOException {
         if (!Files.exists(socket, LinkOption.NOFOLLOW_LINKS)) return;
-        if (Files.isSymbolicLink(socket) || !Files.isOther(socket))
+        if (Files.isSymbolicLink(socket)
+                || !Files.readAttributes(socket, java.nio.file.attribute.BasicFileAttributes.class,
+                        LinkOption.NOFOLLOW_LINKS).isOther())
             throw new IOException("Refusing to replace a non-socket browser path.");
         if (!Files.getAttribute(socket, "unix:uid", LinkOption.NOFOLLOW_LINKS).toString().equals(processUid()))
             throw new IOException("The existing browser socket is not owned by this user.");

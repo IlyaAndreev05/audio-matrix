@@ -1,52 +1,36 @@
-export function canonicalTarget(target) {
-    if (Array.isArray(target))
-        return `[${target.map(canonicalTarget).join(',')}]`;
-    if (target && typeof target === 'object')
-        return `{${Object.keys(target).sort().map(key => `${JSON.stringify(key)}:${canonicalTarget(target[key])}`).join(',')}}`;
-    return JSON.stringify(target);
-}
-
-export function intentKey(target, property) {
-    return `${canonicalTarget(target)}\u0000${String(property)}`;
-}
-
-export function pendingValue(snapshot, target, property, fallback) {
-    if (!target || !snapshot?.pending)
-        return fallback;
-    const intent = snapshot.pending.get(intentKey(target, property));
-    return intent ? intent.desired : fallback;
-}
-
 export function menuStructureSignature(snapshot) {
     const state = snapshot.state || {};
     return JSON.stringify({
-        available: snapshot.available, apiMismatch: snapshot.apiMismatch, language: snapshot.language,
+        language: snapshot.language,
+        profile: state.profile,
+        activeProfileId: state.activeProfileId,
         profiles: (state.profiles || []).map(({id, name}) => [id, name]),
+        activeRoute: state.activeRoute,
+        activeRouteId: state.activeRouteId,
         routes: (state.routes || []).map(({id, name}) => [id, name]),
-        groups: orderedQuickGroups(state).map(({id, name, order}) => [id, name, order]),
+        groups: (state.quickGroups || []).map(({id, name, order}) => [id, name, order]),
         pins: (state.quickPins || []).map(pin => [
-            pin.id, pin.routeId, pin.nodeId, pin.instanceKey || '', pin.name, pin.displayName, pin.icon,
-            pin.nodeType, pin.groupId, pin.order, pin.pinned, pin.showChildren, pin.showWhenOffline,
+            pin.id, pin.routeId, pin.nodeId, pin.instanceKey, pin.name, pin.icon, pin.nodeType,
+            pin.groupId, pin.order, pin.pinned, pin.showChildren, pin.showWhenOffline,
             pin.tabAdapterAvailable,
             (pin.controls || []).map(control => [control.id, control.parameterId, control.label, control.kind,
                 control.nodeType, control.multiple, (control.options || []).map(option => [option.id, option.label])]),
-            (pin.applications || []).map(application => [application.id, application.name,
-                application.browserAdapter?.reason,
-                visibleApplicationStreams(application, pin).map(stream => [
-                    stream.id, stream.sessionToken, stream.tabId, stream.title, stream.name, stream.description,
-                    stream.volumeCapability, stream.captureStreamKey,
-                ])]),
+            (pin.applications || []).map(application => [application.id, application.name, application.tabAdapterAvailable,
+                application.browserAdapter?.reason, application.browserAdapter?.independentTabVolume,
+                (application.streams || []).map(stream => [stream.id, stream.name, stream.description]),
+                (application.browserTabs || []).map(tab => [tab.browser, tab.instanceId, tab.profileId,
+                    tab.sessionToken, tab.title, tab.audible, tab.muted, tab.volumeCapability, tab.captureStreamKey])]),
             (pin.mixerInputs || []).map(input => [input.id, input.name]),
             pin.gain ? [pin.gain.routeId, pin.gain.nodeId] : null,
             pin.output ? [pin.output.id, pin.output.name, pin.output.description,
                 pin.output.available, pin.output.state, pin.output.graphGainNodeId] : null,
-            pin.routeControl ? [pin.routeControl.id, pin.routeControl.routeId, pin.routeControl.nodeId,
-                pin.routeControl.label, pin.routeControl.nodeType, pin.routeControl.multiple,
+            pin.routeControl ? [pin.routeControl.id, pin.routeControl.nodeId, pin.routeControl.label,
+                pin.routeControl.nodeType, pin.routeControl.multiple,
                 (pin.routeControl.options || []).map(option => [option.id, option.label])] : null,
             pin.sourceGain ? [pin.sourceGain.routeId, pin.sourceGain.sourceNodeId, pin.sourceGain.gainNodeId] : null,
         ]),
         controls: (state.quickControls || []).map(control => [
-            control.id, control.routeId, control.nodeId, control.parameterId, control.label, control.section,
+            control.id, control.nodeId, control.parameterId, control.label, control.section,
             control.groupId, control.order, control.kind, control.multiple, control.nodeType,
             (control.options || []).map(option => [option.id, option.label]),
             control.minimum, control.maximum, control.scale, control.unit, control.precision,
@@ -58,70 +42,62 @@ export function hasAvailableMenuState(snapshot) {
     return Boolean(snapshot?.available && snapshot?.state);
 }
 
-export function pinRowId(kind, pin) {
-    return `${kind}:${pin.routeId || ''}:${pin.nodeId || ''}:${pin.instanceKey || ''}`;
-}
-
 export function menuLevelRows(state) {
     const rows = new Map();
     for (const application of state.applications || []) {
-        rows.set(`app:${application.id}`, {
-            ...application,
-            target: application.target || nodeTarget(application.routeId, application.nodeId, application.instanceKey),
-        });
+        rows.set(`app:${application.id}`, application);
         for (const stream of application.streams || [])
             rows.set(`stream:${stream.id}`, stream);
     }
     for (const pin of state.quickPins || []) {
-        const pinTarget = nodeTarget(pin.routeId, pin.nodeId, pin.instanceKey);
-        for (const application of pin.applications || []) {
-            const target = application.instanceKey
-                ? nodeTarget(pin.routeId, pin.nodeId, application.instanceKey)
-                : application.target || nodeTarget(application.routeId, application.nodeId, application.instanceKey);
-            rows.set(`app:${application.id}`, {...application, target});
-            for (const stream of application.streams || []) {
-                const streamTarget = stream.instanceKey
-                    ? nodeTarget(pin.routeId, pin.nodeId, stream.instanceKey)
-                    : stream.target || null;
-                rows.set(`stream:${stream.id}`, {...stream, target: streamTarget});
-            }
-        }
         if (pin.sourceGain)
-            rows.set(pinRowId('source', pin), {...pin.sourceGain,
-                target: pin.instanceKey ? pinTarget : nodeTarget(pin.sourceGain.routeId, pin.sourceGain.gainNodeId, '')});
+            rows.set(`source:${pin.nodeId}`, pin.sourceGain);
         if (pin.gain)
-            rows.set(pinRowId('graph-gain', pin), {...pin.gain, target: pinTarget});
+            rows.set(`graph-gain:${pin.nodeId}`, pin.gain);
         if (pin.output)
-            rows.set(pinRowId('graph-output', pin), {...pin.output,
-                target: pin.instanceKey ? pinTarget
-                    : nodeTarget(pin.routeId, pin.output.graphGainNodeId, '')});
+            rows.set(`graph-output:${pin.nodeId}`, pin.output);
         for (const input of pin.mixerInputs || [])
-            rows.set(`${pinRowId('mixer', pin)}:${input.id}`, input);
+            rows.set(`mixer:${pin.nodeId}:${input.id}`, input);
     }
     return rows;
 }
 
-function nodeTarget(routeId, nodeId, instanceKey = '') {
-    if (!routeId || !nodeId)
-        return null;
-    return {routeId, nodeId, instanceKey: instanceKey || ''};
-}
-
 export function orderedQuickGroups(state) {
-    return [...(state.quickGroups || [])].sort((left, right) =>
-        Number(left.order || 0) - Number(right.order || 0) || String(left.id).localeCompare(String(right.id)));
+    return [...(state.quickGroups || [])].sort((left, right) => Number(left.order || 0) - Number(right.order || 0));
 }
 
-export function visibleApplicationStreams(application, pin = {}) {
-    if (pin.showChildren === false)
-        return [];
-    const identity = [application.id, application.application_id, application.name, application.process]
-        .filter(Boolean).join(' ').toLowerCase();
-    const tabs = application.tabs || application.browserAdapter?.tabs || [];
-    if (/chrome|chromium/.test(identity))
-        return tabs.filter(tab => typeof tab.sessionToken === 'string' && tab.sessionToken.length > 0
-            && tab.tabId !== undefined && tab.tabId !== null);
-    if (/firefox|mozilla/.test(identity))
-        return [];
-    return application.streams || [];
+export function visibleApplicationStreams(application) {
+    return Array.isArray(application?.streams) ? application.streams : [];
+}
+
+export function visibleBrowserTabs(application) {
+    return (application?.browserTabs || []).filter(tab =>
+        typeof tab.browser === 'string' && tab.browser.length > 0
+        && typeof tab.instanceId === 'string' && tab.instanceId.length > 0
+        && typeof tab.profileId === 'string' && tab.profileId.length > 0
+        && typeof tab.sessionToken === 'string' && tab.sessionToken.length > 0);
+}
+
+export function stableMenuRows(state) {
+    const rows = [];
+    for (const group of orderedQuickGroups(state)) {
+        const groupId = String(group.id || group.name);
+        rows.push({id: `group:${groupId}`, kind: 'group', groupId});
+        for (const pin of (state.quickPins || []).filter(item => String(item.groupId) === groupId)) {
+            rows.push({id: `pin:${pin.id}`, kind: 'pin', pinId: String(pin.id)});
+            for (const application of pin.applications || []) {
+                rows.push({id: `app:${application.id}`, kind: 'application', applicationId: String(application.id)});
+                for (const stream of application.streams || [])
+                    rows.push({id: `stream:${stream.id}`, kind: 'stream', streamId: String(stream.id)});
+                for (const tab of application.browserTabs || []) {
+                    const tabKey = [tab.browser, tab.instanceId, tab.profileId, tab.sessionToken].map(String).join(':');
+                    rows.push({id: `browser-tab:${tabKey}`, kind: 'browser-tab', tabKey});
+                }
+            }
+            if (pin.routeControl)
+                for (const option of pin.routeControl.options || [])
+                    rows.push({id: `route:${pin.routeControl.id}:${option.id}`, kind: 'route', linkId: String(option.id)});
+        }
+    }
+    return rows;
 }

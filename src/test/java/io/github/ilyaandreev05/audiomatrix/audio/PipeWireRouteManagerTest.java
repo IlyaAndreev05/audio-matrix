@@ -13,7 +13,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -97,48 +96,40 @@ class PipeWireRouteManagerTest extends PipeWireRouteManagerTestSupport {
     }
 
     @Test
-    void streamInstancesAreNonTopologicalWhileOutputIdentityIsStatic() throws IOException {
+    void routesOnlyTheExactCapturedNodeThroughItsExplicitGraphSourceIdentity() throws IOException {
         Map<String, Object> config = chainedBusConfig(false);
-        config.put("graph_default_bus", "main");
-        @SuppressWarnings("unchecked") List<Map<String, Object>> devices =
-                (List<Map<String, Object>>) config.get("devices");
-        Map<String, Object> speaker = devices.stream()
-                .filter(device -> "speaker".equals(device.get("id"))).findFirst().orElseThrow();
-        @SuppressWarnings("unchecked") Map<String, Object> selector =
-                (Map<String, Object>) speaker.get("selector");
-        PipeWireRouteManager manager = new PipeWireRouteManager();
+        String parentApplicationId = "org.example.Chrome";
+        String captureName = CapturedStreamBinding.NODE_PREFIX + "tab-session";
+        @SuppressWarnings("unchecked") List<Map<String, Object>> applications =
+                (List<Map<String, Object>>) config.get("applications");
+        applications.add(DefaultConfig.map("id", "chrome-parent-rule",
+                "match", DefaultConfig.map("app_id", parentApplicationId, "process", "chrome"),
+                "bus", "main", "volume", 0.8, "mute", false));
+        AudioNode parent = audioStream(501, "chrome-parent", "Chrome", "chrome", parentApplicationId);
+        AudioNode captured = audioStream(502, captureName, "Captured tab", "audio-matrix-chrome", "capture-host");
+        AudioNode nearMatch = audioStream(503, captureName + "-other", "Other capture", "audio-matrix-chrome", "capture-host");
+        CapturedStreamBinding binding = new CapturedStreamBinding(captureName, "generated-tab-source",
+                "chrome-parent-rule", parentApplicationId, "chrome", "browser:session", 0.5, true);
+        AudioNode output = sink(500, "test-output", "Test output");
+        PipeWireBackend.Snapshot snapshot = snapshotWithStreams(List.of(output), List.of(parent, captured, nearMatch), output.id());
 
-        selector.put("value", "test-output-before");
-        AudioNode beforeSink = sink(41, "test-output-before", "Before");
-        AudioNode beforeStream = new AudioNode(71, "Firefox:before", "Firefox", "Stream/Output/Audio", "running",
-                "Firefox", "firefox", "org.mozilla.firefox", 2, List.of(48000), 0.5, false, null);
-        PipeWireRouteManager.Plan before = manager.plan(config,
-                snapshotWithStreams(List.of(beforeSink), List.of(beforeStream), beforeSink.id()));
+        PipeWireRouteManager.Plan plan = new PipeWireRouteManager().plan(config, snapshot, Map.of(captureName, binding));
+        PipeWireRouteManager.StreamPlan capturedPlan = plan.streams().stream()
+                .filter(stream -> captureName.equals(stream.node().name())).findFirst().orElseThrow();
 
-        selector.put("value", "test-output-after");
-        AudioNode afterSink = sink(93, "test-output-after", "After");
-        AudioNode afterStream = new AudioNode(108, "Firefox:after", "Different title", "Stream/Output/Audio",
-                "suspended", "Firefox", "firefox", "org.mozilla.firefox", 2, List.of(48000), 0.8, false, null);
-        PipeWireRouteManager.Plan after = manager.plan(config,
-                snapshotWithStreams(List.of(afterSink), List.of(afterStream), afterSink.id()));
-
-        selector.put("value", "test-output-before");
-        PipeWireRouteManager.Plan streamOnly = manager.plan(config,
-                snapshotWithStreams(List.of(beforeSink), List.of(afterStream), beforeSink.id()));
-        PipeWireRouteManager.StreamPlan beforeFirefox = before.streams().stream()
-                .filter(stream -> "org.mozilla.firefox".equals(stream.node().applicationId())).findFirst().orElseThrow();
-        PipeWireRouteManager.StreamPlan afterFirefox = after.streams().stream()
-                .filter(stream -> "org.mozilla.firefox".equals(stream.node().applicationId())).findFirst().orElseThrow();
-        assertNotEquals(before.routes().stream().filter(route -> route.sink() != null).findFirst().orElseThrow().sink().name(),
-                after.routes().stream().filter(route -> route.sink() != null).findFirst().orElseThrow().sink().name());
-        assertNotEquals(beforeFirefox.node().id(), afterFirefox.node().id());
-        assertNotEquals(beforeFirefox.node().name(), afterFirefox.node().name());
-        assertNotEquals(beforeFirefox.node().description(), afterFirefox.node().description());
-        assertNotEquals(beforeFirefox.node().volume(), afterFirefox.node().volume());
-        assertTrue(PipeWireRouteManager.sameRoutingTopology(before, streamOnly));
-        assertFalse(PipeWireRouteManager.sameRoutingTopology(before, after));
+        assertEquals("generated-tab-source", capturedPlan.sourceNodeId());
+        assertEquals("browser:session", capturedPlan.instanceKey());
+        assertFalse(plan.streams().stream().anyMatch(stream -> nearMatch.name().equals(stream.node().name())));
+        PipeWireRouteManager.RoutePlan endpoint = plan.routes().stream()
+                .filter(route -> route.sink() != null).findFirst().orElseThrow();
+        assertEquals(0.5, PipeWireRouteManager.effectiveRoutePlaybackVolume(plan, endpoint), 1e-9,
+                "Application and tab gain belong only to the captured stream control");
     }
 
+    private static AudioNode audioStream(int id, String name, String appName, String processName, String appId) {
+        return new AudioNode(id, name, appName, "Stream/Output/Audio", "running", appName, processName,
+                appId, 2, List.of(48000), 0.0, false, null);
+    }
 
 @Test
     void switchingGraphOutputUpdatesLiveRouteLevelsWithoutChangingPipeWireTopology() throws IOException {
