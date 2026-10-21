@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Map;
 
 /** Common graph identity; each node type owns its ports and behavior. */
-public sealed abstract class GraphNode permits SourceNode, OutputNode, GainNode, GateNode, RouterNode, FilterNode, MixerNode, DeviceSlotNode {
+public sealed abstract class GraphNode permits SourceNode, DynamicGeneratorNode, OutputNode, GainNode, GateNode, RouterNode, FilterNode, MixerNode, DeviceSlotNode {
     private final String id;
     private final String name;
     private final List<AudioPort> ports;

@@ -4,6 +4,7 @@ import io.github.ilyaandreev05.audiomatrix.config.ChannelMatrix;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -16,10 +17,38 @@ public final class GraphPipeWireCompiler {
     private GraphPipeWireCompiler() {}
 
     public static Map<String,Object> compile(AudioGraph graph,Map<String,Object> baseConfig){
+        return compileGraph(graph,baseConfig,null);
+    }
+
+    public static Map<String,Object> compile(DynamicInstanceRegistry.ReconcileResult reconciled,
+                                            Map<String,Object> baseConfig){
+        if(reconciled==null)throw new IllegalArgumentException("A reconcile result is required");
+        return compileGraph(reconciled.effectiveGraph(),baseConfig,reconciled);
+    }
+
+    private static Map<String,Object> compileGraph(AudioGraph graph,Map<String,Object> baseConfig,
+                                                    DynamicInstanceRegistry.ReconcileResult reconciled){
         graph=GraphCommonVibro.effectiveGraph(graph,baseConfig);
         List<String> problems=GraphValidator.validate(graph);if(!problems.isEmpty())throw new IllegalArgumentException(String.join("; ",problems));
-        List<SourceNode> sources=graph.nodes().stream().filter(SourceNode.class::isInstance).map(SourceNode.class::cast).toList();
-        if(sources.isEmpty()||graph.nodes().stream().noneMatch(node->node instanceof OutputNode||node instanceof DeviceSlotNode))throw new IllegalArgumentException("The active route needs at least one source and one output or device slot");
+        if(reconciled==null&&!generatedSourceIds(graph).isEmpty())
+            throw new IllegalArgumentException("Generated graph sources require a reconcile result");
+        if(reconciled==null&&graph.nodes().stream().filter(SourceNode.class::isInstance).map(SourceNode.class::cast)
+                .anyMatch(source->source.selector().startsWith("capture:")))
+            throw new IllegalArgumentException("Captured graph sources require a reconcile result");
+        CaptureSources captures=reconciled==null?new CaptureSources(Map.of(),Set.of(),Set.of(),List.of())
+                :captureSources(reconciled,graph);
+        // Generators are control-plane nodes; only reconciled SourceNode children with live bindings enter PCM compilation.
+        List<SourceNode> sources=graph.nodes().stream().filter(SourceNode.class::isInstance).map(SourceNode.class::cast)
+                .filter(source->!captures.nonPcmSourceIds().contains(source.id()))
+                .filter(source->!source.selector().startsWith("browser-tab:"))
+                .filter(source->!source.selector().startsWith("capture:")||captures.bySourceId().containsKey(source.id())).toList();
+        boolean hasDynamicGenerator=graph.nodes().stream().anyMatch(DynamicGeneratorNode.class::isInstance);
+        boolean hasDynamicOutputGenerator=graph.nodes().stream().filter(DynamicGeneratorNode.class::isInstance)
+                .map(DynamicGeneratorNode.class::cast).anyMatch(generator->"outputs".equals(generator.registry()));
+        boolean offlineControlGraph=sources.isEmpty()&&hasDynamicGenerator;
+        boolean hasOutputNode=graph.nodes().stream().anyMatch(node->node instanceof OutputNode||node instanceof DeviceSlotNode);
+        if(!offlineControlGraph&&(sources.isEmpty()||!hasOutputNode&&!hasDynamicOutputGenerator))
+            throw new IllegalArgumentException("The active route needs at least one source and one output or device slot");
         Map<String,GraphNode> nodes=new LinkedHashMap<>();graph.nodes().forEach(node->nodes.put(node.id(),node));
         rejectSharedVibroOutput(graph);
         for(GraphNode node:graph.nodes())if(node instanceof RouterNode&&node.type().equals("router"))
@@ -37,6 +66,9 @@ public final class GraphPipeWireCompiler {
             if(selector.equals("application:unassigned")||selector.equals("application:*")){
                 if(!defaultBus.isBlank())throw new IllegalArgumentException("Only one catch-all application source is allowed");
                 defaultBus=source.id();
+            }else if(selector.startsWith("capture:")){
+                // Captured tabs are bound by exact runtime node name, never a broad app rule.
+                continue;
             }else if(EventSoundStudioSource.SELECTOR.equals(selector)){
                 eventInputBuses.add(source.id());
                 Map<String,Object> rule=savedApplicationRule(baseConfig,"app_id",EventSoundStudioSource.APPLICATION_ID);
@@ -49,17 +81,77 @@ public final class GraphPipeWireCompiler {
         }
         for(SourceNode source:sources){
             List<GraphConnection> first=outgoing(graph,source.id());
-            for(GraphConnection edge:first){PathState state=new PathState(source.id(),edge.gain(),false,true,new ArrayList<>(),new ArrayList<>());state.edgeIds.add(edge.id());walk(edge.toNode(),edge.toPort(),state,nodes,graph,new HashSet<>(),routes,activeRouteIds,routeChains,outputLimiters,sourceOutputs);}
+            for(GraphConnection edge:first){PathState state=new PathState(source.id(),edge.gain(),false,true,new ArrayList<>(),new ArrayList<>());state.edgeIds.add(edge.id());walk(edge.toNode(),edge.toPort(),state,nodes,graph,new HashSet<>(),routes,activeRouteIds,routeChains,outputLimiters,sourceOutputs,captures.gainNodeIds());}
         }
-        if(routes.isEmpty()&&graph.nodes().stream().noneMatch(DeviceSlotNode.class::isInstance))throw new IllegalArgumentException("The graph has no enabled path from a source to an output");
+        if(routes.isEmpty()&&graph.nodes().stream().noneMatch(DeviceSlotNode.class::isInstance)
+                &&!offlineControlGraph&&!hasDynamicOutputGenerator)
+            throw new IllegalArgumentException("The graph has no enabled path from a source to an output");
         Map<String,Object> result=deep(baseConfig);
+        result.remove("graph_capture_sources");
         result.put("buses",buses);result.put("routes",routes);result.put("applications",applications);result.put("event_input_buses",eventInputBuses);result.put("graph_default_bus",defaultBus);
+        if(reconciled!=null)result.put("graph_capture_sources",captures.metadata());
         Map<String,Object> profile=activeProfile(result);profile.put("mode","multi-output");profile.put("active_buses",activeBusIds);profile.put("active_routes",activeRouteIds);
         Map<String,Object> dsp=object(result.get("dsp"));result.put("dsp",dsp);Map<String,Object> chains=object(dsp.get("route_chains"));dsp.put("route_chains",chains);chains.putAll(routeChains);
         Map<String,Object> encodedOutputLimiters=new LinkedHashMap<>();
         outputLimiters.forEach((deviceId,limiter)->{if(limiter!=null)encodedOutputLimiters.put(deviceId,new LinkedHashMap<>(limiter));});
         dsp.put("output_limiters",encodedOutputLimiters);
         return result;
+    }
+
+    private static CaptureSources captureSources(DynamicInstanceRegistry.ReconcileResult reconciled,AudioGraph graph){
+        Map<String,GraphNode> nodes=new LinkedHashMap<>();graph.nodes().forEach(node->nodes.put(node.id(),node));
+        Set<String> generatedSourceIds=generatedSourceIds(graph),pcmSourceIds=new HashSet<>(),gainNodeIds=new HashSet<>();
+        Map<String,Map<String,Object>> bySourceId=new LinkedHashMap<>();List<Map<String,Object>> metadata=new ArrayList<>();
+        List<DynamicInstanceRegistry.RuntimeInstance> runtimeInstances =
+                new ArrayList<>(reconciled.instances().values());
+        runtimeInstances.sort(Comparator.comparing(DynamicInstanceRegistry.RuntimeInstance::generatorId)
+                .thenComparing(DynamicInstanceRegistry.RuntimeInstance::instanceKey));
+        for(DynamicInstanceRegistry.RuntimeInstance runtime:runtimeInstances){
+            Map<String,Object> binding=runtime.runtimeBinding();
+            boolean browserParent=runtime.instanceKey().startsWith("browser-parent:")
+                    ||Boolean.TRUE.equals(binding.get("browserParent"));
+            if(runtime.available()&&runtime.confidence()==DynamicInstanceRegistry.Confidence.HIGH
+                    &&Boolean.TRUE.equals(binding.get("hasPcmBinding"))&&!browserParent)
+                for(String childId:runtime.nodeIds().values())
+                    if(nodes.get(childId) instanceof SourceNode)pcmSourceIds.add(childId);
+            if(!runtime.available()||runtime.confidence()!=DynamicInstanceRegistry.Confidence.HIGH||browserParent)continue;
+            String captureKey=bindingText(binding,"captureStreamKey");
+            String nodeName=bindingText(binding,"nodeName");
+            String applicationRuleId=bindingText(binding,"applicationRuleId");
+            if(captureKey.isBlank()||!nodeName.equals("audio-matrix-chrome-"+captureKey)||applicationRuleId.isBlank())continue;
+            SourceNode source=null;GainNode gain=null;
+            for(String childId:runtime.nodeIds().values()){
+                GraphNode child=nodes.get(childId);
+                if(child instanceof SourceNode candidate&&candidate.selector().equals("capture:"+captureKey))source=candidate;
+                if(child instanceof GainNode candidate)gain=candidate;
+            }
+            if(source==null||gain==null)continue;
+            Map<String,Object> item=map("source_id",source.id(),"instance_key",runtime.instanceKey(),
+                    "capture_stream_key",captureKey,"node_name",nodeName,"application_rule_id",applicationRuleId,
+                    "parent_application_id",bindingText(binding,"parentApplicationId"),
+                    "parent_process_name",bindingText(binding,"parentProcessName"),
+                    "tab_gain",gain.gain(),"tab_muted",gain.muted());
+            bySourceId.put(source.id(),item);gainNodeIds.add(gain.id());pcmSourceIds.add(source.id());metadata.add(item);
+        }
+        Set<String> nonPcmSourceIds=new HashSet<>(generatedSourceIds);nonPcmSourceIds.removeAll(pcmSourceIds);
+        return new CaptureSources(Map.copyOf(bySourceId),Set.copyOf(gainNodeIds),
+                Set.copyOf(nonPcmSourceIds),List.copyOf(metadata));
+    }
+
+    private static Set<String> generatedSourceIds(AudioGraph graph){
+        Map<String,GraphNode> nodes=new LinkedHashMap<>();graph.nodes().forEach(node->nodes.put(node.id(),node));
+        Set<String> generated=new HashSet<>();
+        for(GraphNode node:graph.nodes())if(node instanceof DynamicGeneratorNode generator){
+            for(Object rawInstance:generator.instances().values()){
+                if(!(rawInstance instanceof Map<?,?> instance)||!(instance.get("node_ids") instanceof Map<?,?> ids))continue;
+                for(Object rawId:ids.values())if(rawId instanceof String id&&nodes.get(id) instanceof SourceNode)generated.add(id);
+            }
+        }
+        return generated;
+    }
+
+    private static String bindingText(Map<String,Object> binding,String key){
+        Object value=binding.get(key);return value instanceof String text?text:"";
     }
 
     private static String deviceReference(String deviceId){
@@ -82,7 +174,8 @@ public final class GraphPipeWireCompiler {
 
     private static void walk(String nodeId,String incomingPort,PathState path,Map<String,GraphNode> nodes,AudioGraph graph,Set<String> visiting,
                              List<Map<String,Object>> routes,List<String> activeRoutes,Map<String,Object> routeChains,
-                             Map<String,Map<String,Object>> outputLimiters,Set<String> sourceOutputs){
+                             Map<String,Map<String,Object>> outputLimiters,Set<String> sourceOutputs,
+                             Set<String> externallyControlledGains){
         if(!visiting.add(nodeId))throw new IllegalArgumentException("Feedback cycle reached during graph compilation");
         GraphNode node=nodes.get(nodeId);if(node==null)throw new IllegalArgumentException("Connection references missing node "+nodeId);
         if(node instanceof DeviceSlotNode slot){
@@ -106,7 +199,7 @@ public final class GraphPipeWireCompiler {
                 branch.selected&=router.activeLinks().contains(incomingPort+"->"+edge.fromPort());
                 branch.protectMixedOutput |= protectMix && branch.selected;
                 applyEdgeGain(branch,edge);
-                walk(edge.toNode(),edge.toPort(),branch,nodes,graph,new HashSet<>(visiting),routes,activeRoutes,routeChains,outputLimiters,sourceOutputs);
+                walk(edge.toNode(),edge.toPort(),branch,nodes,graph,new HashSet<>(visiting),routes,activeRoutes,routeChains,outputLimiters,sourceOutputs,externallyControlledGains);
             }
             visiting.remove(nodeId);return;
         }
@@ -132,7 +225,7 @@ public final class GraphPipeWireCompiler {
             if(!path.filters.isEmpty()){String chainId="graph-chain-"+id;route.put("filters_ref","dsp.route_chains."+chainId);routeChains.put(chainId,map("enabled",true,"filters",List.copyOf(path.filters)));}
             routes.add(route);activeRoutes.add(id);visiting.remove(nodeId);return;
         }
-        if(node instanceof GainNode gain){path.gain*=gain.gain();path.muted|=gain.muted();}
+        if(node instanceof GainNode gain){if(!externallyControlledGains.contains(gain.id())){path.gain*=gain.gain();path.muted|=gain.muted();}}
         else if(node instanceof GateNode gate)path.muted|=!gate.open();
         else if(node instanceof FilterNode filter&&filter.enabled()){
             if("limiter".equals(filter.processor())){
@@ -151,7 +244,7 @@ public final class GraphPipeWireCompiler {
         else if(!(node instanceof DeviceSlotNode))throw new IllegalArgumentException("Unsupported processing node "+node.type()+" '"+node.name()+"'");
         List<GraphConnection> next=outgoing(graph,nodeId);
         if(next.isEmpty())throw new IllegalArgumentException("Node '"+node.name()+"' has no connection to an output");
-        for(GraphConnection edge:next){if(!edge.enabled())continue;PathState branch=path.copy();applyEdgeGain(branch,edge);walk(edge.toNode(),edge.toPort(),branch,nodes,graph,new HashSet<>(visiting),routes,activeRoutes,routeChains,outputLimiters,sourceOutputs);}
+        for(GraphConnection edge:next){if(!edge.enabled())continue;PathState branch=path.copy();applyEdgeGain(branch,edge);walk(edge.toNode(),edge.toPort(),branch,nodes,graph,new HashSet<>(visiting),routes,activeRoutes,routeChains,outputLimiters,sourceOutputs,externallyControlledGains);}
         visiting.remove(nodeId);
     }
 
@@ -188,4 +281,6 @@ public final class GraphPipeWireCompiler {
     @SuppressWarnings("unchecked") private static Map<String,Object> deep(Map<String,Object> value){Map<String,Object> result=new LinkedHashMap<>();value.forEach((key,item)->result.put(key,copy(item)));return result;}
     private static Object copy(Object value){if(value instanceof Map<?,?> map){Map<String,Object> result=new LinkedHashMap<>();map.forEach((key,item)->result.put(String.valueOf(key),copy(item)));return result;}if(value instanceof List<?> list){List<Object> result=new ArrayList<>(list.size());list.forEach(item->result.add(copy(item)));return result;}return value;}
     private static final class PathState{final String sourceId;double gain;double delayMs;boolean muted;boolean selected;boolean protectMixedOutput;final List<Map<String,Object>> filters;final List<String> edgeIds;Map<String,Object> outputLimiter;PathState(String sourceId,double gain,boolean muted,boolean selected,List<Map<String,Object>> filters,List<String> edgeIds){this.sourceId=sourceId;this.gain=gain;this.muted=muted;this.selected=selected;this.filters=filters;this.edgeIds=edgeIds;}PathState copy(){PathState copy=new PathState(sourceId,gain,muted,selected,new ArrayList<>(filters),new ArrayList<>(edgeIds));copy.delayMs=delayMs;copy.outputLimiter=outputLimiter;copy.protectMixedOutput=protectMixedOutput;return copy;}}
+    private record CaptureSources(Map<String,Map<String,Object>> bySourceId,Set<String> gainNodeIds,
+                                  List<Map<String,Object>> metadata) {}
 }

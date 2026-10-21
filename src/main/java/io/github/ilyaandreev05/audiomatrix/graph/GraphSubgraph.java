@@ -9,15 +9,26 @@ import java.util.Map;
 import java.util.Set;
 
 /** A saved canvas group that displays a set of ordinary graph nodes as one collapsed block. */
-public record GraphSubgraph(String id, String name, List<String> nodeIds, boolean collapsed) {
+public record GraphSubgraph(String id, String name, List<String> nodeIds, boolean collapsed,
+                            String parentId, String generatorId) {
     public GraphSubgraph {
         if (id == null || id.isBlank()) throw new IllegalArgumentException("Subgraph id must not be blank");
         if (name == null || name.isBlank()) throw new IllegalArgumentException("Subgraph name must not be blank");
+        if (parentId != null && parentId.isBlank()) throw new IllegalArgumentException("Subgraph parent id must not be blank");
+        if (generatorId != null && generatorId.isBlank()) throw new IllegalArgumentException("Subgraph generator id must not be blank");
         nodeIds = List.copyOf(nodeIds);
-        if (nodeIds.size() < 2 || nodeIds.stream().anyMatch(String::isBlank))
+        if (nodeIds.isEmpty() && generatorId == null)
+            throw new IllegalArgumentException("An empty subgraph must be associated with a generator");
+        if (nodeIds.size() == 1 && generatorId == null)
             throw new IllegalArgumentException("A subgraph must contain at least two named nodes");
+        if (nodeIds.stream().anyMatch(String::isBlank))
+            throw new IllegalArgumentException("Subgraph node ids must not be blank");
         if (nodeIds.stream().distinct().count() != nodeIds.size())
             throw new IllegalArgumentException("A subgraph cannot contain the same node twice");
+    }
+
+    public GraphSubgraph(String id, String name, List<String> nodeIds, boolean collapsed) {
+        this(id, name, nodeIds, collapsed, null, null);
     }
 
     public Set<String> nodeSet() { return Set.copyOf(nodeIds); }
@@ -25,6 +36,8 @@ public record GraphSubgraph(String id, String name, List<String> nodeIds, boolea
     public Map<String,Object> toMap() {
         Map<String,Object> result=new LinkedHashMap<>();
         result.put("id",id);result.put("name",name);result.put("node_ids",new ArrayList<>(nodeIds));result.put("collapsed",collapsed);
+        if (parentId != null) result.put("parent_id", parentId);
+        if (generatorId != null) result.put("generator_id", generatorId);
         return result;
     }
 
@@ -36,9 +49,14 @@ public record GraphSubgraph(String id, String name, List<String> nodeIds, boolea
         List<String> ids = list.stream().map(String::valueOf).toList();
         Object rawCollapsed = value.get("collapsed");
         if (!(rawCollapsed instanceof Boolean collapsed)) throw new IllegalArgumentException("Subgraph collapsed must be boolean");
-        return new GraphSubgraph(id, name, ids, collapsed);
+        Object rawParent = value.get("parent_id");
+        if (rawParent != null && !(rawParent instanceof String))
+            throw new IllegalArgumentException("Subgraph parent_id must be a string");
+        Object rawGenerator = value.get("generator_id");
+        if (rawGenerator != null && !(rawGenerator instanceof String))
+            throw new IllegalArgumentException("Subgraph generator_id must be a string");
+        return new GraphSubgraph(id, name, ids, collapsed, (String) rawParent, (String) rawGenerator);
     }
-
     public static List<BoundaryPort> boundaryPorts(AudioGraph graph, Collection<String> members) {
         Set<String> memberSet = new LinkedHashSet<>(members);
         Map<String, GraphNode> nodes = new LinkedHashMap<>();

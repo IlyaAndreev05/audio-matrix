@@ -9,12 +9,13 @@ final class GraphNodeCopies {
     private GraphNodeCopies() {}
 
     static GraphNode copy(GraphNode node, String id, Map<String, String> nodeIds) {
-        List<String> channels = node.outputs().isEmpty()
+        List<String> channels = node instanceof DynamicGeneratorNode generator ? generator.channels()
+                : node.outputs().isEmpty()
                 ? node.inputs().getFirst().channels()
                 : node.outputs().getFirst().channels();
         return switch (node.type()) {
             case "source" -> new SourceNode(id, node.name(), ((SourceNode) node).selector(), channels);
-            case "dynamic_generator" -> new DynamicGeneratorNode(id, node.name(), ((SourceNode) node).selector(), channels);
+            case "dynamic_generator" -> copyDynamicGenerator((DynamicGeneratorNode) node, id, nodeIds);
             case "device_slot" -> copyDeviceSlot(node, id, channels);
             case "output" -> copyOutput(node, id, channels);
             case "gain" -> copyGain(node, id, channels, nodeIds);
@@ -29,6 +30,52 @@ final class GraphNodeCopies {
             case "filter" -> copyFilter(node, id, channels);
             default -> throw new IllegalArgumentException("Unsupported graph node type: " + node.type());
         };
+    }
+
+    private static DynamicGeneratorNode copyDynamicGenerator(DynamicGeneratorNode generator, String id,
+                                                              Map<String, String> nodeIds) {
+        Map<String, Object> parameters = new LinkedHashMap<>(generator.parameters());
+        Object rawConnectTo = parameters.get("connect_to");
+        if (rawConnectTo instanceof Map<?, ?> raw) {
+            Map<String, Object> connectTo = stringMap(raw);
+            Object connectedNode = connectTo.get("node_id");
+            if (connectedNode instanceof String nodeId)
+                connectTo.put("node_id", nodeIds.getOrDefault(nodeId, nodeId));
+            parameters.put("connect_to", connectTo);
+        }
+        Object rawInstances = parameters.get("instances");
+        if (rawInstances instanceof Map<?, ?> raw) {
+            Map<String, Object> instances = new LinkedHashMap<>();
+            raw.forEach((rawKey, rawRecord) -> {
+                String key = String.valueOf(rawKey);
+                if (!(rawRecord instanceof Map<?, ?> rawInstance)) {
+                    instances.put(key, rawRecord);
+                    return;
+                }
+                Map<String, Object> instance = stringMap(rawInstance);
+                if (instance.get("node_ids") instanceof Map<?, ?> rawNodeIds) {
+                    Map<String, Object> copiedNodeIds = new LinkedHashMap<>();
+                    rawNodeIds.forEach((rawRole, rawNodeId) -> {
+                        String role = String.valueOf(rawRole);
+                        copiedNodeIds.put(role, rawNodeId instanceof String
+                                ? DynamicInstanceRegistry.stableNodeId(id, key, role)
+                                : rawNodeId);
+                    });
+                    instance.put("node_ids", copiedNodeIds);
+                }
+                if (instance.get("composite_id") instanceof String compositeId && !compositeId.isBlank())
+                    instance.put("composite_id", DynamicInstanceRegistry.stableCompositeId(id, key));
+                instances.put(key, instance);
+            });
+            parameters.put("instances", instances);
+        }
+        return new DynamicGeneratorNode(id, generator.name(), generator.selector(), generator.channels(), parameters);
+    }
+
+    private static Map<String, Object> stringMap(Map<?, ?> raw) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        raw.forEach((key, value) -> result.put(String.valueOf(key), value));
+        return result;
     }
 
     private static GraphNode copyDeviceSlot(GraphNode node, String id, List<String> channels) {

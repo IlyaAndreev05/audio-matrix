@@ -16,7 +16,8 @@ public final class GraphCodec {
         for (GraphNode node : graph.nodes()) {
             Map<String, Object> encoded = new LinkedHashMap<>();
             encoded.put("id", node.id()); encoded.put("name", node.name()); encoded.put("type", node.type());
-            encoded.put("channels", node.outputs().isEmpty() ? node.inputs().getFirst().channels() : node.outputs().getFirst().channels());
+            encoded.put("channels", node instanceof DynamicGeneratorNode generator ? generator.channels()
+                    : node.outputs().isEmpty() ? node.inputs().getFirst().channels() : node.outputs().getFirst().channels());
             encoded.put("parameters", node.parameters());
             nodes.add(encoded);
         }
@@ -35,7 +36,11 @@ public final class GraphCodec {
             Map<String, Object> parameters = object(item.get("parameters"));
             nodes.add(switch (type) {
                 case "source" -> new SourceNode(nodeId, nodeName, text(parameters.get("selector")), channels);
-                case "dynamic_generator" -> new DynamicGeneratorNode(nodeId, nodeName, text(parameters.get("selector")), channels);
+                case "dynamic_generator" -> {
+                    if (!(parameters.get("selector") instanceof String selector))
+                        throw new IllegalArgumentException("Dynamic generator selector must be a string");
+                    yield new DynamicGeneratorNode(nodeId, nodeName, selector, channels, parameters);
+                }
                 case "device_slot" -> new DeviceSlotNode(nodeId, nodeName, text(parameters.get("device_id")), channels,
                         number(parameters.get("volume"), 0), Boolean.TRUE.equals(parameters.get("muted")));
                 case "output" -> new OutputNode(nodeId, nodeName, text(parameters.get("device_id")), channels,
@@ -63,6 +68,95 @@ public final class GraphCodec {
                 number(item.get("gain"), 1)));
         return new AudioGraph(id, name, nodes, edges);
     }
+
+    /**
+     * Additively upgrades schema-10 graph snapshots without rewriting topology or non-generator values.
+     * The returned map is a shallow copy of the config with only graph containers holding dynamic
+     * generators copied and normalized; the input map is left unchanged.
+     */
+    public static Map<String, Object> upgradeSchema10Config(Map<String, Object> config) {
+        Map<String, Object> upgraded = new LinkedHashMap<>(config);
+        if (upgraded.get("route_library") instanceof List<?> routes)
+            upgraded.put("route_library", normalizeRoutes(routes));
+        if (upgraded.get("saved_copies") instanceof List<?> copies)
+            upgraded.put("saved_copies", normalizeSavedCopies(copies));
+        if (upgraded.get("common_vibro_graph") instanceof Map<?, ?> common)
+            upgraded.put("common_vibro_graph", normalizeRoute(common));
+        return upgraded;
+    }
+
+    private static List<Object> normalizeRoutes(List<?> routes) {
+        List<Object> normalized = new ArrayList<>(routes.size());
+        for (Object route : routes)
+            normalized.add(route instanceof Map<?, ?> map ? normalizeRoute(map) : route);
+        return normalized;
+    }
+
+    private static List<Object> normalizeSavedCopies(List<?> copies) {
+        List<Object> normalized = new ArrayList<>(copies.size());
+        for (Object value : copies) {
+            if (!(value instanceof Map<?, ?> rawCopy)) {
+                normalized.add(value);
+                continue;
+            }
+            Map<String, Object> copy = object(rawCopy);
+            if (copy.get("route") instanceof Map<?, ?> route)
+                copy.put("route", normalizeRoute(route));
+            normalized.add(copy);
+        }
+        return normalized;
+    }
+
+    private static Map<String, Object> normalizeRoute(Map<?, ?> rawRoute) {
+        Map<String, Object> route = object(rawRoute);
+        if (!(route.get("nodes") instanceof List<?> rawNodes)) return route;
+        List<Object> nodes = new ArrayList<>(rawNodes.size());
+        for (Object value : rawNodes) {
+            if (!(value instanceof Map<?, ?> rawNode) || !"dynamic_generator".equals(rawNode.get("type"))) {
+                nodes.add(value);
+                continue;
+            }
+            Map<String, Object> node = object(rawNode);
+            Object rawParameters = node.get("parameters");
+            Object rawChannels = node.get("channels");
+            if (!(rawParameters instanceof Map<?, ?> parameterMap)
+                    || !(parameterMap.get("selector") instanceof String selector) || selector.isBlank()
+                    || !(rawChannels instanceof List<?> channelValues)
+                    || channelValues.isEmpty()
+                    || channelValues.stream().anyMatch(channel -> !(channel instanceof String))) {
+                nodes.add(value);
+                continue;
+            }
+            List<String> channels = channelValues.stream().map(String.class::cast).toList();
+            boolean hasHdmiSelectionPolicy =
+                    parameterMap.containsKey("auto_select_trusted_hdmi_on_first_discovery");
+            Map<String, Object> parameters = DynamicGeneratorNode.normalizeParameters(
+                    selector, channels, object(parameterMap));
+            if ("outputs".equals(parameters.get("registry")) && !hasHdmiSelectionPolicy)
+                parameters.put("auto_select_trusted_hdmi_on_first_discovery", Boolean.FALSE);
+            if (!parameters.containsKey("connect_to")) {
+                Map<String, Object> inferred = inferConnectTo(node.get("id"), route.get("connections"));
+                if (inferred != null) parameters.put("connect_to", inferred);
+            }
+            node.put("parameters", parameters);
+            nodes.add(node);
+        }
+        route.put("nodes", nodes);
+        return route;
+    }
+
+    private static Map<String, Object> inferConnectTo(Object rawGeneratorId, Object rawConnections) {
+        if (!(rawGeneratorId instanceof String generatorId) || generatorId.isBlank()) return null;
+        for (Map<String, Object> connection : maps(rawConnections)) {
+            if (!generatorId.equals(connection.get("from_node"))) continue;
+            Object nodeId = connection.get("to_node"), portId = connection.get("to_port");
+            if (nodeId instanceof String node && !node.isBlank()
+                    && portId instanceof String port && !port.isBlank())
+                return new LinkedHashMap<>(Map.of("node_id", node, "port_id", port));
+        }
+        return null;
+    }
+
 
     @SuppressWarnings("unchecked") private static List<Map<String, Object>> maps(Object value) {
         if (!(value instanceof List<?> list)) return List.of();

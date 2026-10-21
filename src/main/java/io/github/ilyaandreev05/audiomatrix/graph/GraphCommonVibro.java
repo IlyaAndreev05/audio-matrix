@@ -123,6 +123,9 @@ public final class GraphCommonVibro {
                     && !existing.deviceId().isBlank()) return;
             boolean main = MAIN_SOURCE_ID.equals(node.id()) || MAIN_MIXER_ID.equals(node.id());
             if (!main) { nodes.put(node.id(), node); return; }
+            // Dynamic application generators share this stable ID but are control-plane nodes,
+            // not replaceable defaults for the common graph's catch-all PCM source.
+            if (MAIN_SOURCE_ID.equals(node.id()) && current instanceof DynamicGeneratorNode) return;
             if (current == null || sameMainParameters(current, templateNodes.get(node.id())))
                 nodes.put(node.id(), node);
         });
