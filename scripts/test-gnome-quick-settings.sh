@@ -64,7 +64,7 @@ rg -q 'controlPosition' "$extension_source/menu-renderer.js"
 rg -q "control.kind === 'range'" "$extension_source/menu-renderer.js"
 rg -q 'quickGroups' "$extension_source"
 rg -q 'hasAvailableMenuState' "$extension_source/menu-renderer.js"
-rg -q 'if \(!hasAvailableMenuState\(snapshot\)\) return;' "$extension_source/menu-renderer.js"
+rg -q 'const available = hasAvailableMenuState\(snapshot\);' "$extension_source/menu-renderer.js"
 rg -q 'PopupMenu\.PopupMenuSection' "$extension_source"
 rg -q 'St\.ScrollView' "$extension_source"
 rg -q 'updateMenuControls' "$extension_source"
@@ -91,15 +91,18 @@ if rg -q 't\.bassMusic|set_mixer_input_volume|toggle_mixer_input_mute' "$extensi
     echo 'Merge pins must not expose hidden per-input Gain or bass-only controls' >&2
     exit 1
 fi
-rg -q "PopupMenu\.PopupMenuItem\(label\)" "$extension_source/menu-links.js"
+rg -q 'new PopupMenu\.PopupMenuItem' "$extension_source/menu-links.js"
 rg -q 'Atk\.Role\.RADIO_BUTTON' "$extension_source/menu-links.js"
 rg -q 'control\.multiple' "$extension_source/menu-links.js"
 rg -q 'set_quick_matrix_view' "$extension_source"
 rg -q 'AudioMatrixMenuMatrix' "$extension_source/menu-matrix.js"
 rg -Fq "new GLib.Variant('(ussss)'" "$extension_source"
+rg -q 'const API_VERSION = 5' "$extension_source/state-client.js"
+rg -q 'select_profile' "$extension_source/menu-renderer.js"
 rg -q "'Result'" "$extension_source"
 for source_file in "$extension_source"/*.js; do node --check "$source_file"; done
 gjs -m "$repo_root/scripts/test-gnome-quick-settings-state.js"
+node "$repo_root/scripts/test-gnome-state-client.mjs"
 node "$repo_root/scripts/test-volume-menu-lease.mjs"
 node "$repo_root/scripts/test-menu-adapter.mjs"
 node "$repo_root/scripts/test-menu-renderer.mjs"
@@ -120,11 +123,13 @@ gnome-extensions pack "$extension_source" --force --out-dir "$scratch" \
     --extra-source=menu-groups.js \
     --extra-source=menu-renderer.js \
     --extra-source=menu-state.js \
+    --extra-source=menu-keyed-section.js \
+    --extra-source=menu-anchor.js \
     --extra-source=menu-lease.js \
     --extra-source=volume-menu-adapter.js
 unzip -t "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip"
-unzip -p "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" metadata.json | rg '"version": 18'
-for module in menu-text.js state-client.js menu-rows.js menu-applications.js menu-links.js menu-layout.js menu-control-scale.js menu-matrix.js menu-mixer.js menu-output.js menu-disclosure.js menu-groups.js menu-renderer.js menu-state.js menu-lease.js volume-menu-adapter.js; do
+unzip -p "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" metadata.json | rg '"version": 19'
+for module in menu-text.js state-client.js menu-rows.js menu-applications.js menu-links.js menu-layout.js menu-control-scale.js menu-matrix.js menu-mixer.js menu-output.js menu-disclosure.js menu-groups.js menu-renderer.js menu-state.js menu-keyed-section.js menu-anchor.js menu-lease.js volume-menu-adapter.js; do
     unzip -Z1 "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" | grep -Fxq "$module"
 done
 

@@ -95,6 +95,23 @@ public final class QuickSettingsConfig {
         return QuickSettingsPinLibrary.pinNode(config, routeId, nodeId, groupId, order, view);
     }
 
+    public static Map<String, Object> pinNode(Map<String, Object> config, String routeId, String nodeId,
+                                               String instanceKey, String groupId, int order, String view) {
+        return QuickSettingsPinLibrary.pinNode(config, routeId, nodeId, instanceKey, groupId, order, view);
+    }
+
+    public static Map<String, Object> updatePin(Map<String, Object> config, String routeId, String nodeId,
+                                                String instanceKey, String groupId, int order, String view,
+                                                String displayName, String icon, Boolean showChildren,
+                                                Boolean showWhenOffline) {
+        return QuickSettingsPinLibrary.updatePin(config, routeId, nodeId, instanceKey, groupId, order, view,
+                displayName, icon, showChildren, showWhenOffline);
+    }
+
+    public static boolean unpinNode(Map<String, Object> config, String routeId, String nodeId, String instanceKey) {
+        return QuickSettingsPinLibrary.unpinNode(config, routeId, nodeId, instanceKey);
+    }
+
     public static void attachControl(Map<String, Object> config, String routeId, String nodeId, String controlId) {
         QuickSettingsPinLibrary.attachControl(config, routeId, nodeId, controlId);
     }
@@ -140,6 +157,30 @@ public final class QuickSettingsConfig {
         Map<String, Object> created = group("quick-" + UUID.randomUUID(), name.trim(), groups.size());
         groups.add(created);
         return created;
+    }
+    public static Map<String, Object> createGroup(Map<String, Object> config, String name, int order) {
+        if (name == null || name.isBlank()) throw new IllegalArgumentException("Group name must not be blank");
+        if (order < 0) throw new IllegalArgumentException("Group order must not be negative");
+        Map<String, Object> created = group("quick-" + UUID.randomUUID(), name.trim(), order);
+        groups(config).add(created);
+        return created;
+    }
+
+    public static Map<String, Object> updateGroup(Map<String, Object> config, String groupId, String name,
+                                                  int order, Boolean collapsed) {
+        if (name == null || name.isBlank()) throw new IllegalArgumentException("Group name must not be blank");
+        if (order < 0) throw new IllegalArgumentException("Group order must not be negative");
+        Map<String, Object> group = groups(config).stream()
+                .filter(item -> groupId.equals(String.valueOf(item.get("id")))).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Quick settings group does not exist"));
+        group.put("name", name.trim());
+        group.put("order", order);
+        if (collapsed != null) group.put("collapsed", collapsed);
+        return group;
+    }
+
+    public static void removeGroup(Map<String, Object> config, String groupId) {
+        QuickSettingsPinLibrary.removeGroup(config, groupId);
     }
 
     private static void ensureControlGroup(Map<String, Object> control, List<Map<String, Object>> groups) {

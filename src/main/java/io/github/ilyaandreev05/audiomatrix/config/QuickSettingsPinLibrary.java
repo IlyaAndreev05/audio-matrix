@@ -5,6 +5,7 @@ import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
 import io.github.ilyaandreev05.audiomatrix.graph.OutputNode;
 import io.github.ilyaandreev05.audiomatrix.graph.SourceNode;
+import io.github.ilyaandreev05.audiomatrix.graph.DynamicInstanceRegistry;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -29,25 +30,105 @@ final class QuickSettingsPinLibrary {
 
     static Map<String, Object> pinNode(Map<String, Object> config, String routeId, String nodeId,
                                        String groupId, int order, String view) {
-        if (routeId == null || routeId.isBlank() || nodeId == null || nodeId.isBlank())
-            throw new IllegalArgumentException("Pinned graph node needs a route and node id");
-        if (QuickSettingsConfig.groups(config).stream().noneMatch(group -> groupId.equals(group.get("id"))))
-            throw new IllegalArgumentException("Pinned node group does not exist");
-        if (!List.of("DEFAULT", "COMPACT", "EXPANDED").contains(view))
-            throw new IllegalArgumentException("Pinned node view is unsupported");
-        Map<String, Object> existing = pins(config).stream()
-                .filter(pin -> routeId.equals(pin.get("route_id")) && nodeId.equals(pin.get("node_id")))
-                .findFirst().orElse(null);
-        if (existing != null) {
+        return pinNode(config, routeId, nodeId, "", groupId, order, view);
+    }
+
+    static Map<String, Object> pinNode(Map<String, Object> config, String routeId, String nodeId, String instanceKey,
+                                       String groupId, int order, String view) {
+        validatePin(config, routeId, nodeId, groupId, order, view);
+        String key = normalized(instanceKey);
+        Map<String, Object> existing = find(config, routeId, nodeId, key);
+        if (existing == null) {
+            existing = DefaultConfig.map("id", id(), "route_id", routeId, "node_id", nodeId,
+                    "group_id", groupId, "order", order, "view", view, "control_ids", new ArrayList<>());
+            if (!key.isEmpty()) existing.put("instance_key", key);
+            pins(config).add(existing);
+        } else {
             existing.put("group_id", groupId);
             existing.put("order", order);
             existing.put("view", view);
-            return existing;
         }
-        Map<String, Object> pin = DefaultConfig.map("id", id(), "route_id", routeId, "node_id", nodeId,
-                "group_id", groupId, "order", order, "view", view, "control_ids", new ArrayList<>());
-        pins(config).add(pin);
+        if (!key.isEmpty()) {
+            setInstanceOverride(config, routeId, nodeId, key, "pinned", true);
+            setInstanceOverride(config, routeId, nodeId, key, "group_id", groupId);
+            setInstanceOverride(config, routeId, nodeId, key, "order", order);
+            setInstanceOverride(config, routeId, nodeId, key, "expanded",
+                    "DEFAULT".equals(view) ? null : "EXPANDED".equals(view));
+        }
+        return existing;
+    }
+
+    static Map<String, Object> updatePin(Map<String, Object> config, String routeId, String nodeId,
+                                         String instanceKey, String groupId, int order, String view,
+                                         String displayName, String icon, Boolean showChildren,
+                                         Boolean showWhenOffline) {
+        Map<String, Object> pin = pinNode(config, routeId, nodeId, instanceKey, groupId, order, view);
+        setPinField(config, pin, routeId, nodeId, instanceKey, "display_name", displayName);
+        setPinField(config, pin, routeId, nodeId, instanceKey, "icon", icon);
+        setPinField(config, pin, routeId, nodeId, instanceKey, "show_children", showChildren);
+        setPinField(config, pin, routeId, nodeId, instanceKey, "show_when_offline", showWhenOffline);
         return pin;
+    }
+
+    static boolean unpinNode(Map<String, Object> config, String routeId, String nodeId, String instanceKey) {
+        String key = normalized(instanceKey);
+        Map<String, Object> pin = find(config, routeId, nodeId, key);
+        boolean removed = pin != null && pins(config).remove(pin);
+        if (!key.isEmpty())
+            return setInstanceOverride(config, routeId, nodeId, key, "pinned", false) || removed;
+        return removed;
+    }
+
+    static void removeGroup(Map<String, Object> config, String groupId) {
+        List<Map<String, Object>> groupList = QuickSettingsConfig.groups(config);
+        Map<String, Object> removed = groupList.stream()
+                .filter(group -> groupId.equals(String.valueOf(group.get("id")))).findFirst().orElse(null);
+        if (removed == null)
+            throw new IllegalArgumentException("Quick settings group does not exist");
+        groupList.remove(removed);
+        Map<String, Object> destination = groupList.stream()
+                .min(java.util.Comparator.comparingInt(group -> number(group.get("order"))))
+                .orElseGet(() -> QuickSettingsConfig.createGroup(config, "Без группы", 0));
+        String destinationId = String.valueOf(destination.get("id"));
+        DynamicInstanceRegistry.rehomeInstanceGroupOverrides(config, groupId, destinationId);
+        int pinOrder = nextOrder(pins(config), destinationId);
+        for (Map<String, Object> pin : pins(config)) {
+            if (!groupId.equals(String.valueOf(pin.get("group_id")))) continue;
+            pin.put("group_id", destinationId);
+            pin.put("order", pinOrder++);
+            String instanceKey = normalized(pin.get("instance_key"));
+            if (!instanceKey.isEmpty()) {
+                setInstanceOverride(config, String.valueOf(pin.get("route_id")),
+                        String.valueOf(pin.get("node_id")), instanceKey, "group_id", destinationId);
+                setInstanceOverride(config, String.valueOf(pin.get("route_id")),
+                        String.valueOf(pin.get("node_id")), instanceKey, "order", pin.get("order"));
+            }
+        }
+        List<Map<String, Object>> controls = new ArrayList<>(maps(config.get("quick_controls")));
+        config.put("quick_controls", controls);
+        int controlOrder = nextOrder(controls, destinationId);
+        for (Map<String, Object> control : controls) {
+            if (!groupId.equals(String.valueOf(control.get("group_id")))) continue;
+            control.put("group_id", destinationId);
+            control.put("order", controlOrder++);
+        }
+    }
+
+    private static int nextOrder(List<Map<String, Object>> values, String groupId) {
+        return values.stream().filter(item -> groupId.equals(String.valueOf(item.get("group_id"))))
+                .mapToInt(item -> number(item.get("order"))).max().orElse(-1) + 1;
+    }
+
+    private static void validatePin(Map<String, Object> config, String routeId, String nodeId,
+                                    String groupId, int order, String view) {
+        if (routeId == null || routeId.isBlank() || nodeId == null || nodeId.isBlank())
+            throw new IllegalArgumentException("Pinned graph node needs a route and node id");
+        if (groupId == null || QuickSettingsConfig.groups(config).stream()
+                .noneMatch(group -> groupId.equals(group.get("id"))))
+            throw new IllegalArgumentException("Pinned node group does not exist");
+        if (order < 0) throw new IllegalArgumentException("Pinned node order must not be negative");
+        if (!List.of("DEFAULT", "COMPACT", "EXPANDED").contains(view))
+            throw new IllegalArgumentException("Pinned node view is unsupported");
     }
 
     static void attachControl(Map<String, Object> config, String routeId, String nodeId, String controlId) {
@@ -179,8 +260,38 @@ final class QuickSettingsPinLibrary {
     }
 
     private static Map<String, Object> find(Map<String, Object> config, String routeId, String nodeId) {
-        return pins(config).stream().filter(pin -> routeId.equals(pin.get("route_id")) && nodeId.equals(pin.get("node_id")))
+        return find(config, routeId, nodeId, "");
+    }
+
+    private static Map<String, Object> find(Map<String, Object> config, String routeId, String nodeId,
+                                            String instanceKey) {
+        String key = normalized(instanceKey);
+        return pins(config).stream()
+                .filter(pin -> routeId.equals(pin.get("route_id")) && nodeId.equals(pin.get("node_id"))
+                        && key.equals(normalized(pin.get("instance_key"))))
                 .findFirst().orElse(null);
+    }
+
+    private static String normalized(Object value) {
+        return value == null ? "" : String.valueOf(value);
+    }
+
+    private static int number(Object value) {
+        return value instanceof Number number ? number.intValue() : 0;
+    }
+
+    private static void setPinField(Map<String, Object> config, Map<String, Object> pin,
+                                    String routeId, String nodeId, String instanceKey, String field, Object value) {
+        Object normalizedValue = value instanceof String text && text.isBlank() ? null : value;
+        if (normalizedValue == null) pin.remove(field);
+        else pin.put(field, normalizedValue);
+        if (!normalized(instanceKey).isEmpty())
+            setInstanceOverride(config, routeId, nodeId, normalized(instanceKey), field, normalizedValue);
+    }
+
+    private static boolean setInstanceOverride(Map<String, Object> config, String routeId, String nodeId,
+                                               String instanceKey, String field, Object value) {
+        return DynamicInstanceRegistry.setInstanceOverride(config, routeId, nodeId, instanceKey, field, value);
     }
 
     private static Map<String, Object> copyPin(Map<String, Object> pin) {

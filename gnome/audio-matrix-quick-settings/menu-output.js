@@ -1,4 +1,5 @@
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+import {pinRowId} from './menu-state.js';
 
 export default class AudioMatrixMenuOutput {
     constructor({addLevelRow, outputIcon, send}) {
@@ -21,33 +22,39 @@ export default class AudioMatrixMenuOutput {
         const name = output.description || output.name || pin.name;
         if (state !== 'ONLINE') {
             const label = t.deviceStates?.[state] || (state === 'OFFLINE' ? t.outputUnavailable : state);
-            target.addMenuItem(new PopupMenu.PopupMenuItem(`${name || t.outputUnavailable} — ${label}`,
-                {reactive: false, can_focus: false}));
+            const row = new PopupMenu.PopupMenuItem(`${name || t.outputUnavailable} — ${label}`,
+                {reactive: false, can_focus: false});
+            row._audioMatrixKey = `output-state:${pinRowId('output', pin)}`;
+            target.addMenuItem(row);
             return;
         }
         if (!output.graphGainNodeId) {
-            // The route exposes no controllable Gain; show the bound device only.
-            target.addMenuItem(new PopupMenu.PopupImageMenuItem(name || t.outputUnavailable,
-                this._outputIcon(output), {reactive: false, can_focus: false}));
+            const row = new PopupMenu.PopupImageMenuItem(name || t.outputUnavailable,
+                this._outputIcon(output), {reactive: false, can_focus: false});
+            row._audioMatrixKey = `output-device:${pinRowId('output', pin)}`;
+            target.addMenuItem(row);
             return;
         }
+        const commandTarget = graphTarget(pin, output.graphGainNodeId);
         this._addLevelRow({
-            id: 'graph-output:' + pin.nodeId, name: output.description || output.name,
+            id: pinRowId('graph-output', pin), key: pinRowId('graph-output', pin),
+            name: pin.displayName || output.description || output.name,
             icon: this._outputIcon(output), value: output.volume, muted: output.muted,
             mutedLabel: output.muted ? t.unmute : t.mute,
-            onValue: value => this._send('setNodeVolume', `${pin.routeId}\t${output.graphGainNodeId}\t${value.toFixed(3)}`),
-            onMute: () => this._send('setNodeMuted', `${pin.routeId}\t${output.graphGainNodeId}\t${!Boolean(output.muted)}`),
+            onValue: value => this._send('setNodeVolume', {target: commandTarget, value}),
+            onMute: () => this._send('setNodeMuted', {target: commandTarget, muted: !Boolean(output.muted)}),
         }, target);
     }
 
     _renderGain(pin, gain, t, target) {
-        const graphTarget = `${gain.routeId}\t${gain.nodeId}`;
+        const commandTarget = graphTarget(pin, gain.nodeId);
         this._addLevelRow({
-            id: 'graph-gain:' + pin.nodeId, name: pin.name || gain.nodeId,
-            icon: this._outputIcon({name: pin.name || ''}), value: gain.volume,
+            id: pinRowId('graph-gain', pin), key: pinRowId('graph-gain', pin),
+            name: pin.displayName || pin.name || gain.nodeId,
+            icon: this._outputIcon({name: pin.displayName || pin.name || ''}), value: gain.volume,
             muted: Boolean(gain.muted), mutedLabel: gain.muted ? t.unmute : t.mute,
-            onValue: value => this._send('setNodeVolume', `${graphTarget}\t${value.toFixed(3)}`),
-            onMute: () => this._send('setNodeMuted', `${graphTarget}\t${!Boolean(gain.muted)}`),
+            onValue: value => this._send('setNodeVolume', {target: commandTarget, value}),
+            onMute: () => this._send('setNodeMuted', {target: commandTarget, muted: !Boolean(gain.muted)}),
         }, target);
     }
 
@@ -60,18 +67,28 @@ export default class AudioMatrixMenuOutput {
         const name = state !== 'UNBOUND' && boundName ? boundName : configuredName;
         const label = state === 'UNBOUND' ? t.assignDevice : (t.deviceStates?.[state] || state);
         if (state === 'ONLINE' && Number.isFinite(Number(slot.volume))) {
+            const commandTarget = graphTarget(pin, pin.nodeId);
             this._addLevelRow({
-                id: `device:${pin.nodeId}`, name: boundName || configuredName,
+                id: `device:${pin.routeId}:${pin.nodeId}:${pin.instanceKey || ''}`,
+                name: pin.displayName || boundName || configuredName,
                 icon: this._outputIcon({name: boundName || configuredName}), value: slot.volume, muted: Boolean(slot.muted),
                 mutedLabel: slot.muted ? t.unmute : t.mute,
-                onValue: value => this._send('setNodeVolume', `${pin.routeId}\t${pin.nodeId}\t${value.toFixed(3)}`),
-                onMute: () => this._send('setNodeMuted', `${pin.routeId}\t${pin.nodeId}\t${!Boolean(slot.muted)}`),
+                onValue: value => this._send('setNodeVolume', {target: commandTarget, value}),
+                onMute: () => this._send('setNodeMuted', {target: commandTarget, muted: !Boolean(slot.muted)}),
             }, target);
             return;
         }
-        // Device Slot exposes no graph Gain and no on/off parameter: report the
-        // real binding state instead of fabricating controls.
-        target.addMenuItem(new PopupMenu.PopupImageMenuItem(`${name || t.outputUnavailable} — ${label}`,
-            this._outputIcon({name: name || ''}), {reactive: false, can_focus: false}));
+        const row = new PopupMenu.PopupImageMenuItem(`${name || t.outputUnavailable} — ${label}`,
+            this._outputIcon({name: name || ''}), {reactive: false, can_focus: false});
+        row._audioMatrixKey = `device-state:${pin.routeId}:${pin.nodeId}:${pin.instanceKey || ''}`;
+        target.addMenuItem(row);
     }
+}
+
+function graphTarget(pin, nodeId) {
+    return {
+        routeId: pin.routeId,
+        nodeId: pin.instanceKey ? pin.nodeId : nodeId,
+        instanceKey: pin.instanceKey || '',
+    };
 }

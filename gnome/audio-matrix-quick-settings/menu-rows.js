@@ -8,6 +8,7 @@ import {boxLayout} from './menu-layout.js';
 import {TEXT} from './menu-text.js';
 
 const LEVEL_ROW_STATE = new WeakMap();
+const HEADER_STATE = new WeakMap();
 
 export default class AudioMatrixMenuRows {
     constructor({section, getLanguage, send, queueSliderCommand, onOpen, onDragBegin, onDragEnd}) {
@@ -26,7 +27,8 @@ export default class AudioMatrixMenuRows {
         const row = boxLayout({spacing: 12, x_expand: true, y_expand: true});
         row.add_child(new St.Icon({icon_name: 'audio-x-generic-symbolic', style_class: 'popup-menu-icon'}));
         const labels = boxLayout({vertical: true, spacing: 2, x_expand: true, y_expand: true});
-        labels.add_child(new St.Label({text: t.title, y_expand: true}));
+        const title = new St.Label({text: t.title, y_expand: true});
+        labels.add_child(title);
         const subtitle = new St.Label({
             text: state?.activeRoute || state?.profile || (available ? '—' : t.unavailable),
             style_class: 'popup-status-menu-item', y_expand: true,
@@ -34,20 +36,39 @@ export default class AudioMatrixMenuRows {
         subtitle.clutter_text.ellipsize = Pango.EllipsizeMode.END;
         labels.add_child(subtitle);
         row.add_child(labels);
-        row.add_child(this.iconButton('preferences-system-symbolic', t.open, () => this._onOpen(available)));
+        row.add_child(this.iconButton('preferences-system-symbolic', t.open,
+            () => this._onOpen(Boolean(HEADER_STATE.get(item)?.available))));
         item.add_child(row);
-        this._section.addMenuItem(item);
+        item._audioMatrixKey = 'header';
+        item._audioMatrixKind = 'header';
+        const header = {item, title, subtitle};
+        item._audioMatrixPatch = incoming => {
+            const next = HEADER_STATE.get(incoming);
+            if (next) this.updateHeader(header, next.state, next.available);
+        };
+        HEADER_STATE.set(item, {state, available});
+        return header;
+    }
+
+    updateHeader(header, state, available) {
+        const t = TEXT[this._getLanguage()];
+        const profile = (state?.profiles || []).find(item => item.id === state?.activeProfileId);
+        header.title.text = t.title;
+        header.subtitle.text = profile?.name || state?.profile || state?.activeRoute || (available ? '—' : t.unavailable);
+        HEADER_STATE.set(header.item, {state, available});
     }
 
     addStatus(text, iconName) {
         const item = new PopupMenu.PopupBaseMenuItem({reactive: false, activate: false, can_focus: false});
         const row = boxLayout({spacing: 10, x_expand: true});
-        row.add_child(new St.Icon({icon_name: iconName, style_class: 'popup-menu-icon'}));
+        const icon = new St.Icon({icon_name: iconName, style_class: 'popup-menu-icon'});
+        row.add_child(icon);
         const label = new St.Label({text, x_expand: true, y_expand: true, style_class: 'popup-status-menu-item'});
         label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
         row.add_child(label);
         item.add_child(row);
-        this._section.addMenuItem(item);
+        item._audioMatrixKey = 'status';
+        return {item, icon, label};
     }
 
     addHeading(text) {
@@ -62,22 +83,23 @@ export default class AudioMatrixMenuRows {
         const item = iconName ? new PopupMenu.PopupImageMenuItem(text, iconName) : new PopupMenu.PopupMenuItem(text);
         item.connect('activate', callback);
         target.addMenuItem(item);
+        return item;
     }
 
     addLevelRow(options, target = this._section) {
         const row = this.createLevelRow(options);
-        target.addMenuItem(row);
-        return row;
+        return target.addMenuItem(row) || row;
     }
 
     createLevelRow(options) {
         const item = new PopupMenu.PopupBaseMenuItem({reactive: false, activate: false, can_focus: false});
         const row = boxLayout({vertical: true, spacing: 3, x_expand: true, y_expand: true});
-        const icon = options.icon || 'audio-x-generic-symbolic';
+        const iconName = options.icon || 'audio-x-generic-symbolic';
+        const icon = typeof iconName === 'string'
+            ? new St.Icon({icon_name: iconName, style_class: 'popup-menu-icon'})
+            : new St.Icon({gicon: iconName.gicon, style_class: 'popup-menu-icon'});
         const heading = boxLayout({spacing: 7, x_expand: true, y_expand: true});
-        heading.add_child(typeof icon === 'string'
-            ? new St.Icon({icon_name: icon, style_class: 'popup-menu-icon'})
-            : new St.Icon({gicon: icon.gicon, style_class: 'popup-menu-icon'}));
+        heading.add_child(icon);
         const name = new St.Label({text: String(options.name || ''), x_expand: true, y_expand: true});
         name.clutter_text.ellipsize = Pango.EllipsizeMode.END;
         heading.add_child(name);
@@ -90,31 +112,55 @@ export default class AudioMatrixMenuRows {
         const controls = boxLayout({spacing: 7, x_expand: true, y_expand: true});
         const slider = new Slider.Slider(initial);
         slider.x_expand = true;
+        slider.reactive = !options.disabled;
+        slider.can_focus = !options.disabled;
+        slider.opacity = options.disabled ? 0.55 : 1;
         slider.accessible_name = `${options.name || ''} — ${TEXT[this._getLanguage()].percent}`;
         controls.add_child(slider);
-        const valueSignalId = this._connectSlider(slider, percentage, options);
+        const binding = {options};
+        const valueSignalId = this._connectSlider(slider, percentage, binding);
         let muteButton = null;
-        if (typeof options.onMute === 'function') {
+        if (typeof options.onMute === 'function' || options.allowMuteButton) {
             const muted = Boolean(options.muted);
             const t = TEXT[this._getLanguage()];
             muteButton = this.iconButton(
                 muted ? 'audio-volume-muted-symbolic' : 'audio-volume-high-symbolic',
-                options.mutedLabel || (muted ? t.unmute : t.mute), options.onMute);
+                options.mutedLabel || (muted ? t.unmute : t.mute), () => binding.options.onMute?.());
             controls.add_child(muteButton);
+            muteButton.reactive = !options.disabled && typeof options.onMute === 'function';
+            muteButton.can_focus = !options.disabled && typeof options.onMute === 'function';
+            muteButton.opacity = options.disabled || typeof options.onMute !== 'function' ? 0.55 : 1;
         }
         row.add_child(controls);
         item.add_child(row);
-        LEVEL_ROW_STATE.set(item, {slider, percentage, valueSignalId, muteButton});
+        LEVEL_ROW_STATE.set(item, {slider, percentage, valueSignalId, muteButton, icon, name, binding});
+        item._audioMatrixKey = String(options.key || options.id);
+        item._audioMatrixKind = 'level';
+        item._audioMatrixPatch = incoming => {
+            const next = LEVEL_ROW_STATE.get(incoming);
+            if (next)
+                this.updateLevelRow(item, next.binding.options);
+        };
         return item;
     }
 
     updateLevelRow(item, options) {
         const state = LEVEL_ROW_STATE.get(item);
         if (!state) return;
+        state.binding.options = options;
         const initial = options.muted ? 0 : Math.max(0, Math.min(1, Number(options.value) || 0));
         state.slider.block_signal_handler(state.valueSignalId);
         state.slider.value = initial;
         state.slider.unblock_signal_handler(state.valueSignalId);
+        state.slider.reactive = !options.disabled;
+        state.slider.can_focus = !options.disabled;
+        state.slider.opacity = options.disabled ? 0.55 : 1;
+        state.slider.accessible_name = `${options.name || ''} — ${TEXT[this._getLanguage()].percent}`;
+        state.name.text = String(options.name || '');
+        if (typeof options.icon === 'string')
+            state.icon.icon_name = options.icon;
+        else if (options.icon?.gicon)
+            state.icon.gicon = options.icon.gicon;
         state.percentage.text = options.displayValue || `${Math.round(initial * 100)}%`;
         if (!state.muteButton) return;
         const muted = Boolean(options.muted);
@@ -122,21 +168,25 @@ export default class AudioMatrixMenuRows {
         const icon = state.muteButton.get_child();
         icon.icon_name = muted ? 'audio-volume-muted-symbolic' : 'audio-volume-high-symbolic';
         state.muteButton.accessible_name = options.mutedLabel || (muted ? t.unmute : t.mute);
+        state.muteButton.reactive = !options.disabled && typeof options.onMute === 'function';
+        state.muteButton.can_focus = !options.disabled && typeof options.onMute === 'function';
+        state.muteButton.opacity = options.disabled || typeof options.onMute !== 'function' ? 0.55 : 1;
     }
 
-    _connectSlider(slider, percentage, options) {
-        const key = String(options.id);
+    _connectSlider(slider, percentage, binding) {
+        const key = String(binding.options.key || binding.options.id);
         slider.connect('drag-begin', () => this._onDragBegin());
         const valueSignalId = slider.connect('notify::value', () => {
             const value = Math.max(0, Math.min(1, Number(slider.value) || 0));
+            const options = binding.options;
             percentage.text = options.formatValue ? options.formatValue(value) : `${Math.round(value * 100)}%`;
-            if (typeof options.onValue === 'function')
-                this._queueSliderCommand(key, value, options.onValue);
+            if (typeof options.onValue === 'function' && !options.disabled)
+                this._queueSliderCommand(key, value, next => binding.options.onValue?.(next));
         });
         slider.connect('drag-end', () => {
             const value = Math.max(0, Math.min(1, Number(slider.value) || 0));
-            if (typeof options.onValue === 'function')
-                this._queueSliderCommand(key, value, options.onValue, true);
+            if (typeof binding.options.onValue === 'function' && !binding.options.disabled)
+                this._queueSliderCommand(key, value, next => binding.options.onValue?.(next), true);
             this._onDragEnd();
         });
         return valueSignalId;

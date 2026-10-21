@@ -12,6 +12,7 @@ import io.github.ilyaandreev05.audiomatrix.graph.GraphConnection;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphRouteLibrary;
 import io.github.ilyaandreev05.audiomatrix.graph.MixerNode;
 import io.github.ilyaandreev05.audiomatrix.graph.OutputNode;
+import io.github.ilyaandreev05.audiomatrix.graph.SwitchNode;
 import io.github.ilyaandreev05.audiomatrix.graph.SourceNode;
 import org.junit.jupiter.api.Test;
 
@@ -139,6 +140,50 @@ class GnomeQuickSettingsPinsTest {
         assertEquals(8, pins.size());
         assertFalse(pins.stream().anyMatch(item -> Set.of("octine-vibro-mixer", "octine-bass-low-pass")
                 .contains(item.get("nodeId"))));
+    }
+
+    @Test void explicitlyPinnedEndpointGainIsPublishedWithTheGraphTarget() {
+        Map<String, Object> config = DefaultConfig.create();
+        AudioGraph graph = new AudioGraph("endpoint-gain-route", "Endpoint Gain", List.of(
+                new SourceNode("source", "Firefox", "application:firefox", STEREO),
+                new GainNode("endpoint-gain", "Endpoint Gain", STEREO, .42, false, "output"),
+                new OutputNode("output", "Monitor", "device:monitor", STEREO)), List.of(
+                new GraphConnection("source-gain", "source", "out", "endpoint-gain", "in", true, 1),
+                new GraphConnection("gain-output", "endpoint-gain", "out", "output", "in", true, 1)));
+        GraphRouteLibrary.saveRoute(config, graph, "");
+        GraphRouteLibrary.activate(config, graph.id());
+        QuickSettingsConfig.pinNode(config, graph.id(), "endpoint-gain", "outputs", 0, "EXPANDED");
+
+        List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config,
+                PipeWireBackend.Snapshot.offline("disconnected"), List.of(), List.of(), List.of());
+        Map<?, ?> published = (Map<?, ?>) pin(pins, "endpoint-gain").get("gain");
+        assertEquals(graph.id(), published.get("routeId"));
+        assertEquals("endpoint-gain", published.get("nodeId"));
+        assertEquals(.42, published.get("volume"));
+    }
+
+    @Test void publishesMultiSwitchChoicesWithExactActiveLinkIds() {
+        Map<String, Object> config = DefaultConfig.create();
+        SwitchNode route = new SwitchNode("music-switch", "Music routing", STEREO,
+                List.of("monitor", "vibro"), List.of("in->monitor"));
+        AudioGraph graph = new AudioGraph("multiswitch-route", "MultiSwitch", List.of(
+                new SourceNode("source", "Applications", "application:unassigned", STEREO), route,
+                new OutputNode("monitor-out", "Monitor", "device:monitor", STEREO),
+                new OutputNode("vibro-out", "Vibration", "device:vibro", STEREO)), List.of(
+                new GraphConnection("source-switch", "source", "out", "music-switch", "in", true, 1),
+                new GraphConnection("switch-monitor", "music-switch", "monitor", "monitor-out", "in", true, 1),
+                new GraphConnection("switch-vibro", "music-switch", "vibro", "vibro-out", "in", true, 1)));
+        GraphRouteLibrary.saveRoute(config, graph, "");
+        GraphRouteLibrary.activate(config, graph.id());
+        QuickSettingsConfig.pinNode(config, graph.id(), route.id(), "routing", 0, "EXPANDED");
+
+        List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config,
+                PipeWireBackend.Snapshot.offline("disconnected"), List.of(), List.of(), List.of());
+        Map<?, ?> routeControl = (Map<?, ?>) pinFor(pins, graph.id(), route.id()).get("routeControl");
+        List<?> options = (List<?>) routeControl.get("options");
+        assertEquals(List.of("in->monitor", "in->vibro"), options.stream()
+                .map(option -> String.valueOf(((Map<?, ?>) option).get("id"))).toList());
+        assertEquals(List.of("in->monitor"), routeControl.get("value"));
     }
 
     @Test void catchAllApplicationGeneratorExcludesEventAndAudioMatrixOwnedStreams() {

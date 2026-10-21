@@ -4,6 +4,7 @@ import {readFile} from 'node:fs/promises';
 class Item {
     constructor(label, options) { this.label = label; this.options = options; }
 }
+const menuState = await import('../gnome/audio-matrix-quick-settings/menu-state.js');
 globalThis.audioMatrixOutputFixture = {
     PopupMenu: {
         PopupMenuItem: Item,
@@ -11,9 +12,11 @@ globalThis.audioMatrixOutputFixture = {
             constructor(label, icon, options) { super(label, options); this.icon = icon; }
         },
     },
+    pinRowId: menuState.pinRowId,
 };
 const original = await readFile(new URL('../gnome/audio-matrix-quick-settings/menu-output.js', import.meta.url), 'utf8');
-const source = 'const {PopupMenu} = globalThis.audioMatrixOutputFixture;\n' + original.replace(/^import .*;\n/gm, '');
+const source = 'const {PopupMenu, pinRowId} = globalThis.audioMatrixOutputFixture;\n'
+    + original.replace(/^import .*;\n/gm, '');
 const Output = (await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)).default;
 
 const t = {
@@ -74,11 +77,15 @@ render({routeId: 'main', nodeId: 'slot', name: 'Вибродинамик', nodeT
     output: {id: 'usb', name: 'Vibro slot', deviceName: 'USB DAC', description: 'Rear AUX',
         commandId: 'device:usb', state: 'ONLINE', available: true, volume: 0.62, muted: false}});
 const deviceRow = levels.at(-1);
-assert.equal(deviceRow.id, 'device:slot');
+assert.equal(deviceRow.id, 'device:main:slot:');
 deviceRow.onValue(0.4);
-assert.deepEqual(commands.pop(), ['setNodeVolume', 'main\tslot\t0.400']);
+assert.deepEqual(commands.pop(), ['setNodeVolume', {
+    target: {routeId: 'main', nodeId: 'slot', instanceKey: ''}, value: 0.4,
+}]);
 deviceRow.onMute();
-assert.deepEqual(commands.pop(), ['setNodeMuted', 'main\tslot\ttrue']);
+assert.deepEqual(commands.pop(), ['setNodeMuted', {
+    target: {routeId: 'main', nodeId: 'slot', instanceKey: ''}, muted: true,
+}]);
 
 const offlineOutput = render({routeId: 'route', nodeId: 'output',
     output: {id: 'hdmi', name: 'HDMI', available: false, state: 'OFFLINE'}});
@@ -87,21 +94,25 @@ render({routeId: 'route', nodeId: 'output', name: 'Monitor',
     output: {id: 'hdmi', name: 'HDMI', state: 'ONLINE', available: true, volume: 0.4,
         muted: false, graphGainNodeId: 'gain-1'}});
 assert.equal(levels.length, 2);
-assert.equal(levels[1].id, 'graph-output:output');
+assert.equal(levels[1].id, 'graph-output:route:output:');
 assert.equal(levels[1].value, 0.4);
 
-render({nodeId: 'vibro-gain', name: 'Vibro Gain',
+render({routeId: 'common', nodeId: 'vibro-gain', name: 'Vibro Gain',
     gain: {routeId: 'common', nodeId: 'gain-1', volume: 0.55, muted: false}});
 const gainRow = levels.at(-1);
-assert.equal(gainRow.id, 'graph-gain:vibro-gain');
+assert.equal(gainRow.id, 'graph-gain:common:vibro-gain:');
 assert.equal(gainRow.name, 'Vibro Gain');
 assert.equal(gainRow.value, 0.55);
 assert.equal(gainRow.muted, false);
 gainRow.onValue(0.25);
-assert.deepEqual(commands.pop(), ['setNodeVolume', 'common\tgain-1\t0.250']);
+assert.deepEqual(commands.pop(), ['setNodeVolume', {
+    target: {routeId: 'common', nodeId: 'gain-1', instanceKey: ''}, value: 0.25,
+}]);
 gainRow.onMute();
-assert.deepEqual(commands.pop(), ['setNodeMuted', 'common\tgain-1\ttrue']);
-const mutedGain = render({nodeId: 'vibro-gain', name: 'Vibro Gain',
+assert.deepEqual(commands.pop(), ['setNodeMuted', {
+    target: {routeId: 'common', nodeId: 'gain-1', instanceKey: ''}, muted: true,
+}]);
+const mutedGain = render({routeId: 'common', nodeId: 'vibro-gain', name: 'Vibro Gain',
     gain: {routeId: 'common', nodeId: 'gain-1', volume: 0.55, muted: true}});
 assert.equal(mutedGain.length, 0, 'Gain uses a level row, not a placeholder');
 assert.equal(levels.at(-1).muted, true);

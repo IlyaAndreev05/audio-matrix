@@ -4,19 +4,65 @@ import {systemLanguage} from './menu-text.js';
 
 const OBJECT_PATH = '/org/ilya/AudioMatrix';
 const INTERFACE = 'org.ilya.AudioMatrix';
-const API_VERSION = 4;
+const API_VERSION = 5;
 const STALE_AFTER_SECONDS = 12;
+const COMMAND_TIMEOUT_SECONDS = 5;
+const RETIRED_EPOCH_LIMIT = 16;
+
+function canonical(value) {
+    if (Array.isArray(value))
+        return `[${value.map(canonical).join(',')}]`;
+    if (value && typeof value === 'object')
+        return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
+    return JSON.stringify(value);
+}
+
+export function intentKey(target, property) {
+    return `${canonical(target)}\u0000${String(property)}`;
+}
+
+function intentFor(name, payload) {
+    if (name === 'select_profile' && payload && typeof payload === 'object')
+        return {target: {profileId: String(payload.profileId || '')}, property: 'activeProfileId',
+            desired: String(payload.profileId || '')};
+    if (name === 'setNodeVolume' && payload && typeof payload === 'object')
+        return {target: payload.target, property: 'volume', desired: payload.value};
+    if (name === 'setNodeMuted' && payload && typeof payload === 'object')
+        return {target: payload.target, property: 'muted', desired: payload.muted};
+    if (name === 'setRouteEnabled' && payload && typeof payload === 'object') {
+        const target = {routeId: payload.routeId, switchNodeId: payload.switchNodeId, linkId: payload.linkId};
+        return {target, property: 'enabled', desired: payload.enabled};
+    }
+    if (name === 'set_source_volume' || name === 'toggle_source_mute') {
+        const [routeId, , gainNodeId, value] = String(payload).split('\t');
+        if (routeId && gainNodeId)
+            return {target: {routeId, nodeId: gainNodeId, instanceKey: ''},
+                property: name === 'set_source_volume' ? 'volume' : 'muted',
+                desired: name === 'set_source_volume' ? Number(value) : undefined};
+    }
+    return null;
+}
+
+function stateVersion(state) {
+    return Number.isSafeInteger(state?.stateSequence) && state.stateSequence >= 0
+        && typeof state?.stateEpoch === 'string' && state.stateEpoch.length > 0;
+}
 
 export default class AudioMatrixStateClient {
     constructor(onChange) {
         this._onChange = onChange;
+        this._clientId = GLib.uuid_string_random();
         this._language = systemLanguage();
         this._state = null;
         this._stale = false;
-        this._lastPayload = '';
+        this._epoch = '';
+        this._sequence = -1;
+        this._retiredEpochs = new Set();
         this._lastStateAt = GLib.get_monotonic_time();
         this._sliderTimers = new Map();
+        this._sliderValues = new Map();
         this._pendingCommands = new Map();
+        this._latestIntentByKey = new Map();
         this._draggingSliders = 0;
         this._renderPending = false;
         this._renderTimer = 0;
@@ -37,6 +83,7 @@ export default class AudioMatrixStateClient {
             const age = (GLib.get_monotonic_time() - this._lastStateAt) / GLib.USEC_PER_SEC;
             if (age > STALE_AFTER_SECONDS && !this._stale) {
                 this._stale = true;
+                this._failPending('Audio Matrix connection timed out');
                 this._state = null;
                 this._changed();
             }
@@ -45,6 +92,13 @@ export default class AudioMatrixStateClient {
     }
 
     snapshot() {
+        const pending = new Map();
+        for (const [key, requestId] of this._latestIntentByKey) {
+            const command = this._pendingCommands.get(requestId);
+            if (command)
+                pending.set(key, {target: command.target, property: command.property, desired: command.desired,
+                    requestId, baselineEpoch: command.baselineEpoch, baselineSequence: command.baselineSequence});
+        }
         const available = Boolean(this._state?.apiVersion === API_VERSION && this._state?.connected && !this._stale);
         return {
             state: this._state,
@@ -53,30 +107,73 @@ export default class AudioMatrixStateClient {
             available,
             commandError: this._commandError,
             apiMismatch: this._apiMismatch,
+            pending,
         };
     }
 
     _receiveState(parameters) {
         try {
-            const wasUnavailable = !this.snapshot().available;
-            this._lastStateAt = GLib.get_monotonic_time();
-            this._stale = false;
             const state = JSON.parse(parameters.deepUnpack()[0]);
-            this._apiMismatch = state.apiVersion === API_VERSION ? ''
+            const apiMismatch = state.apiVersion === API_VERSION ? ''
                 : `Audio Matrix API ${state.apiVersion ?? '—'}; extension requires API ${API_VERSION}`;
-            this._state = state;
-            const payload = JSON.stringify(state);
-            if (payload === this._lastPayload) {
-                if (wasUnavailable)
-                    this._changed();
+            if (!stateVersion(state)) {
+                this._apiMismatch = apiMismatch;
+                this._state = null;
+                this._failPending(apiMismatch || 'Audio Matrix state has no epoch or sequence');
+                this._changed();
                 return;
             }
-            this._lastPayload = payload;
+
+            const nextEpoch = String(state.stateEpoch);
+            if (nextEpoch === this._epoch) {
+                if (state.stateSequence <= this._sequence)
+                    return;
+            } else {
+                if (this._retiredEpochs.has(nextEpoch))
+                    return;
+                const hadPending = this._pendingCommands.size > 0;
+                if (this._epoch) {
+                    this._retiredEpochs.add(this._epoch);
+                    if (this._retiredEpochs.size > RETIRED_EPOCH_LIMIT)
+                        this._retiredEpochs.delete(this._retiredEpochs.values().next().value);
+                }
+                this._epoch = nextEpoch;
+                this._sequence = -1;
+                this._failPending(hadPending ? 'Audio Matrix engine restarted before confirming the command' : '');
+                if (!hadPending)
+                    this._commandError = '';
+            }
+            this._apiMismatch = apiMismatch;
+
+            this._lastStateAt = GLib.get_monotonic_time();
+            this._stale = false;
+            this._sequence = state.stateSequence;
+            this._state = state;
             if (state.language === 'en' || state.language === 'ru')
                 this._language = state.language;
+            this._acceptAcks(state);
             this._changed();
         } catch (error) {
             console.debug(`Audio Matrix state parse failed: ${error}`);
+        }
+    }
+
+    _acceptAcks(state) {
+        for (const ack of state.commandAcks || []) {
+            const requestId = String(ack.requestId);
+            const command = this._pendingCommands.get(requestId);
+            if (!command || command.baselineEpoch !== this._epoch)
+                continue;
+            if (command.intentKey) {
+                const ackKey = intentKey(ack.target, ack.property);
+                if (ackKey !== command.intentKey || this._latestIntentByKey.get(ackKey) !== requestId)
+                    continue;
+            }
+            this._settleCommand(requestId);
+            if (ack.status === 'ok')
+                this._commandError = '';
+            else
+                this._commandError = String(ack.error || ack.status || 'Audio Matrix rejected the command');
         }
     }
 
@@ -85,18 +182,34 @@ export default class AudioMatrixStateClient {
             const [version, requestId, status, message] = parameters.deepUnpack();
             if (version !== API_VERSION)
                 return;
-            const timer = this._pendingCommands.get(requestId);
-            if (timer)
-                GLib.Source.remove(timer);
-            this._pendingCommands.delete(requestId);
-            if (status !== 'ok')
-                this._commandError = String(message || 'Unknown error');
-            else
-                this._commandError = '';
+            const id = String(requestId);
+            const command = this._pendingCommands.get(id);
+            if (!command || status === 'ok')
+                return;
+            this._settleCommand(id);
+            this._commandError = String(message || 'Unknown error');
             this._changed();
         } catch (error) {
             console.debug(`Audio Matrix command result parse failed: ${error}`);
         }
+    }
+
+    _settleCommand(requestId) {
+        const command = this._pendingCommands.get(requestId);
+        if (!command)
+            return;
+        if (command.timer)
+            GLib.Source.remove(command.timer);
+        this._pendingCommands.delete(requestId);
+        if (command.intentKey && this._latestIntentByKey.get(command.intentKey) === requestId)
+            this._latestIntentByKey.delete(command.intentKey);
+    }
+
+    _failPending(message) {
+        for (const requestId of this._pendingCommands.keys())
+            this._settleCommand(requestId);
+        if (message)
+            this._commandError = message;
     }
 
     _changed() {
@@ -135,38 +248,63 @@ export default class AudioMatrixStateClient {
             GLib.Source.remove(previous);
             this._sliderTimers.delete(key);
         }
+        this._sliderValues.set(key, {value, callback});
         if (immediate) {
-            callback(value);
+            const pending = this._sliderValues.get(key);
+            this._sliderValues.delete(key);
+            pending?.callback(pending.value);
             return;
         }
+        if (this._draggingSliders > 0)
+            return;
         const timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 140, () => {
             this._sliderTimers.delete(key);
-            callback(value);
+            const pending = this._sliderValues.get(key);
+            this._sliderValues.delete(key);
+            pending?.callback(pending.value);
             return GLib.SOURCE_REMOVE;
         });
         this._sliderTimers.set(key, timer);
     }
 
-    send(name, value) {
+    send(name, payload) {
         if (!this.snapshot().available)
-            return;
-        const requestId = GLib.uuid_string_random();
-        const timer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 5, () => {
-            this._pendingCommands.delete(requestId);
+            return null;
+        const requestId = `${this._clientId}:${GLib.uuid_string_random()}`;
+        const intent = intentFor(name, payload);
+        const key = intent ? intentKey(intent.target, intent.property) : '';
+        if (key) {
+            const priorRequest = this._latestIntentByKey.get(key);
+            if (priorRequest)
+                this._settleCommand(priorRequest);
+        }
+        const command = {
+            timer: 0, intentKey: key, target: intent?.target ?? null, property: intent?.property ?? '',
+            desired: intent?.desired, baselineEpoch: this._epoch, baselineSequence: this._sequence,
+        };
+        command.timer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, COMMAND_TIMEOUT_SECONDS, () => {
+            if (!this._pendingCommands.has(requestId))
+                return GLib.SOURCE_REMOVE;
+            this._settleCommand(requestId);
             this._commandError = 'No response from the Audio Matrix engine';
             this._changed();
             return GLib.SOURCE_REMOVE;
         });
-        this._pendingCommands.set(requestId, timer);
+        this._pendingCommands.set(requestId, command);
+        if (key)
+            this._latestIntentByKey.set(key, requestId);
+        this._commandError = '';
         this._changed();
         try {
+            const value = payload && typeof payload === 'object' ? JSON.stringify(payload) : String(payload ?? '');
             Gio.DBus.session.emit_signal(null, OBJECT_PATH, INTERFACE, 'Command',
                 new GLib.Variant('(ussss)', [API_VERSION, requestId, String(this._state?.revision ?? ''), name, value]));
+            return requestId;
         } catch (error) {
-            GLib.Source.remove(timer);
-            this._pendingCommands.delete(requestId);
+            this._settleCommand(requestId);
             this._commandError = String(error);
             this._changed();
+            return null;
         }
     }
 
@@ -174,9 +312,8 @@ export default class AudioMatrixStateClient {
         for (const timer of this._sliderTimers.values())
             GLib.Source.remove(timer);
         this._sliderTimers.clear();
-        for (const timer of this._pendingCommands.values())
-            GLib.Source.remove(timer);
-        this._pendingCommands.clear();
+        this._sliderValues.clear();
+        this._failPending('');
         if (this._renderTimer)
             GLib.Source.remove(this._renderTimer);
         if (this._watchdogId)

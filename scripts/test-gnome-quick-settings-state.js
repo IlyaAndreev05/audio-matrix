@@ -42,9 +42,10 @@ assert(menuStructureSignature(changedPresentation) === firstSignature,
     'Audio level and disclosure changes must update the open menu without rebuilding it');
 
 const rowUpdates = menuLevelRows(snapshot.state);
-const output = rowUpdates.get('graph-output:output-node');
-assert(output?.volume === 0.32,
+const output = rowUpdates.get('graph-output:route-1:output-node:');
+assert.equal(output?.volume, 0.32,
     'Pinned output row must follow its graph Gain, not the physical sink volume');
+assert.equal(output?.target?.nodeId, 'green-gain', 'Saved output Gain uses its exact graph node target');
 assert(!rowUpdates.has('output:device-vibro'),
     'Physical sink state must not overwrite a graph output control');
 
@@ -82,27 +83,35 @@ assert(groups.quickGroups[0].id === 'outputs', 'Rendering must not mutate the sh
 const renamed = clone(snapshot);
 renamed.state.quickGroups[0].name = 'Anything / любые имена';
 assert(menuStructureSignature(renamed) !== firstSignature, 'Arbitrary group renames must reach Shell');
-const chrome = {id: 'google-chrome', streams: [{id: 'tab-1', name: 'YouTube'}]};
-assert(visibleApplicationStreams(chrome).length === 0, 'No individual Chrome controls without a real adapter');
-assert(visibleApplicationStreams(chrome, {tabAdapterAvailable: true}).length === 1,
-    'An available source adapter enables real individual tab controls');
-assert(visibleApplicationStreams({...chrome, tabAdapterAvailable: false}, {tabAdapterAvailable: true}).length === 0,
-    'Application-specific unavailable capability overrides the source capability');
-assert(visibleApplicationStreams({id: 'chromium-browser', streams: chrome.streams}).length === 0,
-    'Chromium also requires a real tab adapter');
+const chrome = {id: 'google-chrome', streams: [{id: 'pipewire-1', name: 'Browser audio'}]};
+assert(visibleApplicationStreams(chrome).length === 0,
+    'PipeWire stream counts do not fabricate individual Chrome tab controls');
+assert(visibleApplicationStreams(chrome, {tabAdapterAvailable: true}).length === 0,
+    'An adapter capability without a real tab snapshot does not create rows');
+const knownTab = {sessionToken: 'session-a', tabId: 13, title: 'Known title',
+    audible: true, muted: false, volumeCapability: 'captured', captureStreamKey: 'capture-a'};
+const chromeWithKnownTab = {...chrome, tabs: [knownTab]};
+assert.deepEqual(visibleApplicationStreams(chromeWithKnownTab), [knownTab],
+    'Nested Chrome rows require an actual session-token-addressed tab snapshot');
+assert(visibleApplicationStreams({...chrome, tabs: [{tabId: 13, title: 'No session token'}]}).length === 0,
+    'A transient tab id alone is not a stable known tab');
+assert(visibleApplicationStreams({id: 'chromium-browser', tabs: [knownTab]}).length === 1,
+    'Chromium rows use the same actual-tab state contract');
 assert(visibleApplicationStreams({id: 'telegram', streams: chrome.streams}).length === 1,
-    'Native non-browser streams must remain controllable without a browser adapter');
+    'Native non-browser streams remain controllable');
+assert(visibleApplicationStreams({id: 'firefox', streams: chrome.streams}).length === 0,
+    'Firefox streams remain application-level controls, never inferred per-tab rows');
 const capabilityChange = clone(snapshot);
 capabilityChange.state.quickPins[0].tabAdapterAvailable = true;
 assert(menuStructureSignature(capabilityChange) !== firstSignature,
     'Adapter connect/disconnect must rebuild the visible stream controls');
 const gain = clone(snapshot);
-gain.state.quickPins.push({id: 'pin-gain', nodeId: 'vibro-gain', name: 'Vibro Gain',
+gain.state.quickPins.push({id: 'pin-gain', routeId: 'common', nodeId: 'vibro-gain', name: 'Vibro Gain',
     nodeType: 'gain', groupId: 'vibro', order: 1,
     gain: {routeId: 'common', nodeId: 'gain-1', volume: 0.5, muted: false}, controls: [], applications: []});
 const gainSignature = menuStructureSignature(gain);
-assert(menuLevelRows(gain.state).get('graph-gain:vibro-gain')?.volume === 0.5,
-    'Pinned Gain must expose a live level row');
+assert(menuLevelRows(gain.state).get('graph-gain:common:vibro-gain:')?.volume === 0.5,
+    'An explicitly pinned Gain exposes a live level row');
 const movedGain = clone(gain);
 movedGain.state.quickPins.at(-1).gain.volume = 0.2;
 movedGain.state.quickPins.at(-1).gain.muted = true;
