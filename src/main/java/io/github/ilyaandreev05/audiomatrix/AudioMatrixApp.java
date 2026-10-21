@@ -5,12 +5,15 @@ import io.github.ilyaandreev05.audiomatrix.config.ConfigStore;
 import io.github.ilyaandreev05.audiomatrix.config.ConfigValidator;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphPipeWireCompiler;
+import io.github.ilyaandreev05.audiomatrix.gnome.BrowserSocketServer;
 import io.github.ilyaandreev05.audiomatrix.ui.AppShell;
+
 import javafx.application.Application;
 import javafx.scene.Scene;
 import javafx.stage.Stage;
 import javafx.application.Platform;
 
+import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
@@ -22,6 +25,7 @@ public class AudioMatrixApp extends Application {
     private ThemeManager themeManager;
     private AppShell shell;
     private InstanceControlServer instanceControl;
+    private BrowserSocketServer browserSocketServer;
     private boolean closeInProgress;
     private boolean servicesClosed;
 
@@ -141,8 +145,12 @@ public class AudioMatrixApp extends Application {
         Platform.setImplicitExit(false);
         configStore = new ConfigStore(ConfigStore.defaultPath());
         backend = new PipeWireBackend();
+        try { browserSocketServer = BrowserSocketServer.start(); }
+        catch (IOException | RuntimeException failure) {
+            System.err.println("Chrome browser bridge is unavailable: " + failure.getMessage());
+        }
         themeManager = new ThemeManager();
-        shell = new AppShell(configStore, backend, themeManager);
+        shell = new AppShell(configStore, backend, themeManager, browserSocketServer);
         Scene scene = new Scene(shell, 1360, 860);
         scene.getStylesheets().add(getClass().getResource("/styles/app.css").toExternalForm());
         String theme = AppShell.setting(configStore.snapshot(), "ui", "theme", "system");
@@ -186,6 +194,7 @@ public class AudioMatrixApp extends Application {
         if (shell != null) shell.close();
         if (themeManager != null) themeManager.close();
         if (backend != null) backend.close();
+        if (browserSocketServer != null) browserSocketServer.close();
         if (configStore != null) configStore.close();
         if (instanceControl != null) instanceControl.close();
         else if (currentInstanceControl != null) currentInstanceControl.close();
@@ -198,6 +207,7 @@ public class AudioMatrixApp extends Application {
         if (themeManager != null) themeManager.close();
         if (backend != null) backend.close();
         if (configStore != null) configStore.close();
+        if (browserSocketServer != null) browserSocketServer.close();
         if (instanceControl != null) instanceControl.close();
         else if (currentInstanceControl != null) currentInstanceControl.close();
         currentInstanceControl = null;

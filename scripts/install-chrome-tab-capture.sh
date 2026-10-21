@@ -82,3 +82,4 @@ printf '%s\n' "$host_state" > "$state_dir/host-state"
 trap - EXIT HUP INT TERM
 printf 'Installed extension files at %s and its Chrome Native Messaging host.\n' "$target_extension"
 printf 'Load the unpacked extension from chrome://extensions. It is not enabled or started by this script.\n'
+printf 'Start Audio Matrix for the owner-only local browser socket; tab capture still requires an explicit user gesture.\n'

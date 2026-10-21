@@ -5,30 +5,38 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BrowserAdapterTest {
-    @Test void chromeRequiresUserGestureAndReportsPerTabVolumeOnlyForIndependentStreams() {
+    @Test void chromeRequiresUserGestureAndReportsIndependentVolumeOnlyForConfirmedCapture() {
         ChromeBrowserAdapter adapter = new ChromeBrowserAdapter();
+        assertEquals("chrome", adapter.applicationId());
+        assertEquals("Chrome", adapter.displayName());
 
-        var shared = adapter.capabilities(1, false);
+        var shared = adapter.capabilities(3, false);
         var captured = adapter.capabilities(1, true);
+        var inactiveCapture = adapter.capabilities(0, true);
 
         assertTrue((Boolean) shared.get("tabCapture"));
+        assertFalse((Boolean) shared.get("tabMetadata"));
+        assertFalse((Boolean) shared.get("tabMute"));
         assertTrue((Boolean) shared.get("captureRequiresUserGesture"));
+        assertTrue((Boolean) shared.get("streamVolume"));
         assertFalse((Boolean) shared.get("independentTabVolume"));
         assertTrue((Boolean) captured.get("independentTabVolume"));
+        assertFalse((Boolean) inactiveCapture.get("independentTabVolume"));
         assertTrue(String.valueOf(shared.get("reason")).contains("общая громкость"));
     }
 
-    @Test void firefoxExplainsItsTabVolumeLimitAndUsesIndependentSystemStreamsWhenPresent() {
+    @Test void firefoxKeepsOrdinaryStreamVolumeWithoutClaimingTabControls() {
         FirefoxBrowserAdapter adapter = new FirefoxBrowserAdapter();
 
         var one = adapter.capabilities(1, false);
-        var two = adapter.capabilities(2, false);
+        var many = adapter.capabilities(4, false);
 
-        assertTrue((Boolean) one.get("tabMetadata"));
-        assertTrue((Boolean) one.get("tabMute"));
+        assertFalse((Boolean) one.get("tabMetadata"));
+        assertFalse((Boolean) one.get("tabMute"));
         assertFalse((Boolean) one.get("tabCapture"));
+        assertTrue((Boolean) one.get("streamVolume"));
+        assertTrue((Boolean) many.get("streamVolume"));
         assertFalse((Boolean) one.get("independentTabVolume"));
-        assertTrue(String.valueOf(one.get("reason")).contains("mute"));
-        assertTrue((Boolean) two.get("independentTabVolume"));
+        assertFalse((Boolean) many.get("independentTabVolume"));
     }
 }

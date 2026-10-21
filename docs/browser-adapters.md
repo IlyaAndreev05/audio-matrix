@@ -1,7 +1,15 @@
 # Browser audio controls
 
-Audio Matrix always discovers Chrome and Firefox playback as ordinary PipeWire application streams. It shows a separate stream slider only when PipeWire exposes an independently controllable stream.
+Chrome and Firefox remain ordinary PipeWire application streams with their normal application/stream controls. The number of streams does not imply that they correspond to browser tabs.
 
-Chrome's optional tab-capture extension can create a separate stream for a selected tab. The browser requires a user gesture to begin capture; Audio Matrix does not bypass that requirement. The Chrome extension and native host are included in the Debian package.
+## Chrome tab bridge
 
-Firefox exposes tab titles and mute controls to browser extensions, but it does not expose per-tab PCM volume. The included toolbar add-on can focus and mute tabs inside Firefox; that toolbar add-on is not connected to the Audio Matrix GNOME menu. Audio Matrix therefore shows per-tab volume only when the system itself exposes multiple independent Firefox streams. The packaged XPI is unsigned; it is suitable for temporary developer loading, while persistent distribution requires a signed Firefox add-on.
+The optional Chrome extension connects through the Java-owned owner-only Unix socket `$XDG_RUNTIME_DIR/audio-matrix/browser.sock` (or `/run/user/<uid>/audio-matrix/browser.sock` when `XDG_RUNTIME_DIR` is unset). It uses JSON Lines protocol v1 and sends tab titles/state without URLs. The socket is local to the current user; the native host does not listen on TCP. A browser reconnect sends a complete current-tab snapshot before tab lifecycle/state events. Stable per-tab settings use the extension's browser/profile instance tokens plus a per-session tab token; the transient Chrome tab ID is never used as a saved identity.
+
+Tab metadata and mute/focus commands are available while the extension is connected. A separate per-tab volume control appears only after the user explicitly starts tab capture and the native host confirms that the captured PipeWire stream is ready. Capture requires the Chrome extension's user gesture and the existing tab-capture permission. Audio Matrix never enables the extension, grants permissions, routes capture to physical hardware, or infers tab identity from PipeWire stream counts. Browser-wide and captured-tab gain controls remain separate and multiply for effective tab volume; captured PCM enters the Audio Matrix virtual sink only once. Stopping capture closes both capture sides and restores normal Chrome playback. Disconnect or failure makes tab instances unavailable without deleting their saved settings.
+
+Install the optional host files with `/opt/audiomatrix/bin/install-chrome-tab-capture.sh`, then manually load the unpacked extension from `~/.local/share/audio-matrix/chrome-tab-capture` in `chrome://extensions`. The installer only registers/copies extension files and the Native Messaging host; it does not enable or start the extension. To remove the integration and restore prior host files, use `/opt/audiomatrix/bin/uninstall-chrome-tab-capture.sh`.
+
+## Firefox
+
+Firefox remains an ordinary application whose system PipeWire streams retain their normal volume and mute controls. Firefox per-tab metadata, mute, focus, native messaging, and PCM capture are not connected to Audio Matrix. The existing Firefox add-on and its packaging remain unchanged. Audio Matrix never infers a Firefox tab control from multiple system streams.

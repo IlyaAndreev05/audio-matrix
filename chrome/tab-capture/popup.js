@@ -20,7 +20,7 @@ async function refresh() {
     currentTab = active || null;
     const captureIds = new Set((state.captures || []).filter((item) => item.status === "active").map((item) => item.tabId));
     if (active) {
-      activeLabel.textContent = active.title || active.url || "Current tab";
+      activeLabel.textContent = active.title || "Current tab";
       captureButton.disabled = false;
       captureButton.textContent = captureIds.has(active.id) ? "Stop capture" : "Capture this tab";
       captureButton.setAttribute("aria-pressed", captureIds.has(active.id) ? "true" : "false");
@@ -34,7 +34,7 @@ async function refresh() {
       const row = document.createElement("li");
       const title = document.createElement("span");
       title.className = "title";
-      title.textContent = tab.title || tab.url || "Untitled tab";
+      title.textContent = tab.title || "Untitled tab";
       title.title = title.textContent;
       const focus = document.createElement("button");
       focus.type = "button";
@@ -75,11 +75,13 @@ captureButton.addEventListener("click", async () => {
     if (captured) {
       const result = await send({ action: "stop", tabId: currentTab.id });
       if (!result?.ok) throw new Error(result?.error || "Could not stop capture.");
-      status.textContent = "Capture stopped; Chrome tab playback restored.";
+      status.textContent = result.playbackRecovered
+        ? "Capture stopped; tab playback is restored."
+        : "Capture stopped, but Chrome has not confirmed playback recovery.";
     } else {
-      // This call is inside the user's popup-button gesture, as required by tabCapture.
+      // This call stays inside the user's popup-button gesture, as required by tabCapture.
       const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: currentTab.id });
-      const result = await send({ action: "start", tabId: currentTab.id, title: currentTab.title || "", streamId });
+      const result = await send({ action: "start", tabId: currentTab.id, streamId });
       if (!result?.ok) throw new Error(result?.error || "Could not start capture.");
       status.textContent = "Tab audio is routed into Audio Matrix.";
     }

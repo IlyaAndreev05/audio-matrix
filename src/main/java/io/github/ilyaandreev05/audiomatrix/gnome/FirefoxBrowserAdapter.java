@@ -3,9 +3,10 @@ package io.github.ilyaandreev05.audiomatrix.gnome;
 import java.util.Locale;
 import java.util.Map;
 
-/** Firefox exposes tab title/focus/mute through the optional extension, but not tab capture. */
+/** Firefox remains an ordinary PipeWire application; Audio Matrix does not bridge its tabs. */
 public final class FirefoxBrowserAdapter implements BrowserAdapter {
     @Override public String id() { return "firefox"; }
+    @Override public String displayName() { return "Firefox"; }
 
     @Override public boolean matches(String applicationId, String process, String applicationName) {
         String identity = (safe(applicationId) + " " + safe(process) + " " + safe(applicationName)).toLowerCase(Locale.ROOT);
@@ -13,12 +14,10 @@ public final class FirefoxBrowserAdapter implements BrowserAdapter {
     }
 
     @Override public Map<String, Object> capabilities(int streamCount, boolean capturedTabStream) {
-        boolean separateStreams = streamCount > 1;
-        String reason = separateStreams ? "Firefox предоставляет несколько независимых системных потоков."
-                : "Расширение Firefox может показывать вкладки и менять их mute в браузере; Audio Matrix получает только системные потоки, отдельный ползунок вкладки появится лишь при нескольких независимых потоках.";
-        return Map.of("browser", "Firefox", "tabMetadata", true, "tabMute", true,
+        return Map.of("browser", "Firefox", "tabMetadata", false, "tabMute", false,
                 "tabCapture", false, "captureRequiresUserGesture", false, "streamVolume", streamCount > 0,
-                "independentTabVolume", separateStreams, "reason", reason);
+                "independentTabVolume", false,
+                "reason", "Firefox остаётся обычным приложением: доступны только системные аудиопотоки, без управления вкладками.");
     }
 
     private static String safe(String value) { return value == null ? "" : value; }

@@ -5,6 +5,8 @@ repo_root=$(cd -- "$script_dir/.." && pwd)
 extension="$repo_root/chrome/tab-capture"
 for file in popup.js service-worker.js offscreen.js pcm-worklet.js; do node --check "$extension/$file"; done
 python3 "$repo_root/chrome/native-host/test_host.py"
+"$repo_root/gradlew" -p "$repo_root" test --tests 'io.github.ilyaandreev05.audiomatrix.gnome.BrowserSocketServerTest' \
+    --tests 'io.github.ilyaandreev05.audiomatrix.gnome.BrowserAdapterTest'
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/audio-matrix-chrome-capture.XXXXXX")
 trap 'rm -rf -- "$tmp"' EXIT HUP INT TERM
 export XDG_DATA_HOME="$tmp/data"
@@ -28,4 +30,4 @@ PY
 test -r "$XDG_DATA_HOME/audio-matrix/chrome-tab-capture/previous.txt"
 test "$(cat "$XDG_CONFIG_HOME/google-chrome/NativeMessagingHosts/io.github.ilyaandreev05.audiomatrix.chrome_tab_capture.json")" = '{"prior":true}'
 test -r "$XDG_DATA_HOME/audio-matrix/chrome-tab-capture.audiomatrix-removed/manifest.json"
-echo "Chrome tab capture bridge package/install/rollback tests passed (fake PipeWire process; no audio output)"
+echo "Chrome tab capture, AF_UNIX socket, and install/rollback tests passed (fake PipeWire endpoint; no audio output)"
