@@ -174,6 +174,8 @@ public class AudioMatrixApp extends Application {
         instanceControl = currentInstanceControl;
         if (instanceControl != null) instanceControl.setHandler(command -> Platform.runLater(() -> {
             if ("open".equals(command)) {
+                if (!stage.isShowing()) stage.show();
+                stage.requestFocus();
                 shell.openGraphEditor();
             } else if ("quit".equals(command)) {
                 shutdownApplication();

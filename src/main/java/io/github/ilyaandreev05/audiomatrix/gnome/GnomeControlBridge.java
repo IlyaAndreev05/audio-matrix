@@ -112,7 +112,7 @@ public final class GnomeControlBridge implements AutoCloseable {
     private static List<Map<String,Object>> maps(Object value){if(!(value instanceof List<?> list))return List.of();List<Map<String,Object>>result=new ArrayList<>();for(Object item:list)if(item instanceof Map<?,?> raw){Map<String,Object>copy=new LinkedHashMap<>();raw.forEach((key,entry)->copy.put(String.valueOf(key),entry));result.add(copy);}return result;}
     private static List<String> stringList(Object value){if(!(value instanceof List<?> list))return List.of();return list.stream().filter(String.class::isInstance).map(String.class::cast).toList();}
     private void monitorLoop(){while(!closed.get()){
-        try{monitor=new ProcessBuilder("gdbus","monitor","--session","--dest","org.gnome.Shell","--object-path",OBJECT_PATH).redirectErrorStream(true).start();
+        try{monitor=new ProcessBuilder("dbus-monitor","--session","type='signal',interface='"+INTERFACE+"',member='Command'").redirectErrorStream(true).start();
             try(BufferedReader reader=new BufferedReader(new InputStreamReader(monitor.getInputStream()))){String line;List<String> arguments=null;while(!closed.get()&&(line=reader.readLine())!=null){
                 if(line.contains("member=Command")||line.contains(INTERFACE+".Command")){
                     Command command=parseCommandLine(line);if(command!=null){dispatch(command);arguments=null;}else arguments=new ArrayList<>();continue;
@@ -120,15 +120,24 @@ public final class GnomeControlBridge implements AutoCloseable {
                 if(arguments==null)continue;
                 if(line.contains("member=")){arguments=null;continue;}
                 Command command=parseCommandLine(line);if(command!=null){dispatch(command);arguments=null;continue;}
-                java.util.regex.Matcher number=java.util.regex.Pattern.compile("(?:uint32\\s+)?(\\d+)").matcher(line);
-                if(arguments.isEmpty()&&number.find())arguments.add(number.group(1));
-                java.util.regex.Matcher string=java.util.regex.Pattern.compile("'((?:\\\\.|[^'])*)'").matcher(line);
-                while(string.find()&&arguments.size()<5)arguments.add(unescapeGVariantString(string.group(1)));
+                if(!collectMonitorArgument(line,arguments))continue;
                 Command split=parseCommandArguments(arguments);if(split!=null){dispatch(split);arguments=null;}
             }}
             if(!closed.get())Thread.sleep(1200);
         }catch(Exception e){if(!closed.get())try{Thread.sleep(2500);}catch(InterruptedException ignored){Thread.currentThread().interrupt();return;}}
     }}
+    /** Collects one typed argument line of a {@code dbus-monitor} signal dump. */
+    static boolean collectMonitorArgument(String line,List<String> arguments){
+        if(arguments==null||arguments.size()>=5)return false;
+        String trimmed=line.trim();
+        if(trimmed.startsWith("uint32 ")){arguments.add(trimmed.substring("uint32 ".length()).trim());return true;}
+        if(trimmed.startsWith("string ")){arguments.add(unquoteGVariantString(trimmed.substring("string ".length()).trim()));return true;}
+        return false;
+    }
+    static String unquoteGVariantString(String value){
+        if(value.length()>=2&&value.startsWith("\"")&&value.endsWith("\""))return unescapeGVariantString(value.substring(1,value.length()-1));
+        return value;
+    }
     static Command parseCommandArguments(List<String> arguments){
         if(arguments==null||arguments.size()!=5)return null;
         try{

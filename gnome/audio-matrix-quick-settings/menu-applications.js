@@ -1,6 +1,7 @@
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {visibleApplicationStreams, visibleBrowserTabs} from './menu-state.js';
 import {applicationIcon} from './menu-icons.js';
+import {reorderMenuItems} from './menu-row-utils.js';
 
 export default class AudioMatrixMenuApplications {
     constructor({rows, send, registerLevelRow, unregisterLevelRow}) {

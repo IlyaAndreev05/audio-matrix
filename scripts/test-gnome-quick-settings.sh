@@ -32,6 +32,7 @@ node "$repo_root/scripts/test-menu-adapter.mjs"
 node "$repo_root/scripts/test-menu-renderer.mjs"
 node "$repo_root/scripts/test-menu-output.mjs"
 node "$repo_root/scripts/test-menu-control-scale.mjs"
+node "$repo_root/scripts/test-extension-imports.mjs"
 for source_file in "$extension_source"/*.js; do node --check "$source_file"; done
 gnome-extensions pack "$extension_source" --force --out-dir "$scratch" \
     --extra-source=menu-pending-intents.js \
