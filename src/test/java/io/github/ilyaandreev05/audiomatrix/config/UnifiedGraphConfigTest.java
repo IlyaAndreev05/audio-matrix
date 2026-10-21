@@ -1,15 +1,18 @@
 package io.github.ilyaandreev05.audiomatrix.config;
 
+import io.github.ilyaandreev05.audiomatrix.audio.DeviceIdentity;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
 import io.github.ilyaandreev05.audiomatrix.graph.DeviceSlotNode;
+import io.github.ilyaandreev05.audiomatrix.graph.DynamicGeneratorNode;
+import io.github.ilyaandreev05.audiomatrix.graph.DynamicInstanceRegistry;
 import io.github.ilyaandreev05.audiomatrix.graph.FilterNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GainNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCommonVibro;
-import io.github.ilyaandreev05.audiomatrix.graph.GraphPipeWireCompiler;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphValidator;
 import io.github.ilyaandreev05.audiomatrix.graph.MixerNode;
-import io.github.ilyaandreev05.audiomatrix.graph.SourceNode;
+import io.github.ilyaandreev05.audiomatrix.graph.OutputNode;
 import io.github.ilyaandreev05.audiomatrix.graph.SwitchNode;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -21,58 +24,141 @@ import static org.junit.jupiter.api.Assertions.*;
 class UnifiedGraphConfigTest {
     private static final List<String> STEREO = List.of("FL", "FR");
 
-    @Test void freshConfigHasOneMonitorProfileAndSeparatesMusicFromEventOutput() {
+    @Test void freshConfigHasOneProfileAndGeneratorMergeSwitchOutputTopology() {
         Map<String, Object> config = DefaultConfig.create();
-        assertEquals(1, maps(config.get("profiles")).size());
-        assertEquals("Основной", maps(config.get("profiles")).getFirst().get("name"));
+        List<Map<String, Object>> profiles = maps(config.get("profiles"));
+        assertEquals(1, profiles.size());
+        assertEquals("main", profiles.getFirst().get("id"));
+        assertEquals("Основной", profiles.getFirst().get("name"));
+        assertEquals("main", config.get("active_profile"));
         assertEquals("main", config.get("active_route"));
+        assertEquals(1, maps(config.get("route_library")).size());
+        assertEquals("", profiles.getFirst().get("default_output"));
         assertFalse(config.containsKey("common_vibro_graph"));
-        AudioGraph graph = activeGraph(config);
-        assertTrue(graph.nodes().stream().noneMatch(node -> node instanceof FilterNode filter
-                && "low_pass".equals(filter.processor())));
-        SwitchNode route = graph.nodes().stream().filter(SwitchNode.class::isInstance)
-                .map(SwitchNode.class::cast).findFirst().orElseThrow();
-        assertEquals(List.of("in->monitor"), route.activeLinks());
+        assertTrue(maps(config.get("devices")).stream()
+                .noneMatch(device -> "haptic_output".equals(device.get("role"))));
 
-        AudioGraph bound = UnifiedGraphFactory.create("monitor-test", "vibro-test",
-                1.0, false, 1.0, false, 1.0, false, true);
-        Map<String, Object> compiled = GraphPipeWireCompiler.compile(bound, config);
-        List<Map<String, Object>> routes = maps(compiled.get("routes"));
-        Map<String, Object> normalToMonitor = routes.stream().filter(item -> "octine-main-source".equals(item.get("from"))
-                && "monitor-test".equals(item.get("to"))).findFirst().orElseThrow();
-        Map<String, Object> normalToVibro = routes.stream().filter(item -> "octine-main-source".equals(item.get("from"))
-                && "vibro-test".equals(item.get("to"))).findFirst().orElseThrow();
-        Map<String, Object> eventToVibro = routes.stream().filter(item -> "octine-event-source".equals(item.get("from"))
-                && "vibro-test".equals(item.get("to"))).findFirst().orElseThrow();
-        assertEquals(false, normalToMonitor.get("mute"));
-        assertEquals(true, normalToVibro.get("mute"));
-        assertEquals(false, eventToVibro.get("mute"));
-        assertEquals(1.0, normalToMonitor.get("volume"));
-        assertEquals(1.0, eventToVibro.get("volume"));
+        AudioGraph graph = activeGraph(config);
+        DynamicGeneratorNode applications = generator(graph, GraphCommonVibro.MAIN_SOURCE_ID);
+        assertEquals("applications", applications.registry());
+        assertEquals("default-application", applications.template());
+        assertEquals(Map.of("node_id", GraphCommonVibro.MAIN_MIXER_ID, "port_id", "applications"),
+                applications.connectTo());
+        assertEquals(List.of("application:" +
+                        io.github.ilyaandreev05.audiomatrix.graph.EventSoundStudioSource.APPLICATION_ID),
+                applications.excludedSelectors());
+        assertEquals(List.of("source", "gain"), applications.templateNodes().stream()
+                .map(node -> String.valueOf(node.get("type"))).toList());
+        assertEquals(1, applications.templateConnections().size());
+
+        MixerNode mainMerge = mixer(graph, GraphCommonVibro.MAIN_MIXER_ID);
+        assertEquals(2, mainMerge.inputs().size());
+        assertTrue(mainMerge.inputs().stream().anyMatch(port -> "applications".equals(port.id())));
+        assertTrue(mainMerge.inputs().stream().anyMatch(port -> "additional".equals(port.id())));
+        assertEquals(1, graph.nodes().stream().filter(DynamicGeneratorNode.class::isInstance)
+                .map(DynamicGeneratorNode.class::cast).filter(node -> "applications".equals(node.registry())).count());
+        assertEquals(1, graph.nodes().stream().filter(node -> node instanceof SwitchNode).count());
+        SwitchNode multiSwitch = switchNode(graph);
+        assertEquals(1, multiSwitch.inputs().size());
+        assertTrue(multiSwitch.multiple());
+        assertTrue(multiSwitch.activeLinks().isEmpty());
+        assertEquals(List.of(UnifiedGraphConfig.HAPTIC_MUSIC_PORT_ID),
+                multiSwitch.outputs().stream().map(port -> port.id()).toList());
+
+        DynamicGeneratorNode outputs = generator(graph, UnifiedGraphConfig.OUTPUTS_GENERATOR_ID);
+        assertEquals("outputs", outputs.registry());
+        assertEquals("default-output", outputs.template());
+        assertEquals("device:*", outputs.selector());
+        assertEquals(Map.of("node_id", UnifiedGraphConfig.SWITCH_ID, "port_id", "in"), outputs.connectTo());
+        assertTrue(outputs.instances().isEmpty());
+        assertEquals(List.of("device:haptic-assigned"), outputs.excludedSelectors());
+        assertEquals(Boolean.TRUE, outputs.parameters().get("auto_select_trusted_hdmi_on_first_discovery"));
+        assertEquals(1.0, outputs.initialGain());
+        assertEquals(List.of("gain", "output"), outputs.templateNodes().stream()
+                .map(node -> String.valueOf(node.get("type"))).toList());
+        assertEquals(1, outputs.templateConnections().size());
+
+        DynamicGeneratorNode hapticOutputs = generator(graph, UnifiedGraphConfig.HAPTIC_OUTPUTS_GENERATOR_ID);
+        assertEquals("outputs", hapticOutputs.registry());
+        assertEquals("default-output", hapticOutputs.template());
+        assertEquals("device:haptic-assigned", hapticOutputs.selector());
+        assertEquals(Map.of("node_id", UnifiedGraphConfig.LIMITER_ID, "port_id", "out"), hapticOutputs.connectTo());
+        assertTrue(hapticOutputs.instances().isEmpty());
+        assertEquals(Boolean.FALSE, hapticOutputs.parameters().get("auto_select_trusted_hdmi_on_first_discovery"));
+        assertEquals(List.of("gain", "output"), hapticOutputs.templateNodes().stream()
+                .map(node -> String.valueOf(node.get("type"))).toList());
+        assertEquals(1, hapticOutputs.templateConnections().size());
+
+        assertTrue(graph.nodes().stream().noneMatch(node -> node instanceof DeviceSlotNode || node instanceof OutputNode));
+        assertFalse(multiSwitch.activeLinks().contains("in->" + UnifiedGraphConfig.HAPTIC_MUSIC_PORT_ID));
+        assertEdge(graph, UnifiedGraphConfig.SWITCH_ID, UnifiedGraphConfig.HAPTIC_MUSIC_PORT_ID,
+                UnifiedGraphConfig.MUSIC_GAIN_ID, "in");
+        assertEdge(graph, UnifiedGraphConfig.MUSIC_GAIN_ID, "out", GraphCommonVibro.VIBRO_MIXER_ID, "music");
+        assertEdge(graph, UnifiedGraphConfig.EVENT_SOURCE_ID, "out", UnifiedGraphConfig.EVENT_GAIN_ID, "in");
+        assertEdge(graph, UnifiedGraphConfig.EVENT_GAIN_ID, "out", GraphCommonVibro.VIBRO_MIXER_ID, "events");
+        assertEdge(graph, GraphCommonVibro.VIBRO_MIXER_ID, "out", GraphCommonVibro.VIBRO_GAIN_ID, "in");
+        assertEdge(graph, GraphCommonVibro.VIBRO_GAIN_ID, "out", UnifiedGraphConfig.LIMITER_ID, "in");
+        assertEquals(List.of(), ConfigValidator.validate(config));
+        assertEquals(List.of(), GraphValidator.validate(graph));
+        assertEquals(2, graph.nodes().stream().filter(DynamicGeneratorNode.class::isInstance)
+                .map(DynamicGeneratorNode.class::cast).filter(node -> "outputs".equals(node.registry())).count());
     }
 
-    @Test void schemaNineMigrationKeepsMonitorBindingVibroLevelsMuteAndLegacyArchive() {
-        Map<String, Object> config = oldSchemaNineConfig();
+    @Test void schemaNineMigrationPreservesArchiveLevelsFiltersAndExactDeviceIdentities() {
+        Map<String, Object> config = oldSchemaNineConfig(true);
         ConfigMigration.upgradeConfig(config);
 
-        assertEquals(10, config.get("schema_version"));
+        assertEquals(DefaultConfig.SCHEMA_VERSION, config.get("schema_version"));
         assertEquals("main", config.get("active_profile"));
         assertEquals("main", config.get("active_route"));
         assertEquals(1, maps(config.get("profiles")).size());
         AudioGraph migrated = activeGraph(config);
-        DeviceSlotNode monitor = slot(migrated, UnifiedGraphConfig.MONITOR_OUTPUT_ID);
-        DeviceSlotNode vibro = slot(migrated, GraphCommonVibro.VIBRO_OUTPUT_ID);
-        assertEquals("monitor-device", monitor.deviceId());
-        assertEquals("vibro-device", vibro.deviceId());
-        assertTrue(migrated.nodes().stream().noneMatch(node -> "octine-bass-low-pass".equals(node.id())));
+        assertTrue(migrated.nodes().stream().noneMatch(node -> node instanceof DeviceSlotNode || node instanceof OutputNode));
         assertEquals(0.064, gain(migrated, UnifiedGraphConfig.MUSIC_GAIN_ID).gain(), 1e-9);
         assertEquals(0.125, gain(migrated, UnifiedGraphConfig.EVENT_GAIN_ID).gain(), 1e-9);
         assertEquals(0.512, gain(migrated, GraphCommonVibro.VIBRO_GAIN_ID).gain(), 1e-9);
         assertTrue(gain(migrated, UnifiedGraphConfig.EVENT_GAIN_ID).muted());
+        assertFalse(gain(migrated, UnifiedGraphConfig.MUSIC_GAIN_ID).muted());
         assertTrue(gain(migrated, GraphCommonVibro.VIBRO_GAIN_ID).muted());
-        SwitchNode route = migrated.nodes().stream().filter(SwitchNode.class::isInstance)
-                .map(SwitchNode.class::cast).findFirst().orElseThrow();
-        assertEquals(List.of("in->monitor"), route.activeLinks());
+
+        FilterNode legacyLowPass = migrated.nodes().stream().filter(FilterNode.class::isInstance)
+                .map(FilterNode.class::cast).filter(filter -> "octine-bass-low-pass".equals(filter.id()))
+                .findFirst().orElseThrow();
+        assertEquals("low_pass", legacyLowPass.processor());
+        assertEquals(60.0, legacyLowPass.parameters().get("frequency_hz"));
+        FilterNode limiter = migrated.nodes().stream().filter(FilterNode.class::isInstance)
+                .map(FilterNode.class::cast).filter(filter -> UnifiedGraphConfig.LIMITER_ID.equals(filter.id()))
+                .findFirst().orElseThrow();
+        assertEquals(-1.0, limiter.parameters().get("ceiling_db"));
+
+        DeviceIdentity headphonesIdentity = deviceIdentity("headphones-path", "headphones-serial",
+                "analog-stereo", "headphones");
+        DeviceIdentity hapticIdentity = deviceIdentity("haptic-path", "haptic-serial",
+                "analog-stereo", "haptic-output");
+        DynamicGeneratorNode outputs = generator(migrated, UnifiedGraphConfig.OUTPUTS_GENERATOR_ID);
+        DynamicGeneratorNode hapticOutputs = generator(migrated, UnifiedGraphConfig.HAPTIC_OUTPUTS_GENERATOR_ID);
+        String headphonesKey = "device:" + headphonesIdentity.fingerprint();
+        String hapticKey = "device:" + hapticIdentity.fingerprint();
+        assertTrue(outputs.instances().containsKey(headphonesKey));
+        assertFalse(outputs.instances().containsKey(hapticKey));
+        assertTrue(outputs.excludedSelectors().contains(hapticKey));
+        assertTrue(hapticOutputs.instances().containsKey(hapticKey));
+        assertEquals(hapticKey, hapticOutputs.selector());
+        assertEquals(Boolean.FALSE, outputs.parameters().get("auto_select_trusted_hdmi_on_first_discovery"));
+
+        String headphonesPort = DynamicInstanceRegistry.stableOutputPortId(
+                UnifiedGraphConfig.OUTPUTS_GENERATOR_ID, headphonesIdentity.fingerprint());
+        SwitchNode route = switchNode(migrated);
+        assertTrue(route.activeLinks().contains("in->" + headphonesPort));
+        assertTrue(route.activeLinks().contains("in->" + UnifiedGraphConfig.HAPTIC_MUSIC_PORT_ID));
+        assertTrue(route.outputs().stream().anyMatch(port -> headphonesPort.equals(port.id())));
+
+        Map<String, Object> hapticDevice = maps(config.get("devices")).stream()
+                .filter(device -> "vibro-device".equals(device.get("id"))).findFirst().orElseThrow();
+        assertEquals("haptic_output", hapticDevice.get("role"));
+        assertEquals(hapticIdentity.toMap(), object(hapticDevice.get("identity")));
+        assertEquals(0.343, ((Number) hapticDevice.get("volume")).doubleValue(), 1e-9);
+        assertTrue(Boolean.TRUE.equals(hapticDevice.get("mute")));
 
         Map<String, Object> archive = object(config.get("migration_archive"));
         assertEquals(9, archive.get("source_schema_version"));
@@ -82,23 +168,22 @@ class UnifiedGraphConfigTest {
         assertEquals(List.of(), ConfigValidator.validate(config));
     }
 
-    @Test void runtimeGraphGainsStayLinearAndMusicSwitchDoesNotChangeEventLevel() {
-        AudioGraph graph = UnifiedGraphFactory.create("monitor-test", "vibro-test",
-                0.5, false, 0.8, false, 1.0, false, true);
-        graph = withBothMusicRoutes(graph);
-        Map<String, Object> config = DefaultConfig.create();
-        Map<String, Object> compiled = GraphPipeWireCompiler.compile(graph, config);
-        List<Map<String, Object>> routes = maps(compiled.get("routes"));
-        Map<String, Object> music = routes.stream().filter(item -> "octine-main-source".equals(item.get("from"))
-                && "vibro-test".equals(item.get("to"))).findFirst().orElseThrow();
-        assertEquals(0.5, music.get("volume"));
-        Map<String, Object> event = routes.stream().filter(item -> "octine-event-source".equals(item.get("from")))
-                .findFirst().orElseThrow();
-        assertEquals(0.8, event.get("volume"));
-        assertEquals(false, event.get("mute"));
+    @Test void legacyDeviceNamesWithoutReliableIdentityNeverBecomeOutputBranches() {
+        Map<String, Object> config = oldSchemaNineConfig(false);
+        ConfigMigration.upgradeConfig(config);
+
+        AudioGraph migrated = activeGraph(config);
+        DynamicGeneratorNode outputs = generator(migrated, UnifiedGraphConfig.OUTPUTS_GENERATOR_ID);
+        DynamicGeneratorNode hapticOutputs = generator(migrated, UnifiedGraphConfig.HAPTIC_OUTPUTS_GENERATOR_ID);
+        assertTrue(outputs.instances().isEmpty());
+        assertTrue(hapticOutputs.instances().isEmpty());
+        assertEquals(List.of(), switchNode(migrated).activeLinks());
+        assertTrue(migrated.nodes().stream().noneMatch(node -> node instanceof DeviceSlotNode || node instanceof OutputNode));
+        assertEquals(Boolean.FALSE, outputs.parameters().get("auto_select_trusted_hdmi_on_first_discovery"));
+        assertEquals(List.of(), ConfigValidator.validate(config));
     }
 
-    private static Map<String, Object> oldSchemaNineConfig() {
+    private static Map<String, Object> oldSchemaNineConfig(boolean reliableIdentities) {
         AudioGraph monitor = new AudioGraph("octine-monitor", "Монитор",
                 List.of(GraphCommonVibro.mainSource(), GraphCommonVibro.mainMixer(),
                         new DeviceSlotNode(UnifiedGraphConfig.MONITOR_OUTPUT_ID, "Monitor", "monitor-device", STEREO)),
@@ -145,11 +230,21 @@ class UnifiedGraphConfigTest {
         config.put("common_vibro_graph", GraphCodec.toMap(shared));
         config.put("quick_settings", QuickSettingsConfig.defaults());
         config.put("quick_controls", new ArrayList<>());
+        DeviceIdentity monitorIdentity = deviceIdentity("monitor-path", "monitor-serial",
+                "hdmi-stereo", "hdmi-output");
+        DeviceIdentity headphonesIdentity = deviceIdentity("headphones-path", "headphones-serial",
+                "analog-stereo", "headphones");
+        DeviceIdentity hapticIdentity = deviceIdentity("haptic-path", "haptic-serial",
+                "analog-stereo", "haptic-output");
+        Map<String, Object> hapticBinding = device("vibro-device", "Vibro",
+                reliableIdentities ? hapticIdentity : null, "haptic_output");
+        hapticBinding.put("volume", 0.7);
+        hapticBinding.put("mute", true);
         config.put("devices", new ArrayList<>(List.of(
-                DefaultConfig.map("id", "monitor-device", "name", "Monitor", "selector",
-                        DefaultConfig.map("kind", "name_equals", "value", "Monitor"), "volume", 1.0, "mute", false),
-                DefaultConfig.map("id", "vibro-device", "name", "Vibro", "selector",
-                        DefaultConfig.map("kind", "name_equals", "value", "Vibro"), "volume", 1.0, "mute", false))));
+                device("monitor-device", "Monitor", reliableIdentities ? monitorIdentity : null, "output"),
+                device("headphones-device", "Headphones",
+                        reliableIdentities ? headphonesIdentity : null, "output"),
+                hapticBinding)));
         config.put("applications", new ArrayList<>());
         config.put("buses", new ArrayList<>());
         config.put("routes", new ArrayList<>());
@@ -170,33 +265,59 @@ class UnifiedGraphConfigTest {
         return config;
     }
 
+    private static Map<String, Object> device(String id, String name, DeviceIdentity identity, String role) {
+        Map<String, Object> result = DefaultConfig.map("id", id, "name", name, "role", role,
+                "volume", 1.0, "mute", false);
+        if (identity != null) result.put("identity", identity.toMap());
+        else result.put("selector", DefaultConfig.map("kind", "name_equals", "value", name));
+        return result;
+    }
+
+    private static DeviceIdentity deviceIdentity(String path, String serial, String profile, String port) {
+        return DeviceIdentity.from(Map.of("device.bus-path", path, "device.serial", serial,
+                "device.profile.name", profile, "device.port.name", port, "audio.position", "FL,FR"), 2);
+    }
+
     private static Map<String, Object> encoded(AudioGraph graph, String profile) {
         Map<String, Object> result = new LinkedHashMap<>(GraphCodec.toMap(graph));
         result.put("profile_id", profile);
         result.put("group_id", "");
         return result;
     }
-    private static AudioGraph withBothMusicRoutes(AudioGraph graph) {
-        List<GraphNode> nodes = new ArrayList<>(graph.nodes());
-        SwitchNode current = nodes.stream().filter(SwitchNode.class::isInstance).map(SwitchNode.class::cast).findFirst().orElseThrow();
-        nodes.set(nodes.indexOf(current), new SwitchNode(current.id(), current.name(), STEREO,
-                current.outputs().stream().map(port -> port.id()).toList(), List.of("in->monitor", "in->vibro")));
-        return new AudioGraph(graph.id(), graph.name(), nodes, graph.connections());
-    }
+
     private static AudioGraph activeGraph(Map<String, Object> config) {
         return GraphCodec.fromMap(maps(config.get("route_library")).getFirst());
     }
-    private static DeviceSlotNode slot(AudioGraph graph, String id) {
-        return graph.nodes().stream().filter(node -> node instanceof DeviceSlotNode && id.equals(node.id()))
-                .map(DeviceSlotNode.class::cast).findFirst().orElseThrow();
+
+    private static DynamicGeneratorNode generator(AudioGraph graph, String id) {
+        return graph.nodes().stream().filter(node -> id.equals(node.id()) && node instanceof DynamicGeneratorNode)
+                .map(DynamicGeneratorNode.class::cast).findFirst().orElseThrow();
     }
+
+    private static MixerNode mixer(AudioGraph graph, String id) {
+        return graph.nodes().stream().filter(node -> id.equals(node.id()) && node instanceof MixerNode)
+                .map(MixerNode.class::cast).findFirst().orElseThrow();
+    }
+
+    private static SwitchNode switchNode(AudioGraph graph) {
+        return graph.nodes().stream().filter(SwitchNode.class::isInstance)
+                .map(SwitchNode.class::cast).findFirst().orElseThrow();
+    }
+
+    private static void assertEdge(AudioGraph graph, String from, String fromPort, String to, String toPort) {
+        assertTrue(graph.connections().stream().anyMatch(edge -> from.equals(edge.fromNode())
+                && fromPort.equals(edge.fromPort()) && to.equals(edge.toNode()) && toPort.equals(edge.toPort())));
+    }
+
     private static GainNode gain(AudioGraph graph, String id) {
         return graph.nodes().stream().filter(node -> node instanceof GainNode && id.equals(node.id()))
                 .map(GainNode.class::cast).findFirst().orElseThrow();
     }
+
     @SuppressWarnings("unchecked") private static List<Map<String, Object>> maps(Object raw) {
         return raw instanceof List<?> list ? (List<Map<String, Object>>) list : List.of();
     }
+
     private static Map<String, Object> object(Object raw) {
         Map<String, Object> result = new LinkedHashMap<>();
         if (raw instanceof Map<?, ?> map) map.forEach((key, value) -> result.put(String.valueOf(key), value));
