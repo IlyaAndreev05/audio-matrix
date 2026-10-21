@@ -31,6 +31,17 @@ public non-sealed class RouterNode extends GraphNode {
     }
     public List<String> activeLinks() { return activeLinks; }
     public boolean multiple() { return multiple; }
+    /** Returns the same router kind with other active links, keeping its ports and channels. */
+    public RouterNode withActiveLinks(List<String> activeLinks) {
+        List<String> channels = inputs().getFirst().channels();
+        if (this instanceof SwitchNode) return new SwitchNode(id(), name(), channels, outputIds(), activeLinks);
+        if (this instanceof MultiSelectorNode) return new MultiSelectorNode(id(), name(), channels, inputIds(), activeLinks);
+        if (this instanceof MatrixNode) return new MatrixNode(id(), name(), channels, inputIds(), outputIds(), activeLinks);
+        if (this instanceof SelectorNode) return new SelectorNode(id(), name(), channels, inputIds(), activeLinks);
+        return new RouterNode(id(), name(), inputIds(), outputIds(), channels, activeLinks, multiple());
+    }
+    private List<String> inputIds() { return inputs().stream().map(AudioPort::id).toList(); }
+    private List<String> outputIds() { return outputs().stream().map(AudioPort::id).toList(); }
     @Override public String type() { return "router"; }
     @Override public Map<String, Object> parameters() { return Map.of("input_ports",inputs().stream().map(AudioPort::id).toList(),"output_ports",outputs().stream().map(AudioPort::id).toList(),"active_links", activeLinks, "multiple", multiple); }
 }

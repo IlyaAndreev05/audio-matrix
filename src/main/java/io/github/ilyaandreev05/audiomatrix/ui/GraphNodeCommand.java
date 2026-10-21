@@ -2,6 +2,7 @@ package io.github.ilyaandreev05.audiomatrix.ui;
 
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
 import io.github.ilyaandreev05.audiomatrix.graph.DeviceSlotNode;
+import io.github.ilyaandreev05.audiomatrix.graph.DynamicInstanceRegistry;
 import io.github.ilyaandreev05.audiomatrix.graph.GainNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphConnection;
@@ -39,21 +40,22 @@ final class GraphNodeCommand {
                 .orElseThrow(() -> new IllegalArgumentException("Route switch no longer exists"));
         if (!router.multiple()) throw new IllegalArgumentException("This route selector is not a MultiSwitch");
         String[] parts = linkId.split("->", -1);
-        boolean connected = parts.length == 2
-                && router.inputs().stream().anyMatch(port -> port.id().equals(parts[0]))
-                && router.outputs().stream().anyMatch(port -> port.id().equals(parts[1]))
+        if (parts.length != 2) throw new IllegalArgumentException("Route link is not connected");
+        boolean inputConnected = router.inputs().stream().anyMatch(port -> port.id().equals(parts[0]))
                 && graph.connections().stream().anyMatch(edge -> edge.enabled()
-                        && edge.toNode().equals(router.id()) && edge.toPort().equals(parts[0]))
-                && graph.connections().stream().anyMatch(edge -> edge.enabled()
-                        && edge.fromNode().equals(router.id()) && edge.fromPort().equals(parts[1]));
-        if (!connected) throw new IllegalArgumentException("Route link is not connected");
+                        && edge.toNode().equals(router.id()) && edge.toPort().equals(parts[0]));
+        // A runtime-generated output branch has no saved edge: the dynamic registry wires it into the
+        // effective graph only, so the saved router keeps the port without a connection of its own.
+        boolean outputConnected = router.outputs().stream().anyMatch(port -> port.id().equals(parts[1]))
+                && (graph.connections().stream().anyMatch(edge -> edge.enabled()
+                            && edge.fromNode().equals(router.id()) && edge.fromPort().equals(parts[1]))
+                        || DynamicInstanceRegistry.isGeneratedOutputPort(parts[1]));
+        if (!inputConnected || !outputConnected) throw new IllegalArgumentException("Route link is not connected");
         List<String> links = new ArrayList<>(router.activeLinks());
         if (enabled && !links.contains(linkId)) links.add(linkId);
         if (!enabled) links.remove(linkId);
-        AudioGraph changed = new AudioGraph(graph.id(), graph.name(), replace(graph.nodes(), router,
-                new io.github.ilyaandreev05.audiomatrix.graph.SwitchNode(router.id(), router.name(),
-                        router.inputs().getFirst().channels(), router.outputs().stream().map(port -> port.id()).toList(), links)),
-                graph.connections());
+        AudioGraph changed = new AudioGraph(graph.id(), graph.name(),
+                replace(graph.nodes(), router, router.withActiveLinks(links)), graph.connections());
         save(config, routeId, route, changed);
     }
 

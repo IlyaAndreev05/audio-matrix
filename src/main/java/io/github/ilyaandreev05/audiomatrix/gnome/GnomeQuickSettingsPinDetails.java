@@ -6,38 +6,29 @@ import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
 import io.github.ilyaandreev05.audiomatrix.graph.DynamicGeneratorNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GainNode;
-import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
-import io.github.ilyaandreev05.audiomatrix.graph.GraphCommonVibro;
-import io.github.ilyaandreev05.audiomatrix.graph.GraphConnection;
 import io.github.ilyaandreev05.audiomatrix.graph.OutputNode;
 import io.github.ilyaandreev05.audiomatrix.graph.SourceNode;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Stream;
 
 final class GnomeQuickSettingsPinDetails {
     private GnomeQuickSettingsPinDetails() {}
 
-    static List<Map<String, Object>> applicationsFor(SourceNode source,
-                                                      List<Map<String, Object>> applications,
-                                                      AudioGraph graph) {
-        return applicationsFor(source.selector(), applications, graph);
-    }
-
     /** The catch-all application generator publishes the same application list as a plain source node. */
     static List<Map<String, Object>> applicationsFor(String selector,
                                                       List<Map<String, Object>> applications,
-                                                      AudioGraph graph) {
-        List<String> exactSelectors = explicitSelectors(graph);
-        return applications.stream().filter(app -> matches(selector, app, exactSelectors)).toList();
+                                                      List<String> claims) {
+        return applications.stream().filter(app -> matches(selector, app, claims)).toList();
     }
 
-    /** Selectors that claim one application explicitly are never served by the catch-all source. */
-    private static List<String> explicitSelectors(AudioGraph graph) {
-        return graph.nodes().stream().flatMap(node -> {
+    /** Only a source the user authored claims an application; a materialized generator instance never claims one. */
+    static List<String> claimSelectors(AudioGraph graph, Set<String> generated) {
+        if (graph == null) return List.of();
+        return graph.nodes().stream().filter(node -> !generated.contains(node.id())).flatMap(node -> {
             if (node instanceof SourceNode source) return Stream.of(source.selector());
             if (node instanceof DynamicGeneratorNode generator && "applications".equals(generator.registry()))
                 return Stream.of(generator.selector());
@@ -46,7 +37,7 @@ final class GnomeQuickSettingsPinDetails {
                 .toList();
     }
 
-    static boolean matches(String selector, Map<String, Object> app, List<String> explicit) {
+    static boolean matches(String selector, Map<String, Object> app, List<String> claims) {
         String appId = String.valueOf(app.getOrDefault("application_id", ""));
         String process = String.valueOf(app.getOrDefault("process", ""));
         if ("io.github.ilyaandreev05.eventsoundstudio".equals(appId)
@@ -56,7 +47,7 @@ final class GnomeQuickSettingsPinDetails {
             return selector.substring("application:".length()).equals(appId);
         if (selector.startsWith("process:")) return selector.substring("process:".length()).equals(process);
         if (selector.equals("application:unassigned") || selector.equals("application:*"))
-            return explicit.stream().noneMatch(value -> value.equals("application:" + appId)
+            return claims.stream().noneMatch(value -> value.equals("application:" + appId)
                     || value.equals("process:" + process));
         return false;
     }

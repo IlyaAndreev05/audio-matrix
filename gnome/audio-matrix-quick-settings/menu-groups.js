@@ -129,8 +129,8 @@ export default class AudioMatrixMenuGroups {
         header.connect('activate', () => {
             const nextOpen = this._disclosures.toggleGroup(id);
             this._send('set_quick_group_collapsed', `${id}\t${!nextOpen}`);
+            header.stop_emission_by_name('activate');
         });
-        header.activate = () => header.emit?.('activate');
         return entry;
     }
 
@@ -199,8 +199,8 @@ export default class AudioMatrixMenuGroups {
         header.connect('activate', () => {
             const nextOpen = this._disclosures.togglePin(id);
             this._send('set_quick_pin_view', `${id}\t${nextOpen ? 'EXPANDED' : 'COMPACT'}`);
+            header.stop_emission_by_name('activate');
         });
-        header.activate = () => header.emit?.('activate');
         return entry;
     }
 

@@ -19,9 +19,15 @@ final class DynamicRegistryIdentity {
         return "subgraph-" + UUID.nameUUIDFromBytes((generatorId + "\u0000" + instanceKey + "\u0000composite")
                 .getBytes(StandardCharsets.UTF_8));
     }
+    /** The port-id prefix of the MultiSwitch output branches the dynamic registry materialises. */
+    static final String GENERATED_OUTPUT_PREFIX = "generated-output-";
     static String stableOutputPortId(String generatorId, String deviceIdentityFingerprint) {
-        return "generated-output-" + UUID.nameUUIDFromBytes((generatorId + "\u0000" + deviceIdentityFingerprint
+        return GENERATED_OUTPUT_PREFIX + UUID.nameUUIDFromBytes((generatorId + "\u0000" + deviceIdentityFingerprint
                 + "\u0000switch-port").getBytes(StandardCharsets.UTF_8));
+    }
+    /** True for a port id of a runtime-generated MultiSwitch output branch. */
+    static boolean isGeneratedOutputPort(String portId) {
+        return portId != null && portId.startsWith(GENERATED_OUTPUT_PREFIX);
     }
     static String stableMixerInputPortId(String generatorId, String instanceKey) {
         return "generated-mixer-input-" + UUID.nameUUIDFromBytes((generatorId + "\u0000" + instanceKey

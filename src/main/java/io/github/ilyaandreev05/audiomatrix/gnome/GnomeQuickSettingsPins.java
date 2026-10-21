@@ -18,6 +18,7 @@ import io.github.ilyaandreev05.audiomatrix.graph.RouterNode;
 import io.github.ilyaandreev05.audiomatrix.graph.SourceNode;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -37,10 +38,18 @@ final class GnomeQuickSettingsPins {
         try { commonGraph = GraphCommonVibro.graph(config); }
         catch (RuntimeException invalid) { /* Invalid common state is not published. */ }
         Map<String, AudioGraph> graphs = new LinkedHashMap<>();
-        if (commonGraph != null) graphs.put(GraphCommonVibro.COMMON_ROUTE_ID, commonGraph);
+        Map<String, List<String>> claims = new LinkedHashMap<>();
+        Set<String> generatedNodes = generatedNodeIds(instances);
+        if (commonGraph != null) {
+            graphs.put(GraphCommonVibro.COMMON_ROUTE_ID, commonGraph);
+            claims.put(GraphCommonVibro.COMMON_ROUTE_ID, GnomeQuickSettingsPinDetails.claimSelectors(commonGraph, generatedNodes));
+        }
         AudioGraph activeGraph = effectiveGraph != null && routeId.equals(effectiveGraph.id())
                 ? effectiveGraph : routeGraph(config, routeId);
-        if (activeGraph != null) graphs.put(routeId, activeGraph);
+        if (activeGraph != null) {
+            graphs.put(routeId, activeGraph);
+            claims.put(routeId, GnomeQuickSettingsPinDetails.claimSelectors(activeGraph, generatedNodes));
+        }
         List<Map<String, Object>> result = new ArrayList<>();
         List<Map<String, Object>> deferredSharedGain = new ArrayList<>();
         for (Map<String, Object> pin : QuickSettingsConfig.pins(config)) {
@@ -49,10 +58,14 @@ final class GnomeQuickSettingsPins {
             boolean active = routeId.equals(pinRouteId);
             if (!common && !active && !graphs.containsKey(pinRouteId)) {
                 AudioGraph inactive = routeGraph(config, pinRouteId);
-                if (inactive != null) graphs.put(pinRouteId, inactive);
+                if (inactive != null) {
+                    graphs.put(pinRouteId, inactive);
+                    claims.put(pinRouteId, GnomeQuickSettingsPinDetails.claimSelectors(inactive, generatedNodes));
+                }
             }
             AudioGraph pinGraph = graphs.get(pinRouteId);
             if (pinGraph == null) continue;
+            List<String> claimSelectors = claims.getOrDefault(pinRouteId, List.of());
             String nodeId = String.valueOf(pin.getOrDefault("node_id", ""));
             String instanceKey = String.valueOf(pin.getOrDefault("instance_key", ""));
             if (!instanceKey.isBlank()) {
@@ -71,13 +84,13 @@ final class GnomeQuickSettingsPins {
             if (node instanceof RouterNode router && router.multiple())
                 state.put("routeControl", routeControl(pinRouteId, router, pinGraph));
             if (node instanceof SourceNode source) {
-                publishApplications(state, source.selector(), applications, pinGraph);
+                publishApplications(state, source.selector(), applications, claimSelectors);
                 GainNode sourceGain = GnomeGraphSourceGain.forSource(pinGraph, source.id());
                 if (sourceGain != null) state.put("sourceGain", sourceGainState(
                         String.valueOf(pin.get("route_id")), source, sourceGain));
             }
             if (node instanceof DynamicGeneratorNode generator && "applications".equals(generator.registry()))
-                publishApplications(state, generator.selector(), applications, pinGraph);
+                publishApplications(state, generator.selector(), applications, claimSelectors);
             if (node instanceof OutputNode output)
                 state.put("output", GnomeQuickSettingsPinDetails.outputFor(output, pinGraph, snapshot, config, outputs));
             if (node instanceof DeviceSlotNode slot)
@@ -123,12 +136,22 @@ final class GnomeQuickSettingsPins {
 
     /** Publishes the applications served by a source node or by the catch-all application generator. */
     private static void publishApplications(Map<String, Object> state, String selector,
-                                            List<Map<String, Object>> applications, AudioGraph graph) {
+                                            List<Map<String, Object>> applications, List<String> claims) {
         List<Map<String, Object>> served = GnomeQuickSettingsPinDetails.applicationsFor(
-                selector, applications, graph);
+                selector, applications, claims);
         state.put("applications", served);
         state.put("tabAdapterAvailable", served.stream()
                 .anyMatch(app -> Boolean.TRUE.equals(app.get("tabAdapterAvailable"))));
+    }
+
+    /** The nodes the registry materialized for a generator instance: they never claim an application. */
+    private static Set<String> generatedNodeIds(Map<DynamicInstanceRegistry.InstanceAddress,
+                                                 DynamicInstanceRegistry.RuntimeInstance> instances) {
+        Set<String> result = new LinkedHashSet<>();
+        if (instances == null) return result;
+        for (DynamicInstanceRegistry.RuntimeInstance instance : instances.values())
+            result.addAll(instance.nodeIds().values());
+        return result;
     }
 
     private static Map<String, Object> pinState(Map<String, Object> pin, GraphNode node) {

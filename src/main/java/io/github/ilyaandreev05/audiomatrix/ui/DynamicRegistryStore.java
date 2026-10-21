@@ -79,8 +79,10 @@ final class DynamicRegistryStore {
                 Map<String,Object> params = mutableObject(node.get("parameters"));
                 if ("dynamic_generator".equals(node.get("type"))) params.remove("instances");
                 else if ("switch".equals(node.get("type")) || "multi_switch".equals(node.get("type"))) {
+                    // The generated port list is registry churn; the active links are the user's routing
+                    // choice and must reach the signature, otherwise toggling a generated branch is
+                    // saved but never applied to the running graph.
                     params.put("output_ports", strings(params.get("output_ports")).stream().filter(port -> !port.startsWith("generated-output-")).toList());
-                    params.put("active_links", strings(params.get("active_links")).stream().filter(link -> !link.contains("->generated-output-")).toList());
                 }
                 node.put("parameters", params);
             }

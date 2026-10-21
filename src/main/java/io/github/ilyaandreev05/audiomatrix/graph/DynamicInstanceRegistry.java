@@ -146,6 +146,10 @@ public final class DynamicInstanceRegistry {
     public static String stableOutputPortId(String generatorId, String deviceIdentityFingerprint) {
         return DynamicRegistryIdentity.stableOutputPortId(generatorId, deviceIdentityFingerprint);
     }
+    /** True when the port id names a runtime-generated MultiSwitch output branch. */
+    public static boolean isGeneratedOutputPort(String portId) {
+        return DynamicRegistryIdentity.isGeneratedOutputPort(portId);
+    }
     public static String stableMixerInputPortId(String generatorId, String instanceKey) {
         return DynamicRegistryIdentity.stableMixerInputPortId(generatorId, instanceKey);
     }
