@@ -28,6 +28,7 @@ extension_source="$repo_root/gnome/audio-matrix-quick-settings"
 gjs -m "$repo_root/scripts/test-gnome-quick-settings-state.js"
 node "$repo_root/scripts/test-menu-state-client.mjs"
 node "$repo_root/scripts/test-menu-adapter.mjs"
+node "$repo_root/scripts/test-volume-menu-lease.mjs"
 node "$repo_root/scripts/test-menu-renderer.mjs"
 node "$repo_root/scripts/test-menu-group-disclosure.mjs"
 node "$repo_root/scripts/test-menu-control-scale.mjs"
@@ -55,6 +56,7 @@ gnome-extensions pack "$extension_source" --force --out-dir "$scratch" \
     --extra-source=menu-groups.js \
     --extra-source=menu-renderer.js \
     --extra-source=menu-state.js \
+    --extra-source=menu-lease.js \
     --extra-source=volume-menu-adapter.js
 unzip -t "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip"
 

@@ -33,6 +33,12 @@ final class DynamicRouteRuntime implements AutoCloseable {
         Draft d = draft(config, snapshot, shared, generation); Map<String,Object> runtime = d.result == null ? d.compileBase : GraphPipeWireCompiler.compile(d.result, d.compileBase);
         return new Prepared(d.routeId, d.result, runtime, captureBindings(runtime), d.signature, d.base, d.newRules);
     }
+
+    /** Current discovery projection without persisting generated children or compiling runtime links. */
+    DynamicInstanceRegistry.ReconcileResult reconcileNow(Map<String,Object> config,
+            PipeWireBackend.Snapshot snapshot, List<BrowserAdapter> shared, long generation) {
+        return draft(config, snapshot, shared, generation).result;
+    }
     String signature(Map<String,Object> config, PipeWireBackend.Snapshot snapshot, List<BrowserAdapter> shared, long generation) { return draft(config, snapshot, shared, generation).signature; }
     CompletableFuture<DynamicInstanceRegistry.ReconcileResult> reconcileOnly(Map<String,Object> config, PipeWireBackend.Snapshot snapshot, List<BrowserAdapter> shared, long generation) {
         return CompletableFuture.supplyAsync(() -> draft(config, snapshot, shared, generation)).thenCompose(d -> persist(config, d, true).thenApply(ignored -> d.result));

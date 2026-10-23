@@ -62,8 +62,8 @@ final class PipeWireRouteProcessReconciler {
                 BusPlan before = previous == null ? null : previous.buses().get(bus.id());
                 if (changed || before == null || before.volume() != bus.volume() || before.muted() != bus.muted()) {
                     int id = runtime.findNodeId(bus.nodeName());
-                    WirePlumberMixerControl.setVolume(id, bus.volume());
-                    WirePlumberMixerControl.setMuted(id, bus.muted());
+                    runtime.setNodeVolume(id, bus.volume());
+                    runtime.setNodeMuted(id, bus.muted());
                 }
             } catch (Exception error) {
                 errors.put("bus:" + bus.id(), message(error));
@@ -111,8 +111,8 @@ final class PipeWireRouteProcessReconciler {
                         || level != Math.min(1.0, PipeWireRouteStaticSupport02.effectiveRoutePlaybackVolume(previous, before))
                         || muted != PipeWireRouteStaticSupport02.effectiveRoutePlaybackMuted(previous, before)) {
                     int id = runtime.findNodeId(route.playbackNodeName());
-                    WirePlumberMixerControl.setVolume(id, level);
-                    WirePlumberMixerControl.setMuted(id, muted);
+                    runtime.setNodeVolume(id, level);
+                    runtime.setNodeMuted(id, muted);
                 }
             } catch (Exception error) {
                 errors.put(owner, message(error));

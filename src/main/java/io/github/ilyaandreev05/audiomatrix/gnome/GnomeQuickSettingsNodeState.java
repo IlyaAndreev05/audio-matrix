@@ -10,7 +10,13 @@ import java.util.*;
 /** One capability-backed projection for saved nodes, composite children, and generated children. */
 final class GnomeQuickSettingsNodeState {
     record Inputs(Map<String,Object> config,PipeWireBackend.Snapshot snapshot,List<Map<String,Object>> controls,
-                  List<Map<String,Object>> applications) {}
+                  List<Map<String,Object>> applications,
+                  Map<DynamicInstanceRegistry.InstanceAddress,DynamicInstanceRegistry.RuntimeInstance> instances) {
+        Inputs(Map<String,Object> config,PipeWireBackend.Snapshot snapshot,List<Map<String,Object>> controls,
+               List<Map<String,Object>> applications) {
+            this(config,snapshot,controls,applications,Map.of());
+        }
+    }
     private GnomeQuickSettingsNodeState() {}
 
     static Map<String,Object> describe(Map<String,Object> pin,GraphNode node,AudioGraph graph,Inputs input,List<String> claims) {
@@ -39,7 +45,7 @@ final class GnomeQuickSettingsNodeState {
             if(endpoint instanceof OutputNode output)state.put("available",outputState(output,graph,input).get("available"));
             if(endpoint instanceof SourceNode source&&applicationSelector(source.selector()))
                 state.put("available",input.snapshot().connected()&&!GnomeQuickSettingsPinDetails.applicationsFor(source.selector(),input.applications(),claims).isEmpty());
-        }else if(node instanceof MixerNode mixer)state.put("mixerInputs",mixerInputs(graph,mixer,input.config()));
+        }else if(node instanceof MixerNode mixer)state.put("mixerInputs",mixerInputs(graph,mixer,input));
         return state;
     }
 
@@ -87,21 +93,12 @@ final class GnomeQuickSettingsNodeState {
         return GnomeQuickSettingsPinDetails.outputFor(output,graph,input.snapshot(),input.config());
     }
 
-    private static List<Map<String,Object>> mixerInputs(AudioGraph graph,MixerNode mixer,Map<String,Object> config){
+    private static List<Map<String,Object>> mixerInputs(AudioGraph graph,MixerNode mixer,Inputs input){
         List<Map<String,Object>> result=new ArrayList<>();
         for(Map.Entry<String,Double> entry:mixer.inputGains().entrySet()){
-            GraphConnection edge=graph.connections().stream().filter(GraphConnection::enabled)
-                    .filter(link->mixer.id().equals(link.toNode())&&entry.getKey().equals(link.toPort())).findFirst().orElse(null);
-            GraphNode source=edge==null?null:node(graph,edge.fromNode());
-            if(source instanceof GainNode gain&&!gain.endpointNodeId().isBlank()){
-                GraphNode endpoint=node(graph,gain.endpointNodeId());if(endpoint!=null)source=endpoint;
-            }
-            String name=source instanceof OutputNode output
-                    ?DeviceDisplayNames.displayName(config,output.deviceId(),output.name())
-                    :source instanceof DeviceSlotNode slot
-                    ?DeviceDisplayNames.displayName(config,slot.deviceId(),slot.name())
-                    :DeviceDisplayNames.displayLabel(source==null?entry.getKey():source.name(),"Вход микшера");
-            result.add(Map.of("id",entry.getKey(),"name",name,
+            var presentation=GraphMixerInputPresentation.describe(graph,mixer,entry.getKey(),input.config(),
+                    input.instances(),input.snapshot().connected());
+            result.add(Map.of("id",entry.getKey(),"name",presentation.name(),"available",presentation.available(),
                     "volume",entry.getValue(),"muted",mixer.inputMuted(entry.getKey())));
         }
         return List.copyOf(result);

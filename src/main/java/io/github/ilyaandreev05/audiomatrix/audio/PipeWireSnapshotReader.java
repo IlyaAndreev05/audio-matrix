@@ -11,6 +11,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 /** Reads PipeWire node, stream, client, and default-output state into one snapshot. */
 final class PipeWireSnapshotReader {
@@ -18,9 +19,18 @@ final class PipeWireSnapshotReader {
 
     PipeWireBackend.Snapshot read(PipeWireBackend.Snapshot previous) throws Exception {
         requireTools();
-        String dump = PipeWireBackend.run(List.of("pw-dump", "-N"), Duration.ofSeconds(6));
+        CompletableFuture<String> dump = CompletableFuture.supplyAsync(() -> {
+            try { return PipeWireBackend.run(List.of("pw-dump", "-N"), Duration.ofSeconds(6)); }
+            catch (Exception error) { throw new java.util.concurrent.CompletionException(error); }
+        });
         String status = PipeWireBackend.run(List.of("wpctl", "status"), Duration.ofSeconds(3));
-        JsonNode root = json.readTree(dump);
+        String dumpText;
+        try { dumpText = dump.join(); }
+        catch (java.util.concurrent.CompletionException error) {
+            if (error.getCause() instanceof Exception cause) throw cause;
+            throw error;
+        }
+        JsonNode root = json.readTree(dumpText);
         if (!root.isArray()) throw new IOException("pw-dump returned an unexpected document");
         Map<Integer, PipeWireBackend.LevelState> levels = levelStates(status);
         Map<Integer, JsonNode> clients = clientProperties(root);

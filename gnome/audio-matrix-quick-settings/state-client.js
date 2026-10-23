@@ -33,6 +33,21 @@ function canonical(value) {
     return JSON.stringify(value);
 }
 
+function mixerInput(state, routeId, nodeId, inputId) {
+    const visit = pins => {
+        for (const pin of pins || []) {
+            if (String(pin.routeId) === routeId && String(pin.nodeId) === nodeId) {
+                const input = (pin.mixerInputs || []).find(item => String(item.id) === inputId);
+                if (input) return input;
+            }
+            const nested = visit(pin.children);
+            if (nested) return nested;
+        }
+        return null;
+    };
+    return visit(state?.quickPins);
+}
+
 function commandShape(name, value, state, pending) {
     if (name === 'setNodeVolume' || name === 'setNodeMuted') {
         const target = normalizeTarget(value?.target, ['routeId', 'nodeId', 'instanceKey']);
@@ -84,6 +99,17 @@ function commandShape(name, value, state, pending) {
         if (!routeId || !nodeId || !inputId || !Number.isFinite(desired) || desired < 0 || desired > 1)
             throw new TypeError('Mixer input volume must be between 0 and 1');
         return {payload: value, target: {routeId, nodeId, inputId}, property: 'volume', desired};
+    }
+    if (name === 'toggle_mixer_input_mute') {
+        const [routeId, nodeId, inputId] = String(value).split('\t');
+        if (!routeId || !nodeId || !inputId)
+            throw new TypeError('Mixer input command is malformed');
+        const target = {routeId, nodeId, inputId};
+        const current = pending.find(intent => intent.property === 'muted'
+            && canonical(intent.target) === canonical(target));
+        const input = mixerInput(state, routeId, nodeId, inputId);
+        return {payload: value, target, property: 'muted',
+            desired: !(current?.value ?? Boolean(input?.muted))};
     }
     return {payload: value, target: null, property: null, desired: null};
 }

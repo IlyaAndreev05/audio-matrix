@@ -1,12 +1,11 @@
+/* The section lives directly inside GNOME's output submenu, so it must not
+   draw its own frame or reserve root-layout width. */
 .audio-matrix-panel {
     color: #f2f2f3;
-    border-top: 1px solid #464646;
-    padding-top: 12px;
-    max-width: 540px;
 }
 
 .audio-matrix-heading {
-    padding: 2px 2px 13px;
+    padding: 2px 2px 11px;
 }
 
 .audio-matrix-title {

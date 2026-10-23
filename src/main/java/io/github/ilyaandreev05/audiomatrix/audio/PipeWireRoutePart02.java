@@ -11,6 +11,15 @@ abstract class PipeWireRoutePart02 extends PipeWireRoutePart01 {
     @Override
     protected ApplyReport reconcilePipeWireGraph(Plan plan, String signature, int transitionMs) throws Exception {
         desiredLinks.clear();
+        Plan previous = appliedPlan;
+        if (active && PipeWireRouteLevelOnlyReconciler.canApply(previous, plan, processesAlive(), branchDiagnostics)
+                && PipeWireRouteLevelOnlyReconciler.apply(this, previous, plan)) {
+            appliedPlan = plan;
+            appliedSignature = signature;
+            activeTransitionMs = transitionMs;
+            skippedStreamCount = 0;
+            return reportAppliedPlan(plan);
+        }
         Map<String, String> processErrors = PipeWireRouteProcessReconciler.prepare(this, plan);
         Map<String, BranchDiagnostic> branches = PipeWireRouteBranchLinks.reconcile(this, plan, processErrors);
         branchDiagnostics = Map.copyOf(branches);

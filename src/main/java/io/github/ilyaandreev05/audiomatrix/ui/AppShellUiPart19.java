@@ -195,6 +195,11 @@ abstract class AppShellUiPart19 extends AppShellUiPart18 {
         return dynamicRuntime.prepareNow(config, snapshot, browserAdapters, backend.connectionGeneration()).runtimeConfig();
     }
 
+    protected io.github.ilyaandreev05.audiomatrix.graph.DynamicInstanceRegistry.ReconcileResult currentMixerGraph(
+            Map<String,Object> config) {
+        return dynamicRuntime.reconcileNow(config, snapshot, browserAdapters, backend.connectionGeneration());
+    }
+
     protected String routeInputSignature(Map<String, Object> config, PipeWireBackend.Snapshot current, long generation) { return dynamicRuntime.signature(config, current, browserAdapters, generation); }
 
     public synchronized CompletableFuture<Void> closeAsync() {

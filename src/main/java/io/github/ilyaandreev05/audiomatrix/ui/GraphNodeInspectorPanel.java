@@ -82,7 +82,8 @@ final class GraphNodeInspectorPanel {
             row.getChildren().add(shell.label(node.name()+" · "+GraphNodeLabels.typeName(node,shell::t),"card-title"));
             if(node instanceof GainNode gain)row.getChildren().add(GraphGainControl.create(gain,shell.t("Уровень графа: ","Graph level: ")+gain.name(),(level,muted)->shell.updateGraphNodeParameters(graph.id(),gain.id(),parameters->{if(level!=null)parameters.put("gain",level);parameters.put("muted",muted);})));
             else if(node instanceof MixerNode mixer){
-                row.getChildren().add(GraphMixerControls.create(mixer,shell.t("Уровень и mute входов","Mixer input levels and mute"),shell.t("Mute","Mute"),
+                row.getChildren().add(GraphMixerControls.create(graph,mixer,shell.store.snapshot(),shell.dynamicGraphState(graph.id()),shell.snapshot.connected(),
+                        shell.t("Уровень и mute входов","Mixer input levels and mute"),shell.t("Mute","Mute"),
                         (port,gain)->shell.updateGraphMixerInput(graph.id(),mixer.id(),port,gain,null),
                         (port,muted)->shell.updateGraphMixerInput(graph.id(),mixer.id(),port,null,muted)));
             }

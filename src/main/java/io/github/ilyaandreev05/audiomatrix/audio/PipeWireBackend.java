@@ -21,7 +21,6 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -35,9 +34,10 @@ public final class PipeWireBackend implements AutoCloseable {
     // Calibration owns the separate IO pool so recording never blocks interactive controls.
     private final ExecutorService controls = Executors.newSingleThreadExecutor(r -> daemon(r, "audio-matrix-pipewire-control"));
     private final ScheduledExecutorService changes = Executors.newSingleThreadScheduledExecutor(r -> daemon(r, "audio-matrix-pipewire-events"));
+    private final PipeWireRefreshCoalescer refreshes = new PipeWireRefreshCoalescer(changes, this::refresh,
+            snapshot -> this.listener.accept(snapshot));
     private final PipeWireCalibrationController calibration = new PipeWireCalibrationController(io);
     private final AtomicBoolean closed = new AtomicBoolean();
-    private final AtomicBoolean refreshQueued = new AtomicBoolean();
     private final AtomicLong connectionGeneration = new AtomicLong();
     private final PipeWireLevelMonitor outputLevelMonitor = new PipeWireLevelMonitor();
     private final PipeWireLevelMonitor inputLevelMonitor = new PipeWireLevelMonitor();
@@ -164,29 +164,16 @@ public final class PipeWireBackend implements AutoCloseable {
                 if (!executable("pw-dump")) throw new IOException("pw-dump is unavailable");
                 monitor = new ProcessBuilder("pw-dump", "--monitor", "--no-colors").redirectErrorStream(true).start();
                 try (BufferedReader reader = new BufferedReader(new InputStreamReader(monitor.getInputStream()))) {
-                    boolean initial = false; int depth = 0; boolean inString = false, escaped = false;
+                    PipeWireMonitorChange change = new PipeWireMonitorChange();
                     String line;
                     while (!closed.get() && (line = reader.readLine()) != null) {
-                        if (initial) {
-                            if (!line.isBlank()) queueRefresh();
-                            continue;
+                        PipeWireMonitorChange.Update update = change.accept(line);
+                        if (update == null) continue;
+                        if (update.initialCompleted() && reconnect.initialSnapshotReceived()) {
+                            connectionGeneration.incrementAndGet();
+                            refreshes.request(false);
                         }
-                        for (int i = 0; i < line.length(); i++) {
-                            char c = line.charAt(i);
-                            if (inString) { if (escaped) escaped = false; else if (c == '\\') escaped = true; else if (c == '"') inString = false; continue; }
-                            if (c == '"') inString = true;
-                            else if (c == '[') depth++;
-                            else if (c == ']') {
-                                depth--;
-                                if (depth == 0) {
-                                    initial = true;
-                                    if (reconnect.initialSnapshotReceived()) {
-                                        connectionGeneration.incrementAndGet();
-                                        queueReconnectRefresh();
-                                    }
-                                }
-                            }
-                        }
+                        if (update.payload() != null) refreshes.request(PipeWireMonitorChange.levelOnly(update.payload()));
                     }
                 }
                 if (!closed.get()) {
@@ -202,14 +189,6 @@ public final class PipeWireBackend implements AutoCloseable {
                 }
             }
         }
-    }
-    private void queueRefresh() {
-        if (!refreshQueued.compareAndSet(false, true)) return;
-        changes.schedule(() -> refresh().thenAccept(snapshot -> listener.accept(snapshot)).whenComplete((ignored, error) -> refreshQueued.set(false)), 250, TimeUnit.MILLISECONDS);
-    }
-    private void queueReconnectRefresh() {
-        if (closed.get()) return;
-        changes.schedule(() -> refresh().thenAccept(snapshot -> listener.accept(snapshot)), 250, TimeUnit.MILLISECONDS);
     }
     private CompletableFuture<Void> execute(String... command) {
         return control(() -> { run(List.of(command), Duration.ofSeconds(4)); return null; });
@@ -239,6 +218,7 @@ public final class PipeWireBackend implements AutoCloseable {
 
     @Override public void close() {
         closed.set(true);
+        refreshes.close();
         calibration.close();
         outputLevelMonitor.close();
         inputLevelMonitor.close();

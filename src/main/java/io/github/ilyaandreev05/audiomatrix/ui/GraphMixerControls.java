@@ -1,6 +1,10 @@
 package io.github.ilyaandreev05.audiomatrix.ui;
 
+import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
+import io.github.ilyaandreev05.audiomatrix.graph.DynamicInstanceRegistry;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphMixerInputPresentation;
 import io.github.ilyaandreev05.audiomatrix.graph.MixerNode;
+import java.util.Map;
 import javafx.geometry.Pos;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
@@ -14,21 +18,26 @@ import java.util.function.BiConsumer;
 final class GraphMixerControls {
     private GraphMixerControls() {}
 
-    static VBox create(MixerNode mixer, String title, String muteLabel,
+    static VBox create(AudioGraph graph, MixerNode mixer, Map<String, Object> config,
+                       DynamicInstanceRegistry.ReconcileResult runtime, boolean connected, String title, String muteLabel,
                        BiConsumer<String, Double> setGain, BiConsumer<String, Boolean> setMute) {
         VBox controls = new VBox(5);
         controls.getChildren().add(new Label(title));
-        for (String port : mixer.inputGains().keySet())
-            controls.getChildren().add(inputRow(mixer, port, muteLabel, setGain, setMute));
+        AudioGraph effective = runtime == null ? graph : runtime.effectiveGraph();
+        for (String port : mixer.inputGains().keySet()) {
+            var presentation = GraphMixerInputPresentation.describe(effective, mixer, port, config,
+                    runtime == null ? Map.of() : runtime.instances(), connected);
+            controls.getChildren().add(inputRow(mixer, port, presentation, muteLabel, setGain, setMute));
+        }
         return controls;
     }
 
-    private static HBox inputRow(MixerNode mixer, String port, String muteLabel,
+    private static HBox inputRow(MixerNode mixer, String port, GraphMixerInputPresentation.Input presentation, String muteLabel,
                                  BiConsumer<String, Double> setGain, BiConsumer<String, Boolean> setMute) {
         boolean muted = mixer.inputMuted(port);
         double stored = mixer.inputGains().get(port);
         double effective = muted ? 0 : stored;
-        Label name = new Label(port);
+        Label name = new Label(presentation.name());
         name.setMinWidth(90);
         Slider level = new Slider(0, 1, effective);
         level.setPrefWidth(135);
@@ -43,6 +52,7 @@ final class GraphMixerControls {
         mute.setOnAction(event -> setMute.accept(port, mute.isSelected()));
         HBox row = new HBox(7, name, level, percent, mute);
         row.setAlignment(Pos.CENTER_LEFT);
+        row.setDisable(!presentation.available());
         return row;
     }
 

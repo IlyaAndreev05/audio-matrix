@@ -94,10 +94,16 @@ abstract class PipeWireRoutePart06 extends PipeWireRouteReconciliation {
     }
 
     protected int findNodeId(String nodeName) throws Exception {
+        Integer cached = resolvedNodeIds.get(nodeName);
+        if (cached != null) return cached;
         JsonNode root = json.readTree(run(List.of("pw-dump", "-N"), Duration.ofSeconds(4)));
         if (!root.isArray()) throw new IOException("pw-dump returned an unexpected document");
         for (JsonNode object : root) {
-            if (nodeName.equals(object.path("info").path("props").path("node.name").asText())) return object.path("id").asInt(-1);
+            if (nodeName.equals(object.path("info").path("props").path("node.name").asText())) {
+                int id = object.path("id").asInt(-1);
+                resolvedNodeIds.put(nodeName, id);
+                return id;
+            }
         }
         throw new IOException("PipeWire node was not found: " + nodeName);
     }
@@ -108,6 +114,7 @@ abstract class PipeWireRoutePart06 extends PipeWireRouteReconciliation {
     }
 
     protected void stopProcesses(Map<String, ManagedProcess> processes) {
+        resolvedNodeIds.clear();
         for (ManagedProcess managed : new ArrayList<>(processes.values())) {
             Process process = managed.process();
             process.destroy();

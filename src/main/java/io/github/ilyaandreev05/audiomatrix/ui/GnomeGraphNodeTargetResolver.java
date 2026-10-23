@@ -147,7 +147,7 @@ final class GnomeGraphNodeTargetResolver {
         throw new IllegalArgumentException("Generated instance has no supported runtime binding");
     }
 
-    private static boolean sameGeneratorDefinition(DynamicGeneratorNode saved, DynamicGeneratorNode runtime) {
+    static boolean sameGeneratorDefinition(DynamicGeneratorNode saved, DynamicGeneratorNode runtime) {
         return saved.registry().equals(runtime.registry())
                 && saved.selector().equals(runtime.selector())
                 && saved.template().equals(runtime.template())

@@ -29,9 +29,15 @@ final class DynamicRegistryIdentity {
     static boolean isGeneratedOutputPort(String portId) {
         return portId != null && portId.startsWith(GENERATED_OUTPUT_PREFIX);
     }
+    /** The port-id prefix of the Mixer inputs the dynamic registry materialises. */
+    static final String GENERATED_MIXER_INPUT_PREFIX = "generated-mixer-input-";
     static String stableMixerInputPortId(String generatorId, String instanceKey) {
-        return "generated-mixer-input-" + UUID.nameUUIDFromBytes((generatorId + "\u0000" + instanceKey
+        return GENERATED_MIXER_INPUT_PREFIX + UUID.nameUUIDFromBytes((generatorId + "\u0000" + instanceKey
                 + "\u0000mixer-input").getBytes(StandardCharsets.UTF_8));
+    }
+    /** True for a port id of a runtime-generated Mixer input branch. */
+    static boolean isGeneratedMixerInputPort(String portId) {
+        return portId != null && portId.startsWith(GENERATED_MIXER_INPUT_PREFIX);
     }
     static String stableConnectionId(String generatorId, String instanceKey, String role) {
         return "generated-link-" + UUID.nameUUIDFromBytes((generatorId + "\u0000" + instanceKey + "\u0000" + role)

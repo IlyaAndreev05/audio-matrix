@@ -153,6 +153,10 @@ public final class DynamicInstanceRegistry {
     public static String stableMixerInputPortId(String generatorId, String instanceKey) {
         return DynamicRegistryIdentity.stableMixerInputPortId(generatorId, instanceKey);
     }
+    /** True when the port id names a runtime-generated Mixer input; the prefix alone never proves an owner. */
+    public static boolean isGeneratedMixerInputPort(String portId) {
+        return DynamicRegistryIdentity.isGeneratedMixerInputPort(portId);
+    }
     public static RuntimeInstance requireInstance(ReconcileResult result, String generatorId, String instanceKey,
             boolean requireAvailable) {
         return DynamicRegistryQueries.requireInstance(result, generatorId, instanceKey, requireAvailable);

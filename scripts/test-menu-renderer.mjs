@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {orderedQuickGroups, visibleBrowserTabs} from '../gnome/audio-matrix-quick-settings/menu-state.js';
+import {orderedQuickGroups, visibleBrowserTabs, menuLevelRows, allQuickPins} from '../gnome/audio-matrix-quick-settings/menu-state.js';
 import {captureMenuViewport, restoreMenuViewport} from '../gnome/audio-matrix-quick-settings/menu-viewport.js';
 
 class Actor {
@@ -46,10 +46,21 @@ function reorderMenuItems(section, previous, desired) {
     for (const item of previous) removeMenuItem(section, item);
     for (const item of desired) section.addMenuItem(item);
 }
-const fixture = {PopupMenu, Atk: {StateType: {EXPANDABLE: 1, EXPANDED: 2, CHECKED: 3}, Role: {CHECK_BOX: 1}},
-    St: {Label, Icon: Actor, Bin: Actor}, Clutter: {ActorAlign: {CENTER: 0}},
+const fixture = {PopupMenu, Atk: {StateType: {EXPANDABLE: 1, EXPANDED: 2, CHECKED: 3},
+        Role: {CHECK_BOX: 1, TOGGLE_BUTTON: 4}},
+    St: {Label, Icon: Actor, Bin: Actor, Button: Actor, ScrollView: Actor,
+        PolicyType: {NEVER: 0, AUTOMATIC: 1}},
+    Slider: {Slider: class FakeSlider extends Actor {
+        constructor(value) { super(); this.value = value; this.reactive = true; this.can_focus = true; }
+        block_signal_handler() {}
+        unblock_signal_handler() {}
+    }},
+    Pango: {EllipsizeMode: {END: 0}},
+    Meta: {LaterType: {BEFORE_REDRAW: 1}},
+    TEXT: {ru: {volume: 'Громкость', mute: 'Выключить звук', unmute: 'Включить звук'}},
+    Clutter: {ActorAlign: {CENTER: 0}},
     boxLayout: properties => new Actor(properties), outputIcon: () => 'audio-speakers-symbolic',
-    orderedQuickGroups, visibleBrowserTabs, removeMenuItem, reorderMenuItems,
+    orderedQuickGroups, visibleBrowserTabs, menuLevelRows, allQuickPins, removeMenuItem, reorderMenuItems,
     applicationIcon: () => 'application-x-executable-symbolic'};
 globalThis.audioMatrixRendererFixture = fixture;
 async function loadModule(name) {
@@ -112,5 +123,64 @@ let focusedActor = null;
 restoreMenuViewport(scroll, viewport, [{id: 'retained-card', actor: anchorActor}], actor => focusedActor = actor);
 assert.equal(anchorActor.get_transformed_position()[1], viewport.anchor.offset, 'Insertion preserves the scroll anchor offset');
 assert.equal(focusedActor, null, 'The retained actor keeps keyboard focus');
+
+{
+    // A generated Mixer input without a live owner keeps a human label but no interaction, and the
+    // renderer forwards that per-row availability instead of only the bridge connection state.
+    const Rows = await loadModule('menu-rows.js');
+    fixture.AudioMatrixMenuRows = Rows;
+    const Mixer = await loadModule('menu-mixer.js');
+    const Renderer = await loadModule('menu-renderer.js');
+    const rows = new Rows({section: new Section(), getLanguage: () => 'ru', send() {},
+        queueSliderCommand: (_key, value, callback) => callback(value),
+        onOpen() {}, onDragBegin() {}, onDragEnd() {}});
+    const mixerRows = new Map();
+    const sent = [];
+    const mixer = new Mixer({rows, send: (name, value) => sent.push([name, value]),
+        registerLevelRow: (id, row) => mixerRows.set(id, row)});
+    const nodeId = 'octine-main-mixer';
+    const generated = 'generated-mixer-input-4a5b';
+    const inputs = available => [
+        {id: 'applications', name: 'Все приложения, кроме событий', volume: 1, muted: false, available: true},
+        {id: generated, name: 'Проигрыватель', volume: 0.4, muted: false, available},
+    ];
+    const t = {applicationUnavailable: 'Приложение недоступно'};
+    mixer.render('main', nodeId, 'smoke-mixer', inputs(true), t, new Section());
+    const online = mixerRows.get(`mixer:smoke-mixer:${generated}`);
+    assert.deepEqual(online._audioMatrixCommandTarget, {routeId: 'main', nodeId, inputId: generated},
+        'the pinned mixer row carries the exact route/node/input identity');
+    assert.equal(online._audioMatrixSlider.reactive, true);
+    online._audioMatrixSlider.value = 0.42;
+    online._audioMatrixSlider.emit('notify::value');
+    assert.deepEqual(sent.at(-1), ['set_mixer_input_volume', `main\t${nodeId}\t${generated}\t0.420`]);
+    const muteButton = online.children[0].children[0].children.find(child => child.accessible_role === 4);
+    assert.ok(muteButton, 'the mixer row has its mute toggle');
+    muteButton.emit('clicked');
+    assert.deepEqual(sent.at(-1), ['toggle_mixer_input_mute', `main\t${nodeId}\t${generated}`],
+        'the mute toggle sends routeId TAB nodeId TAB inputId without a volume field');
+
+    const renderer = Object.create(Renderer.prototype);
+    renderer._levelRows = mixerRows;
+    renderer._rows = rows;
+    renderer._links = {update() {}, setAvailable() {}};
+    const pin = {id: 'smoke-mixer', routeId: 'main', nodeId, mixerInputs: inputs(true)};
+    renderer._updateControls({quickPins: [pin]}, [], true);
+    assert.equal(online._audioMatrixSlider.reactive, true);
+    pin.mixerInputs = inputs(false);
+    renderer._updateControls({quickPins: [pin]}, [], true);
+    assert.equal(online._audioMatrixSlider.reactive, false,
+        'an input without a live owner must not accept commands');
+    assert.equal(online.opacity, 145);
+    pin.mixerInputs = inputs(true);
+    renderer._updateControls({quickPins: [pin]}, [], true);
+    assert.equal(online._audioMatrixSlider.reactive, true, 'a reconnected input becomes interactive again');
+
+    mixer.render('main', nodeId, 'unknown-pin',
+        [{id: 'generated-mixer-input-orphan', volume: 1, muted: false, available: false}], t, new Section());
+    const orphan = mixerRows.get('mixer:unknown-pin:generated-mixer-input-orphan');
+    assert.equal(orphan._audioMatrixSlider.accessible_name, 'Громкость: Приложение недоступно',
+        'an unresolved generated input shows a human fallback instead of its port id');
+}
+
 delete globalThis.audioMatrixRendererFixture;
 console.log('Native card behavior: exact routing, offline state, stable application cards and scroll anchors');

@@ -57,9 +57,9 @@ const source = (await readFile(new URL('state-client.js', base), 'utf8'))
         'const {AudioMatrixStateRenderScheduler} = globalThis.audioMatrixStateClientFixture;');
 const {default: StateClient} = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 
-function state(epoch, sequence, {acks = [], volume = 0.9, muted = false, activeProfileId = 'main', applications = []} = {}) {
+function state(epoch, sequence, {acks = [], volume = 0.9, muted = false, activeProfileId = 'main', applications = [], quickPins = []} = {}) {
     return {apiVersion: 5, revision: 'revision', connected: true, language: 'en', stateEpoch: epoch,
-        stateSequence: sequence, commandAcks: acks, activeProfileId, volume, muted, applications};
+        stateSequence: sequence, commandAcks: acks, activeProfileId, volume, muted, applications, quickPins};
 }
 function deliver(client, value) {
     client._receiveState({deepUnpack: () => [JSON.stringify(value)]});
@@ -191,6 +191,65 @@ const target = {routeId: 'main', nodeId: 'gain-1', instanceKey: ''};
         'the matching State ACK settles against the observed application level');
 }
 
+{
+    // A generated Mixer input lives in a pinned Mixer node: its volume and mute must settle on the
+    // same ordered State ACK that the bridge publishes, or the row jumps back and a mute click
+    // reports a timeout even though the engine applied it.
+    const client = makeClient();
+    const pinId = 'smoke-mixer';
+    const nodeId = 'octine-main-mixer';
+    const inputId = 'generated-mixer-input-9f1c';
+    const target = {routeId: 'main', nodeId, inputId};
+    const pins = available => [{id: pinId, routeId: 'main', nodeId, mixerInputs: [
+        {id: 'applications', name: 'Все приложения, кроме событий', volume: 1, muted: false, available: true},
+        {id: inputId, name: 'Проигрыватель', volume: 0.9, muted: false, available},
+    ]}];
+    deliver(client, state('epoch-a', 2, {quickPins: pins(true)}));
+
+    const volumeRequest = client.send('set_mixer_input_volume', `main\t${nodeId}\t${inputId}\t0.350`);
+    const [, , , volumeName, volumePayload] = commandValue();
+    assert.equal(volumeName, 'set_mixer_input_volume');
+    assert.equal(volumePayload, `main\t${nodeId}\t${inputId}\t0.350`);
+    assert.deepEqual(client.snapshot().pendingIntents[0],
+        {requestId: volumeRequest, target, property: 'volume', value: 0.35});
+    deliver(client, state('epoch-a', 3, {quickPins: pins(true),
+        acks: [ackFor(volumeRequest, target, 'volume', 'ok', 0.35)]}));
+    assert.equal(client.snapshot().pendingIntents.length, 0, 'the bridge volume ACK settles the generated input');
+    assert.equal(client.snapshot().commandError, '');
+
+    const muteRequest = client.send('toggle_mixer_input_mute', `main\t${nodeId}\t${inputId}`);
+    const [, , , muteName, mutePayload] = commandValue();
+    assert.equal(muteName, 'toggle_mixer_input_mute');
+    assert.equal(mutePayload, `main\t${nodeId}\t${inputId}`,
+        'the pinned toggle payload stays routeId TAB nodeId TAB inputId');
+    assert.deepEqual(client.snapshot().pendingIntents[0],
+        {requestId: muteRequest, target, property: 'muted', value: true},
+        'a mute toggle tracks the observed state so its ACK can settle it');
+    deliver(client, state('epoch-a', 4, {quickPins: pins(true)}));
+    assert.equal(client.snapshot().pendingIntents[0].value, true,
+        'an intermediate State without the ACK cannot settle or bounce the mute toggle');
+    assert.equal(client.snapshot().commandError, '');
+    const secondMute = client.send('toggle_mixer_input_mute', `main\t${nodeId}\t${inputId}`);
+    assert.equal(client.snapshot().pendingIntents[0].value, false,
+        'a second toggle inverts the pending value instead of the stale observation');
+    deliver(client, state('epoch-a', 5, {
+        quickPins: [{id: pinId, routeId: 'main', nodeId, mixerInputs: [
+            {id: 'applications', name: 'Все приложения, кроме событий', volume: 1, muted: false, available: true},
+            {id: inputId, name: 'Проигрыватель', volume: 0.9, muted: true, available: true},
+        ]}], acks: [ackFor(secondMute, target, 'muted', 'ok', null)]}));
+    assert.equal(client.snapshot().pendingIntents.length, 0, 'a successful mute ACK carries no value and still settles');
+    assert.equal(client.snapshot().commandError, '', 'an applied mute must not report a delayed timeout');
+    assert.equal(client._intentTracker._requests.size, 0, 'the settled mute leaves no timeout behind');
+    assert.equal(client.snapshot().state.quickPins[0].mixerInputs[1].muted, true);
+
+    const rejected = client.send('set_mixer_input_volume', `main\t${nodeId}\t${inputId}\t0.100`);
+    deliver(client, state('epoch-a', 6, {quickPins: pins(true),
+        acks: [ackFor(rejected, target, 'volume', 'error', null, 'Mixer input has no live owner')]}));
+    assert.equal(client.snapshot().pendingIntents.length, 0, 'a rejected mixer command drops its optimistic value');
+    assert.equal(client.snapshot().commandError, 'Mixer input has no live owner');
+    assert.equal(client.snapshot().state.quickPins[0].mixerInputs[1].volume, 0.9,
+        'the row falls back to the observed level instead of a masked success');
+}
 
 delete globalThis.audioMatrixStateClientFixture;
 console.log('State client v5 tests cover ordered State ACKs, coalesced intents, rollback, and epochs');

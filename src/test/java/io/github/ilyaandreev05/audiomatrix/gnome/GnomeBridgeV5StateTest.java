@@ -73,6 +73,33 @@ class GnomeBridgeV5StateTest {
         assertEquals("ok", ack.get("status"));
     }
 
+    @Test void mixerInputAcksConfirmTheExactPinnedTargetForVolumeAndMute() {
+        String target = "main\toctine-main-mixer\tgenerated-mixer-input-9f1c";
+        GnomeControlBridge.Command volume = new GnomeControlBridge.Command(5, "client:mix-v", "41",
+                "set_mixer_input_volume", target + "\t0.350");
+
+        Map<String, Object> ack = GnomeBridgeCommandAck.create(volume,
+                new GnomeControlBridge.CommandResult("ok", "Applied"), json);
+
+        assertEquals("client:mix-v", ack.get("requestId"));
+        assertEquals(Map.of("routeId", "main", "nodeId", "octine-main-mixer",
+                "inputId", "generated-mixer-input-9f1c"), ack.get("target"));
+        assertEquals("volume", ack.get("property"), "the extension tracks the volume intent under this name");
+        assertEquals(0.35, ack.get("value"));
+        assertEquals("ok", ack.get("status"));
+
+        GnomeControlBridge.Command mute = new GnomeControlBridge.Command(5, "client:mix-m", "41",
+                "toggle_mixer_input_mute", target);
+        Map<String, Object> toggled = GnomeBridgeCommandAck.create(mute,
+                new GnomeControlBridge.CommandResult("ok", "Applied"), json);
+
+        assertEquals("client:mix-m", toggled.get("requestId"));
+        assertEquals(ack.get("target"), toggled.get("target"), "a toggle confirms the same pinned identity");
+        assertEquals("muted", toggled.get("property"), "the extension tracks the mute intent under this name");
+        assertNull(toggled.get("value"), "a toggle has no desired value; the client's own intent carries it");
+        assertEquals("ok", toggled.get("status"));
+    }
+
     @Test void profileProjectionKeepsStableChoicesAndOnlySelectorFields() {
         Map<String, Object> config = Map.of("profiles", List.of(
                 Map.of("id", "main", "name", "Основной", "mode", "multi-output"),

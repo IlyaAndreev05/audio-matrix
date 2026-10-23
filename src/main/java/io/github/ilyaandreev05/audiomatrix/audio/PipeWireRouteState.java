@@ -43,6 +43,8 @@ abstract class PipeWireRouteState extends PipeWireRouteStaticSupport04 implement
     protected final Set<Link> observedLinks = new HashSet<>();
     protected final Map<String, Set<Link>> branchOwnedLinks = new LinkedHashMap<>();
     protected final Map<String, String> processSpecifications = new LinkedHashMap<>();
+    /** Node ids proven by the running owned processes; cleared whenever a process is stopped. */
+    protected final Map<String, Integer> resolvedNodeIds = new LinkedHashMap<>();
     protected volatile Map<String, BranchDiagnostic> branchDiagnostics = Map.of();
     protected int skippedStreamCount;
     protected volatile boolean active;
@@ -63,6 +65,30 @@ abstract class PipeWireRouteState extends PipeWireRouteStaticSupport04 implement
             if (error.getMessage() != null && error.getMessage().startsWith("Command timed out:")) commandTimeouts++;
             throw error;
         }
+    }
+
+    /** Resolves every requested node name in one graph dump; missing names stay absent. */
+    protected Map<String, Integer> findNodeIds(Set<String> names) throws Exception {
+        JsonNode root = json.readTree(run(List.of("pw-dump", "-N"), Duration.ofSeconds(4)));
+        if (!root.isArray()) throw new IOException("pw-dump returned an unexpected document");
+        Map<String, Integer> ids = new LinkedHashMap<>();
+        for (JsonNode object : root) {
+            String name = object.path("info").path("props").path("node.name").asText();
+            if (names.contains(name)) {
+                int id = object.path("id").asInt(-1);
+                ids.putIfAbsent(name, id);
+                resolvedNodeIds.put(name, id);
+            }
+        }
+        return ids;
+    }
+
+    protected void setNodeVolume(int nodeId, double volume) throws Exception {
+        WirePlumberMixerControl.setVolume(nodeId, volume);
+    }
+
+    protected void setNodeMuted(int nodeId, boolean muted) throws Exception {
+        WirePlumberMixerControl.setMuted(nodeId, muted);
     }
 
     protected void publishDiagnostics() {

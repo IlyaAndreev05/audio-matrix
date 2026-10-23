@@ -23,7 +23,8 @@ final class GnomeQuickSettingsPins {
         String routeId = String.valueOf(config.getOrDefault("active_route", ""));
         List<Map<String,Object>> savedPins=QuickSettingsConfig.pins(config).stream()
                 .filter(pin->!Boolean.FALSE.equals(pin.get("pinned"))).toList();
-        GnomeQuickSettingsNodeState.Inputs input=new GnomeQuickSettingsNodeState.Inputs(config,snapshot,quickControls,applications);
+        GnomeQuickSettingsNodeState.Inputs input=new GnomeQuickSettingsNodeState.Inputs(config,snapshot,quickControls,applications,
+                instances==null?Map.of():instances);
         AudioGraph commonGraph = null;
         try { commonGraph = GraphCommonVibro.graph(config); }
         catch (RuntimeException invalid) { /* Invalid common state is not published. */ }

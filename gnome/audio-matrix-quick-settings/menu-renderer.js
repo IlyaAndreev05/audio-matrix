@@ -116,7 +116,7 @@ export default class AudioMatrixMenuRenderer {
             const requestedMute = pendingValue(pending, muteTarget, 'muted');
             const muted = requestedMute ?? (volume !== undefined ? false : Boolean(source.muted));
             const value = volume ?? source.volume ?? source.value;
-            this._rows.updateLevelRow(row, {value, muted,
+            this._rows.updateLevelRow(row, {value, muted, available: source.available !== false,
                 displayValue: muted ? '0%' : Number.isFinite(value) ? `${Math.round(value * 100)}%` : '—'});
             this._rows.setAvailable(row, available);
         }
