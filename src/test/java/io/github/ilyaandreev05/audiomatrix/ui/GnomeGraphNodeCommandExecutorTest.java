@@ -9,6 +9,7 @@ import io.github.ilyaandreev05.audiomatrix.config.UnifiedGraphConfig;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
 import io.github.ilyaandreev05.audiomatrix.graph.DynamicGeneratorNode;
 import io.github.ilyaandreev05.audiomatrix.graph.DynamicInstanceRegistry;
+import io.github.ilyaandreev05.audiomatrix.graph.GainNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCommonVibro;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
@@ -32,6 +33,7 @@ class GnomeGraphNodeCommandExecutorTest {
     private static final List<String> CHANNELS = List.of("FL", "FR");
     @TempDir Path temp;
 
+
     @Test void generatedApplicationSetterUpdatesOnlyTheExistingCanonicalRuleAndAwaitsRuntime() throws Exception {
         Map<String, Object> config = DefaultConfig.create();
         DynamicGeneratorNode generator = generator("applications", "default-application",
@@ -43,7 +45,7 @@ class GnomeGraphNodeCommandExecutorTest {
         String instanceKey = "app:org.example.player";
         config.put("applications", new ArrayList<>(List.of(
                 DefaultConfig.map("id", "process-rule", "match", DefaultConfig.map("process", "example-player"),
-                        "volume", 0.55, "mute", false, "bus", "main"),
+                        "volume", 0.55, "mute", true, "bus", "main"),
                 DefaultConfig.map("id", "app-rule", "match", DefaultConfig.map("app_id", "org.example.player"),
                         "volume", 0.7, "mute", true, "bus", "main"))));
         PipeWireBackend.Snapshot snapshot = new PipeWireBackend.Snapshot(true, "", List.of(), List.of(),
@@ -71,6 +73,9 @@ class GnomeGraphNodeCommandExecutorTest {
             List<Map<String, Object>> beforeRuntime = (List<Map<String, Object>>) store.snapshot().get("applications");
             assertEquals(0.55, ((Number) beforeRuntime.getFirst().get("volume")).doubleValue(), 0.0001);
             assertFalse(saved.get());
+            assertTrue((Boolean) beforeRuntime.getFirst().get("mute"));
+            assertEquals(0.35, ((Number) appliedRule.get().get("volume")).doubleValue(), 0.0001);
+            assertFalse((Boolean) appliedRule.get().get("mute"));
             runtime.complete(null);
             command.join();
 
@@ -84,6 +89,27 @@ class GnomeGraphNodeCommandExecutorTest {
             assertTrue(DynamicInstanceRegistry.instanceOverride(store.snapshot(), ROUTE_ID,
                     generator.id(), instanceKey, "gain").isEmpty(),
                     "application level has a single source of truth in applications[]");
+            for (boolean muted : List.of(true, false)) {
+                GnomeGraphNodeCommandExecutor.execute(
+                        new GnomeNodeCommandHandler.SetMuted(
+                                new GnomeNodeCommandHandler.Target(ROUTE_ID, generator.id(), instanceKey), muted),
+                        store, null, snapshot, List.of(), registry, false, null,
+                        ignored -> CompletableFuture.failedFuture(new AssertionError("Not a graph target")),
+                        ignored -> CompletableFuture.failedFuture(new AssertionError("Not a graph target")),
+                        candidate -> {
+                            Map<String, Object> runtimeRule = ((List<Map<String, Object>>) candidate.get("applications"))
+                                    .getFirst();
+                            assertEquals(0.35, ((Number) runtimeRule.get("volume")).doubleValue(), 0.0001);
+                            assertEquals(muted, runtimeRule.get("mute"));
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        ignored -> CompletableFuture.completedFuture(null),
+                        error -> fail(error), () -> {}).join();
+                Map<String, Object> savedRule = ((List<Map<String, Object>>) store.snapshot().get("applications"))
+                        .getFirst();
+                assertEquals(0.35, ((Number) savedRule.get("volume")).doubleValue(), 0.0001);
+                assertEquals(muted, savedRule.get("mute"));
+            }
         }
     }
 
@@ -92,7 +118,7 @@ class GnomeGraphNodeCommandExecutorTest {
         DynamicGeneratorNode generator = generator("applications", "default-application",
                 "application:unassigned", Map.of());
         AudioGraph graph = replaceGenerator(config, generator);
-        AudioNode stream = stream(18, "org.example.new-player", "New player", "new-player", 0.8, false);
+        AudioNode stream = stream(18, "org.example.new-player", "New player", "new-player", 0.8, true);
         DynamicInstanceRegistry.ReconcileResult registry = DynamicInstanceRegistry.reconcile(graph,
                 Map.of(generator.id(), List.of(DynamicInstanceRegistry.application(stream))));
         config.put("applications", new ArrayList<>());
@@ -122,6 +148,8 @@ class GnomeGraphNodeCommandExecutorTest {
             assertEquals(0.34, ((Number) rule.get("volume")).doubleValue(), 0.0001);
             assertFalse((Boolean) rule.get("mute"));
             assertEquals(rule.get("id"), appliedRule.get().get("id"));
+            assertEquals(0.34, ((Number) appliedRule.get().get("volume")).doubleValue(), 0.0001);
+            assertFalse((Boolean) appliedRule.get().get("mute"));
             assertTrue(DynamicInstanceRegistry.instanceOverride(store.snapshot(), ROUTE_ID,
                     generator.id(), instanceKey, "gain").isEmpty());
         }

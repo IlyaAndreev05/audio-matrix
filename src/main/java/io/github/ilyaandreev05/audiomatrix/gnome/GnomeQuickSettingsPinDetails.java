@@ -25,10 +25,12 @@ final class GnomeQuickSettingsPinDetails {
         return applications.stream().filter(app -> matches(selector, app, claims)).toList();
     }
 
-    /** Only a source the user authored claims an application; a materialized generator instance never claims one. */
-    static List<String> claimSelectors(AudioGraph graph, Set<String> generated) {
+    /** Only visible saved source pins claim applications away from a catch-all card. */
+    static List<String> claimSelectors(AudioGraph graph, Set<String> generated, List<Map<String, Object>> pins) {
         if (graph == null) return List.of();
-        return graph.nodes().stream().filter(node -> !generated.contains(node.id())).flatMap(node -> {
+        Set<String> visible = pins.stream().filter(pin -> graph.id().equals(pin.get("route_id")))
+                .map(pin -> String.valueOf(pin.get("node_id"))).collect(java.util.stream.Collectors.toSet());
+        return graph.nodes().stream().filter(node -> visible.contains(node.id()) && !generated.contains(node.id())).flatMap(node -> {
             if (node instanceof SourceNode source) return Stream.of(source.selector());
             if (node instanceof DynamicGeneratorNode generator && "applications".equals(generator.registry()))
                 return Stream.of(generator.selector());
@@ -59,31 +61,30 @@ final class GnomeQuickSettingsPinDetails {
     }
 
     static Map<String, Object> outputFor(OutputNode output, AudioGraph graph,
-                                         PipeWireBackend.Snapshot snapshot, Map<String, Object> config,
-                                         List<Map<String, Object>> outputs) {
+                                         PipeWireBackend.Snapshot snapshot, Map<String, Object> config) {
         List<Map<String, Object>> devices = maps(config.get("devices"));
         AudioNode resolved = output.deviceId().equals("system_default")
                 ? snapshot.sinks().stream().filter(node -> node.id() == snapshot.defaultSinkId()).findFirst().orElse(null)
                 : GnomeOutputState.resolve(snapshot.sinks(), output.deviceId(), devices);
         Map<String, Object> state = resolved == null
-                ? new LinkedHashMap<>(Map.of("available", false, "id", output.deviceId(), "name", output.name()))
-                : outputs.stream().filter(item -> resolved.name().equals(item.get("name")))
-                    .findFirst().map(item -> withAvailability(item, true))
-                    .orElseGet(() -> new LinkedHashMap<>(Map.of("available", false,
-                            "id", output.deviceId(), "name", output.name())));
+                ? new LinkedHashMap<>(Map.of("available", false, "id", output.deviceId(), "name",
+                    io.github.ilyaandreev05.audiomatrix.config.DeviceDisplayNames.displayName(config, output.deviceId(), output.name())))
+                : GnomeOutputState.device(resolved, devices, snapshot.defaultSinkId());
         GainNode gain = GnomeGraphOutputGain.forOutput(graph, output);
-        if (gain == null) return state;
+        if (gain == null) {
+            if ("system_default".equals(output.deviceId())) {
+                // The live default sink has no saved-device command target.
+                state.remove("volume");
+                state.remove("muted");
+            }
+            return state;
+        }
         state.put("volume", gain.gain());
         state.put("muted", gain.muted());
         state.put("graphGainNodeId", gain.id());
         return state;
     }
 
-    private static Map<String, Object> withAvailability(Map<String, Object> value, boolean available) {
-        Map<String, Object> copy = new LinkedHashMap<>(value);
-        copy.put("available", available);
-        return copy;
-    }
 
     @SuppressWarnings("unchecked")
     private static List<Map<String, Object>> maps(Object value) {

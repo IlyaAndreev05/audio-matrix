@@ -19,6 +19,7 @@ final class DynamicGeneratorParameters {
         putDefault(normalized, "template", DynamicGeneratorTemplateLibrary.defaultTemplate(registry));
         putDefault(normalized, "initial_gain", 1.0);
         putDefault(normalized, "auto_pin", Boolean.TRUE);
+        if ("browser_tabs".equals(registry)) putDefault(normalized, "only_audio_active_tabs", Boolean.TRUE);
         putDefault(normalized, "group_id", "");
         putDefault(normalized, "retain_on_disappear", Boolean.TRUE);
         putDefault(normalized, "restore_on_reappear", Boolean.TRUE);

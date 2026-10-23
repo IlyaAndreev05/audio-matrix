@@ -25,7 +25,7 @@ final class BrowserSocketRegistry {
     private final CopyOnWriteArrayList<Consumer<BrowserAdapter.BrowserEvent>> listeners = new CopyOnWriteArrayList<>();
     private volatile boolean closed;
 
-    List<BrowserAdapter.BrowserSnapshot> snapshots() {
+    synchronized List<BrowserAdapter.BrowserSnapshot> snapshots() {
         List<BrowserAdapter.BrowserSnapshot> result = new ArrayList<>();
         sessions.forEach((key, session) -> {
             if (session.client != null && !session.client.disconnected)
@@ -42,8 +42,9 @@ final class BrowserSocketRegistry {
 
     CompletableFuture<BrowserAdapter.BrowserCommandAck> command(BrowserAdapter.BrowserCommand command) {
         if (closed) return CompletableFuture.failedFuture(new IOException("The browser socket is closed."));
-        if (command == null || !"chrome".equals(command.browser()) || command.command() == null
-                || !COMMANDS.contains(command.command()))
+        if (command == null || !BrowserSocketProtocol.isSupportedBrowser(command.browser()) || command.command() == null
+                || !COMMANDS.contains(command.command())
+                || ("firefox".equals(command.browser()) && "stopCapture".equals(command.command())))
             return CompletableFuture.failedFuture(new IllegalArgumentException("Unsupported browser command."));
         if (!BrowserSocketProtocol.isSafeKey(command.instanceId())
                 || !BrowserSocketProtocol.isSafeKey(command.profileId())
@@ -56,22 +57,27 @@ final class BrowserSocketRegistry {
         String requestId = empty(command.requestId()) ? UUID.randomUUID().toString() : command.requestId();
         if (!requestId.matches("[A-Za-z0-9._:-]{1,256}"))
             return CompletableFuture.failedFuture(new IllegalArgumentException("The browser command requestId is invalid."));
-        Key key = new Key("chrome", command.instanceId(), command.profileId());
-        BrowserSession session = sessions.get(key);
-        BrowserSocketClient client = session == null ? null : session.client;
-        if (client == null || client.disconnected || !session.tabs.containsKey(command.sessionToken()))
-            return CompletableFuture.failedFuture(new IOException("The browser tab is unavailable."));
-        if (!client.rememberCommandRequestId(requestId))
-            return CompletableFuture.failedFuture(new IllegalArgumentException("The browser command requestId was already used on this connection."));
+        Key key = new Key(command.browser(), command.instanceId(), command.profileId());
         CompletableFuture<BrowserAdapter.BrowserCommandAck> result = new CompletableFuture<>();
-        PendingCommand pending = new PendingCommand(client, result);
-        if (pendingCommands.putIfAbsent(requestId, pending) != null)
-            return CompletableFuture.failedFuture(new IllegalArgumentException("The browser command requestId is already in use."));
+        BrowserSocketClient client;
+        PendingCommand pending;
+        synchronized (this) {
+            if (closed) return CompletableFuture.failedFuture(new IOException("The browser socket is closed."));
+            BrowserSession session = sessions.get(key);
+            client = session == null ? null : session.client;
+            if (client == null || client.disconnected || !session.tabs.containsKey(command.sessionToken()))
+                return CompletableFuture.failedFuture(new IOException("The browser tab is unavailable."));
+            if (!client.rememberCommandRequestId(requestId))
+                return CompletableFuture.failedFuture(new IllegalArgumentException("The browser command requestId was already used on this connection."));
+            pending = new PendingCommand(key, session, client, command.sessionToken(), command.muted(), result);
+            if (pendingCommands.putIfAbsent(requestId, pending) != null)
+                return CompletableFuture.failedFuture(new IllegalArgumentException("The browser command requestId is already in use."));
+        }
         Map<String, Object> message = new LinkedHashMap<>();
         message.put("version", BrowserSocketProtocol.PROTOCOL_VERSION);
         message.put("type", "command");
         message.put("requestId", requestId);
-        message.put("browser", "chrome");
+        message.put("browser", command.browser());
         message.put("instanceId", command.instanceId());
         message.put("profileId", command.profileId());
         message.put("tabs", List.of());
@@ -90,7 +96,8 @@ final class BrowserSocketRegistry {
         return result;
     }
 
-    void accept(BrowserSocketClient client, JsonNode root) throws IOException {
+    synchronized void accept(BrowserSocketClient client, JsonNode root) throws IOException {
+        if (closed || client.disconnected) throw new IOException("The browser connection is closed.");
         String type = BrowserSocketProtocol.text(root, "type");
         if (!client.snapshotReceived) {
             if (!"snapshot".equals(type)) throw new BrowserSocketProtocol.ProtocolException("A complete snapshot is required first.");
@@ -103,7 +110,7 @@ final class BrowserSocketRegistry {
         BrowserSocketProtocol.requireFields(root, Set.of("version", "type", "requestId", "browser", "instanceId", "profileId", "tabs"));
         Key key = BrowserSocketProtocol.key(root);
         if (!key.equals(client.key)) throw new BrowserSocketProtocol.ProtocolException("A browser connection changed identity.");
-        List<BrowserAdapter.BrowserTab> tabs = BrowserSocketProtocol.tabs(root.path("tabs"));
+        List<BrowserAdapter.BrowserTab> tabs = BrowserSocketProtocol.tabs(root.path("tabs"), key.browser());
         if (tabs.isEmpty() || ("window_updated".equals(type) ? tabs.size() > 256 : tabs.size() != 1))
             throw new BrowserSocketProtocol.ProtocolException("A browser event must include its affected tab row.");
         BrowserSession session = sessions.get(key);
@@ -116,10 +123,15 @@ final class BrowserSocketRegistry {
     private void acceptSnapshot(BrowserSocketClient client, JsonNode root) throws IOException {
         BrowserSocketProtocol.requireFields(root, Set.of("version", "type", "requestId", "browser", "instanceId", "profileId", "tabs"));
         Key key = BrowserSocketProtocol.key(root);
-        List<BrowserAdapter.BrowserTab> tabs = BrowserSocketProtocol.tabs(root.path("tabs"));
+        if (client.key != null && !key.equals(client.key))
+            throw new BrowserSocketProtocol.ProtocolException("A browser connection changed identity.");
+        List<BrowserAdapter.BrowserTab> tabs = BrowserSocketProtocol.tabs(root.path("tabs"), key.browser());
         BrowserSession next = sessions.computeIfAbsent(key, ignored -> new BrowserSession());
         BrowserSocketClient previous = next.client;
-        if (previous != null && previous != client) previous.supersede();
+        if (previous != null && previous != client) {
+            previous.supersede();
+            failPendingCommands(previous);
+        }
         next.tabs.clear();
         tabs.forEach(tab -> next.tabs.put(tab.sessionToken(), tab));
         next.client = client;
@@ -142,16 +154,30 @@ final class BrowserSocketRegistry {
         PendingCommand pending = pendingCommands.get(requestId);
         if (pending == null) return; // A timed-out or already acknowledged request may reply late.
         if (pending.client() != client) throw new BrowserSocketProtocol.ProtocolException("The browser acknowledgement belongs to another connection.");
-        if (pendingCommands.remove(requestId, pending))
+        if (pendingCommands.remove(requestId, pending)) {
+            BrowserSession session = sessions.get(pending.key());
+            if (closed || client.disconnected || session != pending.session() || session.client != client) {
+                pending.future().completeExceptionally(new IOException("The browser command session is no longer active."));
+                return;
+            }
+            if ("ok".equals(status) && pending.muted() != null) {
+                BrowserAdapter.BrowserTab tab = session.tabs.get(pending.sessionToken());
+                if (tab == null) {
+                    pending.future().completeExceptionally(new IOException("The browser tab is unavailable."));
+                    return;
+                }
+                BrowserAdapter.BrowserTab confirmed = new BrowserAdapter.BrowserTab(tab.sessionToken(), tab.tabId(),
+                        tab.title(), tab.audible(), pending.muted(), tab.volumeCapability(), tab.captureStreamKey());
+                session.tabs.put(pending.sessionToken(), confirmed);
+                publish(new BrowserAdapter.BrowserEvent("tab_updated", key.browser(), key.instanceId(), key.profileId(),
+                        List.of(confirmed)));
+            }
             pending.future().complete(new BrowserAdapter.BrowserCommandAck(requestId, status, error));
+        }
     }
 
-    void disconnect(BrowserSocketClient client) {
-        for (Map.Entry<String, PendingCommand> entry : pendingCommands.entrySet()) {
-            PendingCommand pending = entry.getValue();
-            if (pending.client() == client && pendingCommands.remove(entry.getKey(), pending))
-                pending.future().completeExceptionally(new IOException("The browser disconnected before acknowledging the command."));
-        }
+    synchronized void disconnect(BrowserSocketClient client) {
+        failPendingCommands(client);
         Key key = client.key;
         if (key == null) return;
         BrowserSession session = sessions.get(key);
@@ -162,7 +188,15 @@ final class BrowserSocketRegistry {
         }
     }
 
-    void close() {
+    private void failPendingCommands(BrowserSocketClient client) {
+        for (Map.Entry<String, PendingCommand> entry : pendingCommands.entrySet()) {
+            PendingCommand pending = entry.getValue();
+            if (pending.client() == client && pendingCommands.remove(entry.getKey(), pending))
+                pending.future().completeExceptionally(new IOException("The browser disconnected before acknowledging the command."));
+        }
+    }
+
+    synchronized void close() {
         closed = true;
         for (Map.Entry<String, PendingCommand> entry : pendingCommands.entrySet()) {
             if (pendingCommands.remove(entry.getKey(), entry.getValue()))
@@ -180,7 +214,8 @@ final class BrowserSocketRegistry {
     private static boolean empty(String value) { return value == null || value.isBlank(); }
 
     record Key(String browser, String instanceId, String profileId) {}
-    private record PendingCommand(BrowserSocketClient client, CompletableFuture<BrowserAdapter.BrowserCommandAck> future) {}
+    private record PendingCommand(Key key, BrowserSession session, BrowserSocketClient client, String sessionToken,
+                                  Boolean muted, CompletableFuture<BrowserAdapter.BrowserCommandAck> future) {}
     private static final class BrowserSession {
         private final Map<String, BrowserAdapter.BrowserTab> tabs = new ConcurrentHashMap<>();
         private volatile BrowserSocketClient client;

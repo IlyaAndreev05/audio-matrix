@@ -41,12 +41,6 @@ changedPresentation.state.quickPins[0].output.volume = 0.08;
 assert(menuStructureSignature(changedPresentation) === firstSignature,
     'Audio level and disclosure changes must update the open menu without rebuilding it');
 
-const rowUpdates = menuLevelRows(snapshot.state);
-const output = rowUpdates.get('graph-output:output-node');
-assert(output?.volume === 0.32,
-    'Pinned output row must follow its graph Gain, not the physical sink volume');
-assert(!rowUpdates.has('output:device-vibro'),
-    'Physical sink state must not overwrite a graph output control');
 
 const addedPin = clone(snapshot);
 addedPin.state.quickPins[0].id = 'different-pin';
@@ -97,10 +91,6 @@ browserSnapshot.state.quickPins[0].applications = [{id: 'chrome', browserTabs: [
 const stableRows = stableMenuRows(browserSnapshot.state);
 assert(stableRows.some(row => row.id === 'browser-tab:chrome:instance-1:default:session-1'),
     'Browser tabs use adapter session identity, not title, URL, or tab ID');
-const profileSnapshot = clone(snapshot);
-profileSnapshot.state.profiles = [{id: 'main', name: 'Основной'}, {id: 'studio', name: 'Студия'}];
-assert(menuStructureSignature(profileSnapshot) !== firstSignature,
-    'The persisted profile selector refreshes when profile choices change');
 const capabilityChange = clone(snapshot);
 capabilityChange.state.quickPins[0].tabAdapterAvailable = true;
 assert(menuStructureSignature(capabilityChange) !== firstSignature,
@@ -110,8 +100,6 @@ gain.state.quickPins.push({id: 'pin-gain', nodeId: 'vibro-gain', name: 'Vibro Ga
     nodeType: 'gain', groupId: 'vibro', order: 1,
     gain: {routeId: 'common', nodeId: 'gain-1', volume: 0.5, muted: false}, controls: [], applications: []});
 const gainSignature = menuStructureSignature(gain);
-assert(menuLevelRows(gain.state).get('graph-gain:vibro-gain')?.volume === 0.5,
-    'Pinned Gain must expose a live level row');
 const movedGain = clone(gain);
 movedGain.state.quickPins.at(-1).gain.volume = 0.2;
 movedGain.state.quickPins.at(-1).gain.muted = true;

@@ -1,6 +1,5 @@
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
-import {systemLanguage} from './menu-text.js';
 import AudioMatrixPendingIntents from './menu-pending-intents.js';
 import AudioMatrixStateRenderScheduler from './menu-state-render-scheduler.js';
 
@@ -34,7 +33,7 @@ function canonical(value) {
     return JSON.stringify(value);
 }
 
-function commandShape(name, value) {
+function commandShape(name, value, state, pending) {
     if (name === 'setNodeVolume' || name === 'setNodeMuted') {
         const target = normalizeTarget(value?.target, ['routeId', 'nodeId', 'instanceKey']);
         const property = name === 'setNodeVolume' ? 'volume' : 'muted';
@@ -52,25 +51,46 @@ function commandShape(name, value) {
             throw new TypeError('Route enabled state must be boolean');
         return {payload: {...target, enabled: value.enabled}, target, property: 'enabled', desired: value.enabled};
     }
-    if (name === 'select_profile') {
-        const target = normalizeTarget(value, ['profileId']);
-        return {payload: target, target, property: 'activeProfileId', desired: target.profileId};
+    if (name === 'setBrowserTabMuted') {
+        const target = normalizeTarget(value?.target, ['browser', 'instanceId', 'profileId', 'sessionToken']);
+        if (typeof value?.muted !== 'boolean')
+            throw new TypeError('Browser tab mute must be boolean');
+        return {payload: {target, muted: value.muted}, target, property: 'muted', desired: value.muted};
+    }
+    if (name === 'set_app_volume' || name === 'toggle_app_mute') {
+        const [applicationId, rawVolume] = String(value).split('\t');
+        const target = {applicationId};
+        if (name === 'set_app_volume') {
+            const volume = Number(rawVolume);
+            if (!applicationId || !Number.isFinite(volume) || volume < 0 || volume > 1)
+                throw new TypeError('Application volume must be between 0 and 1');
+            return {payload: value, target, property: 'volume', desired: volume};
+        }
+        const current = pending.find(intent => intent.property === 'muted'
+            && canonical(intent.target) === canonical(target));
+        const application = (state?.applications || []).find(item => String(item.id) === applicationId);
+        return {payload: value, target, property: 'muted',
+            desired: !(current?.value ?? Boolean(application?.muted))};
+    }
+    if (name === 'set_quick_control') {
+        const [quickControlId, rawValue] = String(value).split('\t');
+        const desired = Number(rawValue);
+        if (!quickControlId || !Number.isFinite(desired)) throw new TypeError('Control value must be finite');
+        return {payload: value, target: {quickControlId}, property: 'value', desired};
+    }
+    if (name === 'set_mixer_input_volume') {
+        const [routeId, nodeId, inputId, rawValue] = String(value).split('\t');
+        const desired = Number(rawValue);
+        if (!routeId || !nodeId || !inputId || !Number.isFinite(desired) || desired < 0 || desired > 1)
+            throw new TypeError('Mixer input volume must be between 0 and 1');
+        return {payload: value, target: {routeId, nodeId, inputId}, property: 'volume', desired};
     }
     return {payload: value, target: null, property: null, desired: null};
 }
 
-function intentKey(target, property) {
-    return `${canonical(target)}\u0000${property}`;
-}
-
-function ackMatches(ack, intent) {
-    return ack?.requestId === intent.requestId
-        && ack?.property === intent.property
-        && canonical(ack?.target) === canonical(intent.target);
-}
 export default class AudioMatrixStateClient {
     constructor(onChange) {
-        this._language = systemLanguage();
+        this._language = 'ru';
         this._state = null;
         this._stale = false;
         this._lastStateAt = GLib.get_monotonic_time();
@@ -122,19 +142,27 @@ export default class AudioMatrixStateClient {
         try {
             const state = JSON.parse(parameters.deepUnpack()[0]);
             if (state.apiVersion !== API_VERSION) {
-                this._apiMismatch = `Audio Matrix API ${state.apiVersion ?? '—'}; extension requires API ${API_VERSION}`;
+                this._apiMismatch = `Audio Matrix API ${state.apiVersion ?? '—'}; расширению требуется API ${API_VERSION}`;
                 this._changed();
                 return;
             }
             if (typeof state.stateEpoch !== 'string' || state.stateEpoch.length === 0
                 || !Number.isSafeInteger(state.stateSequence) || state.stateSequence < 1) {
-                this._apiMismatch = 'Audio Matrix API v5 state is missing its epoch or sequence';
+                this._apiMismatch = 'В состоянии Audio Matrix API v5 отсутствует эпоха или номер обновления';
                 this._changed();
                 return;
             }
             const nextEpoch = state.stateEpoch !== this._stateEpoch;
-            if (!nextEpoch && state.stateSequence <= this._stateSequence)
+            if (!nextEpoch && state.stateSequence <= this._stateSequence) {
+                if (state.stateSequence === this._stateSequence) {
+                    this._lastStateAt = GLib.get_monotonic_time();
+                    if (this._stale) {
+                        this._stale = false;
+                        this._changed();
+                    }
+                }
                 return;
+            }
             this._lastStateAt = GLib.get_monotonic_time();
             this._stale = false;
             this._apiMismatch = '';
@@ -146,8 +174,6 @@ export default class AudioMatrixStateClient {
             this._stateEpoch = state.stateEpoch;
             this._stateSequence = state.stateSequence;
             this._state = state;
-            if (state.language === 'en' || state.language === 'ru')
-                this._language = state.language;
             this._intentTracker.acceptAcks(state.commandAcks);
             this._changed();
         } catch (error) {
@@ -178,7 +204,7 @@ export default class AudioMatrixStateClient {
             return null;
         let shape;
         try {
-            shape = commandShape(name, value);
+            shape = commandShape(name, value, this._state, this._intentTracker.snapshot());
         } catch (error) {
             this._commandError = String(error.message || error);
             this._changed();

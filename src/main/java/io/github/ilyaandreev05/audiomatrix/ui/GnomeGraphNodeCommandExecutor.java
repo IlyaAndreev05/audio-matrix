@@ -49,7 +49,7 @@ final class GnomeGraphNodeCommandExecutor {
                 applyGraphRuntime, rollbackGraphRuntime, applyApplicationRuntime, rollbackApplicationRuntime,
                 (nodeId, candidate, bindingId, property) ->
                         GnomeGraphNodeDeviceResolver.applyLevel(backend, nodeId, candidate,
-                                bindingId, property), saveFailed, saved);
+                                bindingId), saveFailed, saved);
     }
 
     static CompletableFuture<Void> execute(GnomeNodeCommandHandler.Payload payload, ConfigStore store,
@@ -108,7 +108,7 @@ final class GnomeGraphNodeCommandExecutor {
             case SAVED_DEVICE -> {
                 change = config -> GraphNodeCommand.setDeviceBindingLevel(config, requested.routeId(),
                         requested.nodeId(), "volume".equals(property) ? (double) value : null,
-                        "muted".equals(property) ? (boolean) value : null);
+                        "muted".equals(property) ? (boolean) value : false);
                 AudioNode output;
                 try { output = GnomeGraphNodeDeviceResolver.resolveSavedOutput(target, current, snapshot, sinks); }
                 catch (RuntimeException stale) { return CompletableFuture.failedFuture(stale); }
@@ -124,6 +124,7 @@ final class GnomeGraphNodeCommandExecutor {
                     Map<String, Object> rule = GnomeApplicationRuleResolver.ensureResolved(config,
                             target.applicationSelector(), target.runtimeBinding(), snapshot);
                     rule.put("volume".equals(property) ? "volume" : "mute", value);
+                    if ("volume".equals(property)) rule.put("mute", false);
                 };
                 applyRuntime = candidate -> applyApplicationRuntime.apply(
                         GnomeApplicationRuleResolver.only(candidate,
@@ -134,8 +135,11 @@ final class GnomeGraphNodeCommandExecutor {
                 runtimeActive = true;
             }
             case GENERATED_DEVICE -> {
-                change = config -> GraphNodeCommand.deviceBinding(config, target.bindingId())
-                        .put("volume".equals(property) ? "volume" : "mute", value);
+                change = config -> {
+                    Map<String, Object> binding = GraphNodeCommand.deviceBinding(config, target.bindingId());
+                    binding.put("volume".equals(property) ? "volume" : "mute", value);
+                    if ("volume".equals(property)) binding.put("mute", false);
+                };
                 AudioNode output;
                 try { output = GnomeGraphNodeDeviceResolver.resolveGeneratedOutput(target, current,
                         snapshot, sinks); }
@@ -149,8 +153,13 @@ final class GnomeGraphNodeCommandExecutor {
             }
             case GENERATED_TAB -> {
                 String field = "volume".equals(property) ? "gain" : "muted";
-                change = config -> DynamicInstanceRegistry.setInstanceOverride(config,
-                        requested.routeId(), requested.nodeId(), requested.instanceKey(), field, value);
+                change = config -> {
+                    DynamicInstanceRegistry.setInstanceOverride(config, requested.routeId(),
+                            requested.nodeId(), requested.instanceKey(), field, value);
+                    if ("volume".equals(property))
+                        DynamicInstanceRegistry.setInstanceOverride(config, requested.routeId(),
+                                requested.nodeId(), requested.instanceKey(), "muted", false);
+                };
                 if (!graphRuntimeActive || !snapshot.connected())
                     return CompletableFuture.failedFuture(
                             new IllegalStateException("Generated tab route is not active"));

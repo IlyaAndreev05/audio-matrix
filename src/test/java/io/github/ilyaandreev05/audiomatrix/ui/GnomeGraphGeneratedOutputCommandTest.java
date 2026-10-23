@@ -99,6 +99,7 @@ class GnomeGraphGeneratedOutputCommandTest {
                         assertEquals("volume", changedProperty);
                         runtimeVolume.set(((Number) GraphNodeCommand.deviceBinding(candidate, endpointId)
                                 .get("volume")).doubleValue());
+                        assertFalse((Boolean) GraphNodeCommand.deviceBinding(candidate, endpointId).get("mute"));
                         return CompletableFuture.completedFuture(null);
                     },
                     error -> fail(error), () -> {}).join();
@@ -107,9 +108,70 @@ class GnomeGraphGeneratedOutputCommandTest {
             assertEquals(41, runtimeNode.get());
             assertEquals(0.4, runtimeVolume.get(), 0.0001);
             assertEquals(0.4, ((Number) savedEndpoint.get("volume")).doubleValue(), 0.0001);
-            assertTrue((Boolean) savedEndpoint.get("mute"));
+            assertFalse((Boolean) savedEndpoint.get("mute"));
             assertTrue(DynamicInstanceRegistry.instanceOverride(store.snapshot(), ROUTE_ID,
                     generator.id(), instanceKey, "gain").isEmpty());
+            assertTrue(DynamicInstanceRegistry.instanceOverride(store.snapshot(), ROUTE_ID,
+                    generator.id(), instanceKey, "mute").isEmpty());
+        }
+    }
+
+    @Test void generatedOutputMuteAndUnmuteRetainTheCanonicalVolumeWithoutInstanceOverrides() throws Exception {
+        Map<String, Object> config = DefaultConfig.create();
+        DynamicGeneratorNode generator = generator();
+        AudioGraph graph = replaceGenerator(config, generator);
+        DeviceIdentity identity = DeviceIdentity.from(Map.of("device.serial", "command-output",
+                "device.profile.name", "analog-stereo", "device.port.name", "front-output",
+                "audio.position", "FL,FR"), 2);
+        AudioNode output = new AudioNode(41, "alsa_output.command", "Command output", "Audio/Sink",
+                "running", "", "", "", 2, List.of(48000), 0.6, false, null, identity);
+        DynamicInstanceRegistry.ReconcileResult registry = DynamicInstanceRegistry.reconcile(graph,
+                Map.of(generator.id(), List.of(DynamicInstanceRegistry.output(output))));
+        String instanceKey = "device:" + identity.fingerprint();
+        DynamicInstanceRegistry.RuntimeInstance instance = DynamicInstanceRegistry.requireInstance(
+                registry, generator.id(), instanceKey, true);
+        String bindingId = String.valueOf(instance.runtimeBinding().get("deviceId"));
+        @SuppressWarnings("unchecked") List<Map<String, Object>> devices =
+                (List<Map<String, Object>>) config.get("devices");
+        devices.add(DefaultConfig.map("id", bindingId, "kind", "device_slot", "role", "output",
+                "identity", identity.toMap(), "volume", 0.62, "mute", false));
+        PipeWireBackend.Snapshot snapshot = new PipeWireBackend.Snapshot(true, "", List.of(output), List.of(),
+                List.of(), List.of(), Map.of(), output.id(), System.currentTimeMillis());
+        List<Boolean> runtimeMutes = new ArrayList<>();
+
+        try (ConfigStore store = new ConfigStore(temp.resolve("generated-output-mute.json"))) {
+            store.save(config);
+            Object savedRoutes = store.snapshot().get("route_library");
+            for (boolean muted : List.of(true, false)) {
+                GnomeGraphNodeCommandExecutor.execute(
+                        new GnomeNodeCommandHandler.SetMuted(
+                                new GnomeNodeCommandHandler.Target(ROUTE_ID, generator.id(), instanceKey), muted),
+                        store, snapshot, List.of(output), registry, false, null,
+                        ignored -> CompletableFuture.failedFuture(new AssertionError("Endpoint mute must not rebuild graph")),
+                        ignored -> CompletableFuture.failedFuture(new AssertionError("Endpoint mute must not rebuild graph")),
+                        ignored -> CompletableFuture.failedFuture(new AssertionError("Not an application target")),
+                        ignored -> CompletableFuture.failedFuture(new AssertionError("Not an application target")),
+                        (nodeId, candidate, endpointId, property) -> {
+                            assertEquals(output.id(), nodeId);
+                            Map<String, Object> endpoint = GraphNodeCommand.deviceBinding(candidate, endpointId);
+                            assertEquals(0.62, ((Number) endpoint.get("volume")).doubleValue(), 0.0001);
+                            assertEquals(muted, endpoint.get("mute"));
+                            runtimeMutes.add((Boolean) endpoint.get("mute"));
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        error -> fail(error), () -> {}).join();
+
+                Map<String, Object> saved = store.snapshot();
+                Map<String, Object> endpoint = GraphNodeCommand.deviceBinding(saved, bindingId);
+                assertEquals(0.62, ((Number) endpoint.get("volume")).doubleValue(), 0.0001);
+                assertEquals(muted, endpoint.get("mute"));
+                assertEquals(savedRoutes, saved.get("route_library"));
+                assertTrue(DynamicInstanceRegistry.instanceOverride(saved, ROUTE_ID,
+                        generator.id(), instanceKey, "gain").isEmpty());
+                assertTrue(DynamicInstanceRegistry.instanceOverride(saved, ROUTE_ID,
+                        generator.id(), instanceKey, "mute").isEmpty());
+            }
+            assertEquals(List.of(true, false), runtimeMutes);
         }
     }
 

@@ -38,7 +38,7 @@ final class BrowserSocketProtocol {
         if (root == null || !root.isObject()) throw new ProtocolException("A browser message must be a JSON object.");
         if (!root.path("version").isInt() || root.path("version").asInt() != PROTOCOL_VERSION)
             throw new ProtocolException("Unsupported browser protocol version.");
-        if (!"chrome".equals(text(root, "browser"))) throw new ProtocolException("Unsupported browser adapter.");
+        if (!isSupportedBrowser(text(root, "browser"))) throw new ProtocolException("Unsupported browser adapter.");
         text(root, "type");
         safeKey(text(root, "requestId"), "requestId");
         text(root, "instanceId");
@@ -74,7 +74,7 @@ final class BrowserSocketProtocol {
                 safeKey(text(root, "profileId"), "profileId"));
     }
 
-    static List<BrowserAdapter.BrowserTab> tabs(JsonNode tabsNode) throws ProtocolException {
+    static List<BrowserAdapter.BrowserTab> tabs(JsonNode tabsNode, String browser) throws ProtocolException {
         if (!tabsNode.isArray() || tabsNode.size() > 4096) throw new ProtocolException("The browser tab list is invalid.");
         List<BrowserAdapter.BrowserTab> tabs = new ArrayList<>(tabsNode.size());
         Set<String> tokens = new HashSet<>();
@@ -88,6 +88,8 @@ final class BrowserSocketProtocol {
                 throw new ProtocolException("The browser tab state is invalid.");
             String capability = text(row, "volumeCapability");
             if (!Set.of("none", "captured").contains(capability)) throw new ProtocolException("The tab volume capability is invalid.");
+            if ("firefox".equals(browser) && !"none".equals(capability))
+                throw new ProtocolException("Firefox does not expose captured tab audio.");
             String captureKey = text(row, "captureStreamKey");
             if ("captured".equals(capability) != !captureKey.isEmpty())
                 throw new ProtocolException("A captured tab must have exactly one stream key.");
@@ -121,6 +123,7 @@ final class BrowserSocketProtocol {
         return value;
     }
     static boolean isSafeKey(String value) { return value != null && SAFE_KEY.matcher(value).matches(); }
+    static boolean isSupportedBrowser(String browser) { return "chrome".equals(browser) || "firefox".equals(browser); }
 
 
     static String stripUrls(String value) { return URL.matcher(value).replaceAll("[link]"); }

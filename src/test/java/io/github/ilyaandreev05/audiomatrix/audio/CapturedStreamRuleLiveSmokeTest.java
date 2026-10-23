@@ -80,21 +80,28 @@ class CapturedStreamRuleLiveSmokeTest {
 
             LevelState first = waitForLevel(backend, captureA, 0.4, true);
             LevelState second = waitForLevel(backend, captureB, 0.3, true);
-            assertEquals(0.0, first.volume(), 0.02, "a muted captured stream keeps the effective gain at zero");
             assertTrue(first.muted(), "tab mute must remain separate from saved gain");
-            assertEquals(0.0, second.volume(), 0.02);
             assertTrue(second.muted(), "parent mute must mute the captured stream");
             LevelState unmatched = levelOf(backend, unmatchedCapture);
             assertEquals(unmatchedBefore.volume(), unmatched.volume(), 0.02, "a prefix-near-match is not a binding");
             assertFalse(unmatched.muted());
-            // The saved level of a captured stream is the parent level times the tab gain.
-            Map<String, CapturedStreamBinding> unmutedBindings = Map.of(
+            // PipeWire reports mute separately from its stored channel level.
+            // Unmute both captures and prove the saved parent × tab gains survived mute.
+            List<Map<String, Object>> unmutedRules = new ArrayList<>(rules);
+            Map<String, Object> parentB = new java.util.LinkedHashMap<>(rules.get(1));
+            parentB.put("mute", false);
+            unmutedRules.set(1, parentB);
+            Map<String, CapturedStreamBinding> unmuteBoth = Map.of(
                     captureA, new CapturedStreamBinding(captureA, "generated-source-a", "capture-parent-a-" + suffix,
-                            appIdA, "chrome", "tab:a-" + suffix, 0.5, false));
-            applier.apply(backend.refresh().get(5, TimeUnit.SECONDS), rules, unmutedBindings, true,
+                            appIdA, "chrome", "tab:a-" + suffix, 0.5, false),
+                    captureB, new CapturedStreamBinding(captureB, "generated-source-b", "capture-parent-b-" + suffix,
+                            appIdB, "chrome", "tab:b-" + suffix, 0.5, false));
+            applier.apply(backend.refresh().get(5, TimeUnit.SECONDS), unmutedRules, unmuteBoth, true,
                     (stream, error) -> failure.compareAndSet(null, error)).get(10, TimeUnit.SECONDS);
             assertEquals(Math.cbrt(0.4), waitForLevel(backend, captureA, 0.4, false).volume(), 0.02,
-                    "the captured level must be the parent level times the tab gain");
+                    "The captured level must be the parent volume times the tab gain");
+            assertEquals(Math.cbrt(0.3), waitForLevel(backend, captureB, 0.3, false).volume(), 0.02,
+                    "A parent mute must not erase the parent volume or tab gain");
             String links = run("pw-link", "-l");
             assertTrue(PipeWireLinkOperations.linksFromNode(links, captureA).isEmpty());
             assertTrue(PipeWireLinkOperations.linksFromNode(links, captureB).isEmpty());
@@ -108,7 +115,7 @@ class CapturedStreamRuleLiveSmokeTest {
                             "match", Map.of("app_id", appIdA, "process", "chrome"),
                             "volume", 0.7, "mute", false));
             PipeWireBackend.Snapshot rapidUpdateSnapshot = backend.refresh().get(5, TimeUnit.SECONDS);
-            Map<String, CapturedStreamBinding> bindingA = unmutedBindings;
+            Map<String, CapturedStreamBinding> bindingA = Map.of(captureA, unmuteBoth.get(captureA));
             CompletableFuture<Void> staleWrite = applier.apply(rapidUpdateSnapshot, staleRules, bindingA, true,
                     (stream, error) -> failure.compareAndSet(null, error));
             CompletableFuture<Void> latestWrite = applier.apply(rapidUpdateSnapshot, latestRules, bindingA, true,
@@ -158,12 +165,11 @@ class CapturedStreamRuleLiveSmokeTest {
                 String control = run("wpctl", "get-volume", Integer.toString(node.id()));
                 java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("Volume: ([0-9.]+)").matcher(control);
                 if (matcher.find()) {
-                    // WirePlumber reports the cubic value and zeroes the level of a muted stream.
+                    // Mute is reported independently from the stored channel level.
                     double value = Double.parseDouble(matcher.group(1));
                     boolean isMuted = control.contains("MUTED");
                     observed = new LevelState(value, isMuted);
-                    double expected = muted ? 0.0 : Math.cbrt(volume);
-                    if (Math.abs(value - expected) <= 0.02 && isMuted == muted) return observed;
+                    if ((muted || Math.abs(value - Math.cbrt(volume)) <= 0.02) && isMuted == muted) return observed;
                 }
             }
             Thread.sleep(50);

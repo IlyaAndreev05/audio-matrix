@@ -1,5 +1,6 @@
 package io.github.ilyaandreev05.audiomatrix.gnome;
 
+import io.github.ilyaandreev05.audiomatrix.audio.CapturedStreamBinding;
 import io.github.ilyaandreev05.audiomatrix.audio.AudioNode;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.config.DefaultConfig;
@@ -50,9 +51,40 @@ class GnomeBridgeStateBuilderApplicationsTest {
         assertTrue(applications.stream().noneMatch(app -> EVENT_APPLICATION_ID.equals(app.get("application_id"))),
                 "the event stream is never listed as an ordinary application");
 
-        Map<String, Object> pin = pin(state, GraphCommonVibro.MAIN_SOURCE_ID);
-        assertEquals(Set.of("app:com.example.Chrome", "app:org.mozilla.firefox"), Set.copyOf(ids(pin.get("applications"))),
-                "the pinned applications group lists every running application");
+        List<Map<String,Object>> visible = maps(state.get("quickPins")).stream()
+                .flatMap(pin -> maps(pin.get("applications")).stream()).toList();
+        assertEquals(Set.of("app:com.example.Chrome", "app:org.mozilla.firefox"), Set.copyOf(ids(visible)));
+        assertEquals(2, visible.size(), "Each playback application has exactly one visible card");
+        Map<String,Object> chromePin = maps(state.get("quickPins")).stream()
+                .filter(pin -> maps(pin.get("applications")).stream().anyMatch(
+                        app -> "com.example.Chrome".equals(app.get("application_id")))).findFirst().orElseThrow();
+        assertEquals(.4, ((Map<?,?>)chromePin.get("gain")).get("volume"),
+                "The visible generated card must use the saved rule, not a stale materialized gain");
+    }
+
+    @Test void publishesOrdinaryAppsButHidesCaptureAndSystemStreams() {
+        Map<String, Object> config = DefaultConfig.create();
+        AudioNode firefox = stream(51, "Firefox", "org.mozilla.firefox", "firefox", 0.8);
+        AudioNode processIdentified = stream(55, "Music player", "", "spotify", 0.75);
+        AudioNode capturedTab = new AudioNode(52, CapturedStreamBinding.NODE_PREFIX + "session-1",
+                "Captured browser tab", "Stream/Output/Audio", "running", "Chrome Tab Capture",
+                "capture-host", ChromeBrowserAdapter.CAPTURE_APPLICATION_ID, 2, List.of(48000), 0.7, false, null);
+        AudioNode shellSound = stream(53, "GNOME Shell", "", "gnome-shell", 0.6);
+        AudioNode helperSound = stream(54, "Desktop helper", "", "gsd-media-keys", 0.5);
+        PipeWireBackend.Snapshot snapshot = new PipeWireBackend.Snapshot(true, "", List.of(), List.of(),
+                List.of(firefox, processIdentified, capturedTab, shellSound, helperSound), List.of(), Map.of(), -1, 0);
+
+        Map<String, Object> state = GnomeBridgeStateBuilder.build(snapshot, config, 7, List.of(), null);
+        List<Map<String, Object>> applications = maps(state.get("applications"));
+
+        assertEquals(List.of("app:org.mozilla.firefox", "process:spotify"), ids(applications),
+                "Stable application IDs take precedence and process identity supports desktop apps without one");
+        assertEquals(List.of(51), streamIds(applications.getFirst()),
+                "The real browser playback stream remains grouped under its desktop application");
+        Map<String, Object> spotify = applications.stream()
+                .filter(app -> "process:spotify".equals(app.get("id"))).findFirst().orElseThrow();
+        assertEquals("spotify", spotify.get("process"));
+        assertEquals(List.of(55), streamIds(spotify));
     }
 
     /** The materialized instance still carries the level from before the rule was saved. */

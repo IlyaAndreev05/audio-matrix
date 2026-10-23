@@ -1,6 +1,7 @@
 package io.github.ilyaandreev05.audiomatrix.gnome;
 
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
+import io.github.ilyaandreev05.audiomatrix.audio.AudioNode;
 import io.github.ilyaandreev05.audiomatrix.config.DefaultConfig;
 import io.github.ilyaandreev05.audiomatrix.config.QuickSettingsConfig;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
@@ -30,8 +31,14 @@ class GnomeQuickSettingsMultiSwitchPinTest {
         GraphRouteLibrary.activate(config, graph.id());
         QuickSettingsConfig.pinNode(config, graph.id(), multi.id(), "routing", 0, "EXPANDED");
 
+        AudioNode monitor = new AudioNode(21,"monitor-sink","Monitor","Audio/Sink","running",
+                "","","",2,List.of(48000),.7,false,null);
+        config.put("devices",List.of(DefaultConfig.map("id","monitor","selector",
+                DefaultConfig.map("kind","name_equals","value",monitor.name()))));
+        PipeWireBackend.Snapshot snapshot = new PipeWireBackend.Snapshot(true,"",List.of(monitor),List.of(),
+                List.of(),List.of(),Map.of(),monitor.id(),0);
         List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config,
-                PipeWireBackend.Snapshot.offline("disconnected"), List.of(), List.of(), List.of(), null, Map.of());
+                snapshot, List.of(), List.of(), List.of(), null, Map.of());
         Map<?, ?> routeControl = (Map<?, ?>) pin(pins, graph.id(), multi.id()).get("routeControl");
         List<?> options = (List<?>) routeControl.get("options");
         List<String> optionIds = options.stream().map(option -> String.valueOf(((Map<?, ?>) option).get("id"))).toList();

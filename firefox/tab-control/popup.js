@@ -31,13 +31,13 @@ async function refresh() {
           await browser.tabs.update(tab.id, {muted: !muted});
           await refresh();
         } catch (error) {
-          status.textContent = error.message || 'Не удалось изменить mute вкладки.';
+          status.textContent = error.message || 'Не удалось изменить состояние звука вкладки.';
         }
       });
       row.append(title, focus, mute);
       list.append(row);
     }
-    status.textContent = 'Вкладок: ' + tabs.length + ' · ползунок вкладки зависит от системных аудиопотоков';
+    status.textContent = 'Вкладок: ' + tabs.length + ' · выключение звука без независимой PCM-громкости';
   } catch (error) {
     status.textContent = error.message || 'Не удалось прочитать список вкладок.';
   }

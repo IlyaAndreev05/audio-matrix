@@ -37,7 +37,7 @@ final class PipeWireRouteStreamPlanner {
                                          List<Map<String, Object>> applicationRules,
                                          Map<String, Map<String, Object>> rulesById, List<String> eventInputBuses,
                                          AudioNode stream, ApplicationFilterReader filters) throws IOException {
-        if (isTransientShellSound(stream) || AudioMatrixOwnedStream.matches(stream)) return null;
+        if (ApplicationStreamEligibility.isTransientShellSound(stream) || AudioMatrixOwnedStream.matches(stream)) return null;
         boolean captureName = stream.name().startsWith(CapturedStreamBinding.NODE_PREFIX);
         CapturedStreamBinding binding = capturedBindings == null ? null : capturedBindings.get(stream.name());
         if (captureName && (binding == null || !stream.name().equals(binding.nodeName()))) return null;
@@ -73,10 +73,4 @@ final class PipeWireRouteStreamPlanner {
         return new StreamPlan(stream, sourceNodeId, instanceKey, busId, applicationFilters, positions, key, input, output);
     }
 
-    private static boolean isTransientShellSound(AudioNode stream) {
-        String app = stream.applicationName() == null ? "" : stream.applicationName();
-        String process = stream.processName() == null ? "" : stream.processName();
-        return "gnome-shell".equalsIgnoreCase(app) || "gnome-shell".equalsIgnoreCase(process)
-                || process.startsWith("gsd-") || "xdg-desktop-portal".equalsIgnoreCase(app);
-    }
 }

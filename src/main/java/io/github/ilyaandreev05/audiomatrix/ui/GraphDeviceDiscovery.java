@@ -2,6 +2,7 @@ package io.github.ilyaandreev05.audiomatrix.ui;
 
 import io.github.ilyaandreev05.audiomatrix.audio.AudioNode;
 import io.github.ilyaandreev05.audiomatrix.audio.DeviceDiscovery;
+import io.github.ilyaandreev05.audiomatrix.config.DeviceDisplayNames;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
 import io.github.ilyaandreev05.audiomatrix.graph.DeviceSlotNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
@@ -17,14 +18,14 @@ final class GraphDeviceDiscovery {
                        BiFunction<String, String, String> t, Consumer<Consumer<Map<String, Object>>> save) {
         VBox box = new VBox(10);
         box.getStyleClass().add("card");
-        box.getChildren().add(new Label(t.apply("Обнаружение и Device Slot", "Discovery and Device Slots")));
-        box.getChildren().add(new Label(t.apply("Новый выход молчит до явной привязки и включения ветки Switch.",
-                "New outputs remain silent until explicitly bound and selected in Switch.")));
+        box.getChildren().add(new Label(t.apply("Обнаружение и привязка устройств", "Discovery and device binding")));
+        box.getChildren().add(new Label(t.apply("Новый выход молчит до явной привязки и включения его ветки MultiSwitch.",
+                "New outputs remain silent until explicitly bound and selected in MultiSwitch.")));
         List<Map<String, Object>> devices = maps(config.get("devices"));
         for (DeviceDiscovery.Entry entry : DeviceDiscovery.catalog(sinks, devices)) {
             AudioNode node = entry.node();
             HBox row = new HBox(8);
-            String name = node == null ? entry.slotId() : node.description();
+            String name = DeviceDisplayNames.displayName(config,entry.slotId(),node==null?"":node.description());
             if (entry.identity() != null) row.getChildren().add(new Label(
                     entry.identity().channels() + " ch · " + entry.identity().cardProfile() + " · " + entry.identity().port()));
             if (entry.state() == DeviceDiscovery.State.IGNORED) {
@@ -36,7 +37,8 @@ final class GraphDeviceDiscovery {
                 }));
                 row.getChildren().add(restore);
             }
-            row.getChildren().add(new Label(name + " · " + entry.state() + " · " + entry.conflict()));
+            row.getChildren().add(new Label(name + " · " + stateLabel(entry.state(),t)
+                    + (entry.conflict().isBlank()?"":" · "+entry.conflict())));
             if (node != null) {
                 boolean identifiable = entry.identity() != null && entry.identity().reliable();
                 Button bind = new Button(t.apply("Привязать к слоту…", "Bind to slot…"));
@@ -69,6 +71,17 @@ final class GraphDeviceDiscovery {
         }
         return box;
     }
+    static String stateLabel(DeviceDiscovery.State state,BiFunction<String,String,String> t) {
+        return switch(state) {
+            case NEW -> t.apply("Новое устройство","New device");
+            case ONLINE -> t.apply("Подключено","Connected");
+            case OFFLINE -> t.apply("Не подключено","Not connected");
+            case AMBIGUOUS -> t.apply("Неоднозначная идентификация","Ambiguous identity");
+            case CONFLICT -> t.apply("Конфликт привязки","Binding conflict");
+            case IGNORED -> t.apply("Игнорируется","Ignored");
+        };
+    }
+
     private static List<String> logicalSlotIds(Map<String, Object> config) {
         List<Map<String, Object>> encoded = new ArrayList<>();
         if (config.get("common_vibro_graph") instanceof Map<?, ?> common) {

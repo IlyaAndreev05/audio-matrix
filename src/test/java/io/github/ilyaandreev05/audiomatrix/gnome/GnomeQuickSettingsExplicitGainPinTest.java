@@ -1,6 +1,7 @@
 package io.github.ilyaandreev05.audiomatrix.gnome;
 
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
+import io.github.ilyaandreev05.audiomatrix.audio.AudioNode;
 import io.github.ilyaandreev05.audiomatrix.config.DefaultConfig;
 import io.github.ilyaandreev05.audiomatrix.config.QuickSettingsConfig;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
@@ -32,8 +33,12 @@ class GnomeQuickSettingsExplicitGainPinTest {
         GraphRouteLibrary.activate(config, graph.id());
         QuickSettingsConfig.pinNode(config, graph.id(), endpointGain.id(), "routing", 0, "EXPANDED");
 
-        List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config,
-                PipeWireBackend.Snapshot.offline("disconnected"), List.of(), List.of(), List.of(), null, Map.of());
+        AudioNode player = new AudioNode(21, "music-stream", "Music", "Stream/Output/Audio", "running",
+                "Music", "music", "music", 2, List.of(48000), .7, false, null);
+        PipeWireBackend.Snapshot snapshot = new PipeWireBackend.Snapshot(true,"",List.of(),List.of(),
+                List.of(player),List.of(),Map.of(),-1,0);
+        List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config, snapshot, List.of(),
+                GnomeApplicationProjection.applications(snapshot,config,List.of(),null),List.of(),null,Map.of());
         Map<String, Object> state = pins.stream()
                 .filter(pin -> graph.id().equals(pin.get("routeId")) && endpointGain.id().equals(pin.get("nodeId")))
                 .findFirst().orElse(null);

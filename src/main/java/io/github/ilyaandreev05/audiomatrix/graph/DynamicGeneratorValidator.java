@@ -58,6 +58,8 @@ final class DynamicGeneratorValidator {
         requireBoolean(parameters, "auto_pin", generator.id(), errors);
         requireBoolean(parameters, "retain_on_disappear", generator.id(), errors);
         requireBoolean(parameters, "restore_on_reappear", generator.id(), errors);
+        if (parameters.containsKey("only_audio_active_tabs"))
+            requireBoolean(parameters, "only_audio_active_tabs", generator.id(), errors);
         if (parameters.containsKey("auto_select_trusted_hdmi_on_first_discovery")) {
             requireBoolean(parameters, "auto_select_trusted_hdmi_on_first_discovery", generator.id(), errors);
             if (!"outputs".equals(registry))

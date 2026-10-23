@@ -211,7 +211,15 @@ abstract class AppShellUiPart26 extends AppShellUiPart25 {
         return DeviceSelectorMatcher.resolve(physicalSinks(),reference,maps(config.get("devices")));
     }
 
-    protected String outputReferenceName(Map<String,Object> config,String reference){if("system_default".equals(reference))return t("Системный выход","System default");for(Map<String,Object> device:maps(config.get("devices")))if(reference.equals(device.get("id")))return string(device.get("name"),string(map(device.get("selector")).get("value"),reference));return reference;}
+    protected String outputReferenceName(Map<String,Object> config,String reference){
+        if("system_default".equals(reference))return t("Системный выход","System default");
+        for(Map<String,Object> device:maps(config.get("devices")))if(reference.equals(device.get("id"))){
+            DeviceDiscovery.Resolution resolved=DeviceDiscovery.resolve(physicalSinks(),device);
+            return DeviceDisplayNames.displayName(device,resolved.node()==null?"":resolved.node().description());
+        }
+        AudioNode live=physicalSinks().stream().filter(node->reference.equals(node.name())).findFirst().orElse(null);
+        return DeviceDisplayNames.displayName(Map.of(),live==null?reference:live.description());
+    }
 
     protected Map<String, Object> activeProfile() { return activeProfile(store.snapshot()); }
 

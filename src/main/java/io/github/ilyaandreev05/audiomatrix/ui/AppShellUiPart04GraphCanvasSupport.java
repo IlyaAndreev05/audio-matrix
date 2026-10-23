@@ -91,7 +91,7 @@ abstract class AppShellUiPart04GraphCanvasSupport extends AppShellUiPart04GraphI
     }
 
     protected boolean compositeCollapsed(GraphSubgraph group){
-        return group.generatorId().isBlank()?group.collapsed()
+        return group.generatorId()==null?group.collapsed()
                 :generatedCompositeCollapseOverrides.getOrDefault(group.id(),group.collapsed());
     }
 

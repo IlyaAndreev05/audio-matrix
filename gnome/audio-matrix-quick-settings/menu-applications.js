@@ -1,7 +1,16 @@
-import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
-import {visibleApplicationStreams, visibleBrowserTabs} from './menu-state.js';
+import {visibleBrowserTabs} from './menu-state.js';
 import {applicationIcon} from './menu-icons.js';
 import {reorderMenuItems} from './menu-row-utils.js';
+
+function nodeTarget(pin, gain) {
+    return {routeId: String(gain.routeId || pin.routeId || ''),
+        nodeId: String(pin.instanceKey ? pin.nodeId : gain.nodeId || gain.gainNodeId),
+        instanceKey: String(pin.instanceKey || '')};
+}
+
+function tabKey(tab) {
+    return [tab.browser, tab.instanceId, tab.profileId, tab.sessionToken].map(String).join(':');
+}
 
 export default class AudioMatrixMenuApplications {
     constructor({rows, send, registerLevelRow, unregisterLevelRow}) {
@@ -13,121 +22,148 @@ export default class AudioMatrixMenuApplications {
     }
 
     render(pin, applications, t, target) {
-        const pinId = String(pin.id || `${pin.routeId}:${pin.nodeId}:${pin.instanceKey || ''}`);
+        const pinId = String(pin.id);
         const existing = this._rendered.get(pinId) || new Map();
         const descriptors = this._descriptors(pin, applications, t);
         const next = new Map();
         const ordered = [];
         for (const descriptor of descriptors) {
-            let row = existing.get(descriptor.id);
-            if (!row || row.kind !== descriptor.kind) {
-                row = this._createRow(descriptor);
-            } else if (descriptor.kind === 'level') {
-                this._rows.updateLevelRow(row.item, descriptor.options);
-            } else {
-                const label = row.item.label;
-                if (label?.text !== undefined) label.text = descriptor.label;
-                row.item.set_sensitive?.(descriptor.reactive);
-                row.item.reactive = descriptor.reactive;
-                row.item.can_focus = descriptor.reactive;
+            let entry = existing.get(descriptor.id);
+            if (!entry) entry = {item: this._rows.createLevelRow(descriptor.options), children: new Map()};
+            const expanded = pin.expanded ?? pin.view !== 'COMPACT';
+            if (entry.view !== expanded) {
+                entry.expanded = expanded;
+                entry.view = expanded;
             }
-            row.item._audioMatrixRowId = descriptor.id;
-            if (descriptor.kind === 'level') this._registerLevelRow?.(descriptor.id, row.item);
-            next.set(descriptor.id, row);
-            ordered.push(row.item);
+            const options = {...descriptor.options, hasChildren: descriptor.tabs.length > 0 && pin.showChildren !== false,
+                expanded: entry.expanded, onExpand: () => {
+                    entry.expanded = !entry.expanded;
+                    this._rows.updateLevelRow(entry.item, {expanded: entry.expanded});
+                    this._send('set_quick_pin_view', `${pin.id}\t${entry.expanded ? 'EXPANDED' : 'COMPACT'}`);
+                }};
+            this._rows.updateLevelRow(entry.item, options);
+            this._register(descriptor.id, entry.item);
+            this._renderTabs(entry, options.hasChildren ? descriptor.tabs : [], t);
+            ordered.push(entry.item);
+            next.set(descriptor.id, entry);
         }
-        for (const [id, row] of existing) {
-            if (!next.has(id) && row.kind === 'level') this._unregisterLevelRow?.(id);
+        for (const [id, entry] of existing) {
+            if (next.has(id)) continue;
+            this._unregisterLevelRow?.(id);
+            for (const childId of entry.children.keys()) this._unregisterLevelRow?.(childId);
         }
-        reorderMenuItems(target, [...existing.values()].map(row => row.item), ordered);
+        reorderMenuItems(target, [...existing.values()].map(entry => entry.item), ordered);
+        for (const [id, entry] of existing)
+            if (!next.has(id)) entry.item.destroy?.();
         this._rendered.set(pinId, next);
     }
 
-    _descriptors(pin, applications, t) {
-        const rows = [];
-        const sourceGain = pin.sourceGain;
-        const generatedChild = Boolean(pin.instanceKey);
-        const tabs = pin.browserTabs || [];
-        if (sourceGain) {
-            rows.push({id: `source:${pin.nodeId}`, kind: 'level', options: {
-                id: `source:${pin.nodeId}`, name: pin.name,
-                icon: applications.length ? applicationIcon(applications[0]) : 'application-x-executable-symbolic',
-                value: sourceGain.volume, muted: sourceGain.muted,
-                mutedLabel: sourceGain.muted ? t.unmute : t.mute,
-                onValue: value => this._send('set_source_volume', [sourceGain.routeId, sourceGain.sourceNodeId,
-                    sourceGain.gainNodeId, value.toFixed(3)].join('\t')),
-                onMute: () => this._send('toggle_source_mute', [sourceGain.routeId, sourceGain.sourceNodeId,
-                    sourceGain.gainNodeId].join('\t')),
-            }});
-        }
-        const hasTabs = tabs.length > 0
-            || applications.some(application => visibleBrowserTabs(application).length > 0);
-        if (applications.length === 0 && !pin.gain && !hasTabs) {
-            rows.push({id: `no-apps:${pin.id}`, kind: 'label', label: t.noApplications, reactive: false});
-            return rows;
-        }
-        for (const application of applications) {
-            if (application.browserAdapter?.reason)
-                rows.push({id: `browser-reason:${application.id}`, kind: 'label',
-                    label: application.browserAdapter.reason, reactive: false});
-            if (!sourceGain && !generatedChild) {
-                if (application.volumeAvailable === false || application.available === false) {
-                    rows.push({id: `app:${application.id}`, kind: 'label',
-                        label: `${application.name || application.id} — ${t.outputUnavailable}`, reactive: false});
-                } else {
-                    rows.push({id: `app:${application.id}`, kind: 'level', options: {
-                        id: `app:${application.id}`, name: application.name || application.id,
-                        icon: applicationIcon(application), value: application.volume,
-                        muted: application.muted, mutedLabel: application.muted ? t.unmute : t.mute,
-                        onValue: value => this._send('set_app_volume', application.id + '\t' + value.toFixed(3)),
-                        onMute: () => this._send('toggle_app_mute', application.id),
-                    }});
-                }
-            } else if (generatedChild && application.volumeAvailable === false) {
-                rows.push({id: `app:${application.id}`, kind: 'label',
-                    label: `${application.name || application.id} — ${t.outputUnavailable}`, reactive: false});
-            }
-            if (!generatedChild) for (const stream of visibleApplicationStreams(application)) {
-                rows.push({id: `stream:${stream.id}`, kind: 'level', options: {
-                    id: `stream:${stream.id}`, name: stream.description || stream.name,
-                    icon: 'audio-x-generic-symbolic', value: stream.volume, muted: stream.muted,
-                    mutedLabel: stream.muted ? t.unmute : t.mute,
-                    onValue: value => this._send('set_stream_volume', stream.id + '\t' + value.toFixed(3)),
-                    onMute: () => this._send('toggle_stream_mute', String(stream.id)),
-                }});
-            }
-        }
-        const browserTabs = tabs.length ? tabs : applications.flatMap(visibleBrowserTabs);
-        for (const tab of browserTabs) {
-            const key = [tab.browser, tab.instanceId, tab.profileId, tab.sessionToken].join(':');
-            rows.push({id: `browser-tab:${key}`, kind: 'label',
-                label: String(tab.title || tab.browser), reactive: false});
-        }
-        return rows;
+    _register(id, item) {
+        item._audioMatrixRowId = id;
+        this._registerLevelRow?.(id, item);
     }
 
-    _createRow(descriptor) {
-        if (descriptor.kind === 'level') {
-            const item = this._rows.createLevelRow(descriptor.options);
-            return {kind: descriptor.kind, item};
+    _descriptors(pin, applications, t) {
+        const gain = pin.sourceGain || pin.gain;
+        if (gain) {
+            const id = `pin-level:${pin.id}`;
+            const application = applications[0];
+            const commandTarget = nodeTarget(pin, gain);
+            return [{id, options: {
+                id, name: pin.name || application?.name || '',
+                icon: pin.icon || (application ? applicationIcon(application) : 'application-x-executable-symbolic'),
+                value: gain.volume, muted: gain.muted, commandTarget,
+                available: pin.available !== false,
+                subtitle: pin.available === false ? t.disconnected : '',
+                onValue: value => this._send('setNodeVolume', {target: commandTarget, value: Number(value.toFixed(3))}),
+                onMute: muted => this._send('setNodeMuted', {target: commandTarget, muted}),
+            }, tabs: pin.browserTabs?.length ? visibleBrowserTabs({browserTabs: pin.browserTabs})
+                : applications.flatMap(visibleBrowserTabs)}];
         }
-        const item = new PopupMenu.PopupMenuItem(descriptor.label, {
-            reactive: descriptor.reactive, can_focus: descriptor.reactive,
+        return applications.map(application => {
+            const id = `app:${pin.id}:${application.id}`;
+            const commandTarget = application.commandTarget || {applicationId: String(application.id)};
+            const available = application.available !== false;
+            return {id, options: {
+                id, name: application.name || '', icon: pin.icon || applicationIcon(application),
+                value: application.volume, muted: application.muted, commandTarget, available,
+                subtitle: available ? '' : t.disconnected,
+                capabilityHint: application.volumeAvailable === false ? t.applicationVolumeUnavailable : '',
+                onValue: application.volumeAvailable === false ? null : value => {
+                    if (application.commandTarget)
+                        this._send('setNodeVolume', {target: commandTarget, value: Number(value.toFixed(3))});
+                    else this._send('set_app_volume', `${application.id}\t${value.toFixed(3)}`);
+                },
+                onMute: application.muteAvailable === false ? null : muted => {
+                    if (application.commandTarget) this._send('setNodeMuted', {target: commandTarget, muted});
+                    else this._send('toggle_app_mute', String(application.id));
+                },
+            }, tabs: visibleBrowserTabs(application)};
         });
-        return {kind: descriptor.kind, item};
+    }
+
+    _renderTabs(parent, tabs, t) {
+        const target = this._rows.childSection(parent.item);
+        if (!target) return;
+        const next = new Map();
+        const ordered = [];
+        for (const tab of tabs) {
+            const id = `browser-tab:${parent.item._audioMatrixRowId}:${tabKey(tab)}`;
+            const adapterTarget = {browser: tab.browser, instanceId: tab.instanceId,
+                profileId: tab.profileId, sessionToken: tab.sessionToken};
+            const commandTarget = tab.commandTarget || adapterTarget;
+            const volumeAvailable = Boolean(tab.commandTarget) && tab.volumeCapability !== 'unsupported'
+                && tab.volumeCapability !== 'mute_only' && tab.volumeAvailable !== false;
+            const knownVolume = Number.isFinite(tab.volume);
+            const options = {id, name: tab.title || tab.browser, icon: tab.icon || 'web-browser-symbolic', nested: true,
+                value: knownVolume ? tab.volume : 0, muted: tab.muted, commandTarget,
+                muteCommandTarget: adapterTarget,
+                displayValue: tab.muted ? '0%' : knownVolume ? `${Math.round(tab.volume * 100)}%` : '—',
+                available: tab.available !== false,
+                capabilityHint: volumeAvailable ? '' : t.tabVolumeUnavailable,
+                onValue: volumeAvailable ? value => {
+                    if (tab.muted) this._send('setBrowserTabMuted', {target: adapterTarget, muted: false});
+                    this._send('setNodeVolume', {target: tab.commandTarget, value: Number(value.toFixed(3))});
+                } : null,
+                onMute: tab.muteAvailable === false ? null : muted => this._send('setBrowserTabMuted', {
+                    target: adapterTarget, muted,
+                }),
+            };
+            let entry = parent.children.get(id);
+            if (!entry) entry = {item: this._rows.createLevelRow(options)};
+            this._rows.updateLevelRow(entry.item, options);
+            this._register(id, entry.item);
+            next.set(id, entry);
+            ordered.push(entry.item);
+        }
+        reorderMenuItems(target, [...parent.children.values()].map(entry => entry.item), ordered);
+        for (const [id, entry] of parent.children) {
+            if (next.has(id)) continue;
+            this._unregisterLevelRow?.(id);
+            entry.item.destroy?.();
+        }
+        parent.children = next;
     }
 
     rowsForPin(pinId) {
         const rows = this._rendered.get(String(pinId));
         if (!rows) return [];
-        return [...rows].map(([id, row]) => ({id, actor: row.item.actor || row.item}));
+        return [...rows].flatMap(([id, row]) => [{id, actor: row.item.actor || row.item},
+            ...(row.expanded ? [...row.children].map(([childId, child]) => ({id: childId,
+                actor: child.item.actor || child.item})) : [])]);
+    }
+
+    forgetPin(pinId) {
+        for (const [id, row] of this._rendered.get(String(pinId)) || []) {
+            this._unregisterLevelRow?.(id);
+            for (const childId of row.children.keys()) this._unregisterLevelRow?.(childId);
+        }
+        this._rendered.delete(String(pinId));
     }
 
     destroy() {
-        this._rendered.clear();
+        for (const id of this._rendered.keys()) this.forgetPin(id);
         this._rows = null;
         this._send = null;
-        this._registerLevelRow = null;
-        this._unregisterLevelRow = null;
     }
 }

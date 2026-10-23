@@ -54,24 +54,27 @@ final class GraphNodeInspectorPanel {
             return box;
         }
         if(!shell.isSavedGraphNode(graph.id(),selected.id())){
+            DynamicChildAddress address=shell.dynamicChildAddress(graph.id(),selected.id());
+            if(address!=null)box.getChildren().add(shell.gnomePanelProperties(new GnomePanelItem("GENERATED_NODE",
+                    selected.name(),graph.id(),address.generatorId(),address.instanceKey(),"",null,selected,null,address.instance()),
+                    shell.store.snapshot()));
             if(selected instanceof GainNode gain){
-                DynamicChildAddress address=shell.dynamicChildAddress(graph.id(),gain.id());
                 if(address==null||!address.instance().available()){
-                    box.getChildren().add(shell.label(shell.t("Runtime binding недоступен; generated child не изменён.","Runtime binding is unavailable; the generated child was not changed."),"warning"));
+                    box.getChildren().add(shell.label(shell.t("Экземпляр не подключён; управление звуком недоступно.","The instance is disconnected; audio control is unavailable."),"muted"));
                     return box;
                 }
                 if(shell.browserTabInstance(graph.id(),address)&&!shell.independentTabVolumeAvailable(address)){
-                    box.getChildren().add(shell.label(shell.t("Volume вкладки недоступен: нет exact captured stream binding/application rule. Значение не будет перенаправлено на Firefox или другой поток.",
-                            "Tab volume is unavailable: no exact captured-stream binding/application rule exists. The value will not be redirected to Firefox or another stream."),"warning"));
+                    box.getChildren().add(shell.label(shell.t("Независимая громкость вкладки недоступна: браузер не передал отдельный захваченный аудиопоток. Громкость браузера не заменяет громкость вкладки.",
+                            "Independent tab volume is unavailable: the browser has not supplied a separate captured audio stream. Browser volume does not substitute for tab volume."),"muted"));
                     return box;
                 }
-                box.getChildren().add(GraphGainControl.create(gain,shell.t("Runtime Volume: ","Runtime Volume: ")+gain.name(),
+                box.getChildren().add(GraphGainControl.create(gain,shell.t("Громкость экземпляра: ","Instance volume: ")+gain.name(),
                         (level,muted)->dispatchGeneratedGain(shell,graph.id(),address,level,muted)));
                 if(shell.browserTabInstance(graph.id(),address))
-                    box.getChildren().add(shell.label(shell.t("Independent tab volume: confirmed by captureStreamKey, exact nodeName and existing application rule.",
-                            "Independent tab volume: confirmed by captureStreamKey, exact nodeName and existing application rule."),"accent"));
-            }else box.getChildren().add(shell.label(shell.t("Runtime child управляется своим генератором; удаление узла отключено.",
-                    "This runtime child is owned by its generator; deleting the child is disabled."),"muted"));
+                    box.getChildren().add(shell.label(shell.t("Управляет отдельным захваченным аудиопотоком вкладки.",
+                            "Controls the tab's independently captured audio stream."),"muted"));
+            }else box.getChildren().add(shell.label(shell.t("Дочерний узел принадлежит генератору; удаление отключено.",
+                    "This child node is owned by its generator; deletion is disabled."),"muted"));
             return box;
         }
         for(GraphNode node:List.of(selected)){
@@ -144,7 +147,7 @@ final class GraphNodeInspectorPanel {
         if(muted!=null)operation=operation.thenCompose(ignored->shell.setGraphNodeMuted(routeId,address.generatorId(),address.instanceKey(),muted));
         operation.whenComplete((ignored,error)->{
             if(error!=null)Platform.runLater(()->{
-                shell.setNotice(shell.t("Runtime Volume не изменён: ","Runtime volume was not changed: ")+AppShellBase.rootMessage(error),true);
+                shell.setNotice(shell.t("Громкость экземпляра не изменена: ","Instance volume was not changed: ")+AppShellBase.rootMessage(error),true);
                 shell.refreshGraphPageRuntime();
             });
         });

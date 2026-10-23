@@ -29,7 +29,7 @@ class BrowserAdapterTest {
         assertTrue(BrowserAdapterRegistry.capabilities("com.brave.Browser", "brave", "Brave Browser", 2).isEmpty());
     }
 
-    @Test void chromeReportsIndependentVolumeOnlyForConfirmedUnambiguousCapture() {
+    @Test void chromeReportsIndependentVolumeOnlyFromConfirmedCaptureNotParentStreamCount() {
         ChromeBrowserAdapter adapter = new ChromeBrowserAdapter();
         var shared = adapter.capabilities(3, false);
         var captured = adapter.capabilities(1, true);
@@ -47,11 +47,11 @@ class BrowserAdapterTest {
         assertTrue((Boolean) capturedWithoutParentStreams.get("independentTabVolume"));
         assertFalse((Boolean) capturedWithoutParentStreams.get("streamVolume"));
         assertFalse((Boolean) unconfirmed.get("independentTabVolume"));
-        assertFalse((Boolean) ambiguous.get("independentTabVolume"));
+        assertTrue((Boolean) ambiguous.get("independentTabVolume"));
         assertTrue(String.valueOf(shared.get("reason")).contains("общая громкость"));
     }
 
-    @Test void firefoxKeepsOrdinaryStreamVolumeWithoutClaimingTabControls() {
+    @Test void firefoxNeverClaimsPcmVolumeFromOrdinaryStreamsOrACaptureHint() {
         FirefoxBrowserAdapter adapter = new FirefoxBrowserAdapter();
 
         var one = adapter.capabilities(1, false);
@@ -64,5 +64,9 @@ class BrowserAdapterTest {
         assertTrue((Boolean) many.get("streamVolume"));
         assertFalse((Boolean) one.get("independentTabVolume"));
         assertFalse((Boolean) many.get("independentTabVolume"));
+        assertFalse((Boolean) adapter.capabilities(4,true).get("independentTabVolume"));
+        assertTrue(adapter.matches("org.mozilla.firefox","firefox","Mozilla Firefox"));
+        assertTrue(adapter.matches(null,"/usr/lib/firefox/firefox",null));
+        assertFalse(adapter.matches("org.mozilla.vpn","mozillavpn","Mozilla VPN"));
     }
 }

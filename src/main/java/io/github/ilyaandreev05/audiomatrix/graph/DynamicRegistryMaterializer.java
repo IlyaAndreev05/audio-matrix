@@ -29,7 +29,7 @@ final class DynamicRegistryMaterializer {
                 String childSelector = selector.isBlank() ? source.selector() : selector;
                 result.add(new SourceNode(id, name, childSelector, nodeChannels));
             } else if (node instanceof GainNode gain) {
-                DynamicInstanceRegistry.GainState level = gainState(generator, gain, observation, instanceKey,
+                DynamicInstanceRegistry.GainState level = gainState(generator, gain, observation, instanceKey, overrides,
                         selector, nodeChannels, resolver, endpointGainResolver);
                 result.add(new GainNode(id, name, nodeChannels, level.gain(), level.muted(),
                         endpointNodeId(generator, gain, instanceKey, ids)));
@@ -58,7 +58,7 @@ final class DynamicRegistryMaterializer {
     }
 
     private static DynamicInstanceRegistry.GainState gainState(DynamicGeneratorNode generator, GainNode gain,
-            DynamicInstanceRegistry.InstanceSnapshot observation, String instanceKey, String selector,
+            DynamicInstanceRegistry.InstanceSnapshot observation, String instanceKey, Map<String, Object> overrides, String selector,
             List<String> channels, DynamicInstanceRegistry.ApplicationGainResolver resolver,
             DynamicInstanceRegistry.EndpointGainResolver endpointGainResolver) {
         double value = gain.gain();
@@ -88,6 +88,10 @@ final class DynamicRegistryMaterializer {
             } else {
                 value = generator.initialGain();
             }
+        }
+        if ("browser_tabs".equals(generator.registry())) {
+            value = DynamicRegistryValues.number(overrides.get("gain"), generator.initialGain());
+            if (overrides.get("muted") instanceof Boolean savedMute) muted = savedMute;
         }
         return new DynamicInstanceRegistry.GainState(value, muted);
     }
@@ -121,7 +125,7 @@ final class DynamicRegistryMaterializer {
     }
     private static String childName(String display, String templateName, String role) {
         if ("source".equals(role) || "output".equals(role)) return display;
-        if ("gain".equals(role)) return display + " · volume";
+        if ("gain".equals(role)) return display + " · громкость";
         return display + " · " + DynamicRegistryValues.firstNonBlank(templateName, role);
     }
 }

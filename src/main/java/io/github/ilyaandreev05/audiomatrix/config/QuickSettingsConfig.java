@@ -67,6 +67,43 @@ public final class QuickSettingsConfig {
                 displayName, icon, showChildren, showWhenOffline);
     }
 
+    /** A generated child's identity is its template-local id, never its transient runtime node id. */
+    public static Map<String, Object> pinNode(Map<String, Object> config, String routeId, String nodeId,
+                                               String instanceKey, String childId, String groupId, int order, String view) {
+        return QuickSettingsPinLibrary.pinNode(config, routeId, nodeId, instanceKey, childId, groupId, order, view);
+    }
+
+    public static Map<String, Object> findPin(Map<String, Object> config, String routeId, String nodeId,
+                                              String instanceKey, String childId) {
+        return QuickSettingsPinLibrary.find(config, routeId, nodeId, instanceKey, childId);
+    }
+
+    public static void updatePin(Map<String, Object> config, String routeId, String nodeId, String instanceKey,
+                                 String childId, String groupId, int order, String view, String displayName, String icon,
+                                 Boolean showChildren, Boolean showWhenOffline, Boolean expanded) {
+        Map<String, Object> pin = pinNode(config, routeId, nodeId, instanceKey, childId, groupId, order, view);
+        setPinProperty(pin, "display_name", displayName == null || displayName.isBlank() ? null : displayName.trim());
+        setPinProperty(pin, "icon", icon == null || icon.isBlank() ? null : icon.trim());
+        setPinProperty(pin, "show_children", showChildren);
+        setPinProperty(pin, "show_when_offline", showWhenOffline);
+        setPinProperty(pin, "expanded", expanded);
+    }
+
+    public static void unpinNode(Map<String, Object> config, String routeId, String nodeId,
+                                  String instanceKey, String childId) {
+        if (childId == null || childId.isBlank()) {
+            unpinNode(config, routeId, nodeId, instanceKey);
+            return;
+        }
+        Map<String, Object> pin = findPin(config, routeId, nodeId, instanceKey, childId);
+        if (pin != null) pin.put("pinned", false);
+    }
+
+    private static void setPinProperty(Map<String, Object> pin, String key, Object value) {
+        if (value == null) pin.remove(key);
+        else pin.put(key, value);
+    }
+
     public static void unpinNode(Map<String, Object> config, String routeId, String nodeId, String instanceKey) {
         if (instanceKey != null && !instanceKey.isBlank()) {
             try {
@@ -136,6 +173,10 @@ public final class QuickSettingsConfig {
 
     public static void removeGroup(Map<String, Object> config, String groupId) {
         QuickSettingsGroupLibrary.remove(config, groupId);
+    }
+
+    public static void moveGroup(Map<String, Object> config, String groupId, int destination) {
+        QuickSettingsGroupLibrary.move(config, groupId, destination);
     }
 
     private static void ensureControlGroup(Map<String, Object> control, List<Map<String, Object>> groups) {

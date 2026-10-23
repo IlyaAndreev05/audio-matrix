@@ -34,6 +34,11 @@ final class QuickSettingsPinLibrary {
 
     static Map<String, Object> pinNode(Map<String, Object> config, String routeId, String nodeId,
                                        String instanceKey, String groupId, int order, String view) {
+        return pinNode(config, routeId, nodeId, instanceKey, "", groupId, order, view);
+    }
+
+    static Map<String, Object> pinNode(Map<String, Object> config, String routeId, String nodeId,
+                                       String instanceKey, String childId, String groupId, int order, String view) {
         String key = instanceKey == null ? "" : instanceKey;
         if (routeId == null || routeId.isBlank() || nodeId == null || nodeId.isBlank())
             throw new IllegalArgumentException("Pinned graph node needs a route and node id");
@@ -42,16 +47,20 @@ final class QuickSettingsPinLibrary {
         if (!List.of("DEFAULT", "COMPACT", "EXPANDED").contains(view))
             throw new IllegalArgumentException("Pinned node view is unsupported");
         if (order < 0) throw new IllegalArgumentException("Pinned node order must not be negative");
-        Map<String, Object> existing = find(config, routeId, nodeId, key);
+        if (childId != null && !childId.isBlank() && key.isBlank())
+            throw new IllegalArgumentException("A generated child pin needs an instance key");
+        Map<String, Object> existing = find(config, routeId, nodeId, key, childId);
         if (existing != null) {
             existing.put("group_id", groupId);
             existing.put("order", order);
             existing.put("view", view);
+            existing.remove("pinned");
             return existing;
         }
         Map<String, Object> pin = DefaultConfig.map("id", id(), "route_id", routeId, "node_id", nodeId,
                 "group_id", groupId, "order", order, "view", view, "control_ids", new ArrayList<>());
         if (!key.isBlank()) pin.put("instance_key", key);
+        if (childId != null && !childId.isBlank()) pin.put("child_id", childId);
         pins(config).add(pin);
         return pin;
     }
@@ -67,7 +76,7 @@ final class QuickSettingsPinLibrary {
     }
 
     static void removePin(Map<String, Object> config, String routeId, String nodeId, String instanceKey) {
-        Map<String, Object> pin = find(config, routeId, nodeId, instanceKey == null ? "" : instanceKey);
+        Map<String, Object> pin = find(config, routeId, nodeId, instanceKey, "");
         if (pin != null) pins(config).remove(pin);
     }
 
@@ -158,10 +167,17 @@ final class QuickSettingsPinLibrary {
 
     private static Map<String, Object> find(Map<String, Object> config, String routeId, String nodeId,
                                             String instanceKey) {
+        return find(config, routeId, nodeId, instanceKey, "");
+    }
+
+    static Map<String, Object> find(Map<String, Object> config, String routeId, String nodeId,
+                                    String instanceKey, String childId) {
         String key = instanceKey == null ? "" : instanceKey;
+        String child = childId == null ? "" : childId;
         return pins(config).stream()
                 .filter(pin -> routeId.equals(pin.get("route_id")) && nodeId.equals(pin.get("node_id"))
-                        && key.equals(String.valueOf(pin.getOrDefault("instance_key", ""))))
+                        && key.equals(String.valueOf(pin.getOrDefault("instance_key", "")))
+                        && child.equals(String.valueOf(pin.getOrDefault("child_id", ""))))
                 .findFirst().orElse(null);
     }
 

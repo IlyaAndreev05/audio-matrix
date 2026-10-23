@@ -4,13 +4,10 @@ import io.github.ilyaandreev05.audiomatrix.ThemeManager;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.config.ConfigStore;
 import io.github.ilyaandreev05.audiomatrix.config.QuickSettingsConfig;
+import io.github.ilyaandreev05.audiomatrix.gnome.GnomeControlBridge;
 import io.github.ilyaandreev05.audiomatrix.graph.*;
-import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
-import javafx.scene.control.ComboBox;
 import javafx.scene.control.Dialog;
-import javafx.scene.control.TextField;
-import javafx.scene.layout.VBox;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -22,85 +19,62 @@ abstract class AppShellUiPart30 extends AppShellUiPart29 {
 
     @Override
     protected boolean graphNodePinned(String routeId, String nodeId) {
-        return QuickSettingsConfig.pins(store.snapshot()).stream()
-                .anyMatch(pin -> routeId.equals(pin.get("route_id")) && nodeId.equals(pin.get("node_id")));
+        Map<String,Object> pin=QuickSettingsConfig.findPin(store.snapshot(),routeId,nodeId,"","");
+        return pin!=null&&!Boolean.FALSE.equals(pin.get("pinned"));
     }
 
     @Override
     protected void toggleGraphNodePin(String routeId, GraphNode node, boolean pinned) {
         if (pinned) {
-            updateRouteConfig(t("Открепить ноду от GNOME", "Unpin node from GNOME"),
-                    config -> QuickSettingsConfig.removeNode(config, routeId, node.id()));
+            updateRouteConfig(t("Открепить узел от GNOME", "Unpin node from GNOME"),
+                    config -> QuickSettingsConfig.unpinNode(config, routeId, node.id(), ""));
             return;
         }
-        Map<String, Object> config = store.snapshot();
-        List<Map<String, Object>> groups = QuickSettingsConfig.groups(config);
-        String defaultGroupId = quickPinGroup(node);
-        String suggested = groups.stream().filter(group -> defaultGroupId.equals(group.get("id")))
-                .map(group -> String.valueOf(group.get("name"))).findFirst().orElse("Маршрутизация");
-        String order = Integer.toString(QuickSettingsConfig.pins(config).stream()
-                .filter(pin -> routeId.equals(pin.get("route_id"))).mapToInt(pin -> number(pin.get("order"), -1))
-                .max().orElse(-1) + 1);
-        Map<String, Object> defaultGroup = groups.stream()
-                .filter(group -> defaultGroupId.equals(group.get("id")))
-                .findFirst().orElse(null);
-        TextField groupName = new TextField(defaultGroup == null ? suggested : String.valueOf(defaultGroup.get("name")));
-        TextField orderField = new TextField(order);
-        ComboBox<String> view = new ComboBox<>();
-        view.getItems().setAll("DEFAULT", "COMPACT", "EXPANDED");
-        view.setValue("EXPANDED");
-        Dialog<Map<String, Object>> dialog = new Dialog<>();
-        if (getScene() != null) dialog.initOwner(getScene().getWindow());
-        dialog.setTitle(t("Закрепить ноду", "Pin graph node"));
-        dialog.setHeaderText(t("Нода появится в выбранной группе микшера GNOME.", "The node will appear in the selected GNOME mixer group."));
-        dialog.getDialogPane().setContent(new VBox(8,
-                label(t("Группа", "Group"), "muted"), groupName,
-                label(t("Порядок (меньше — выше)", "Order (lower appears first)"), "muted"), orderField,
-                label(t("Вид карточки", "Card view"), "muted"), view));
-        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
-        Button save = (Button) dialog.getDialogPane().lookupButton(ButtonType.OK);
-        Runnable validate = () -> save.setDisable(groupName.getText().isBlank() || !validOrder(orderField.getText()));
-        groupName.textProperty().addListener((obs, old, value) -> validate.run());
-        orderField.textProperty().addListener((obs, old, value) -> validate.run());
-        validate.run();
-        dialog.setResultConverter(button -> button == ButtonType.OK
-                ? Map.of("group", groupName.getText().trim(), "order", Integer.parseInt(orderField.getText()), "view", view.getValue())
-                : null);
-        dialog.showAndWait().ifPresent(settings -> updateRouteConfig(t("Закрепить ноду в GNOME", "Pin node in GNOME"),
-                candidate -> {
-                    Map<String, Object> group = QuickSettingsConfig.findOrCreateGroup(candidate, String.valueOf(settings.get("group")));
-                    QuickSettingsConfig.pinNode(candidate, routeId, node.id(), String.valueOf(group.get("id")),
-                            number(settings.get("order"), 0), String.valueOf(settings.get("view")));
-                }));
+        Dialog<Void> dialog=new Dialog<>();
+        if(getScene()!=null)dialog.initOwner(getScene().getWindow());
+        dialog.setTitle(t("Закрепление в GNOME","GNOME pin"));
+        dialog.setHeaderText(t("Отображение узла не меняет его работу в аудиографе.",
+                "Node presentation does not change its audio graph behavior."));
+        dialog.getDialogPane().setContent(gnomePanelProperties(new GnomePanelItem("NODE",node.name(),
+                routeId,node.id(),"","",null,node,null,null),store.snapshot()));
+        dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        dialog.getDialogPane().setPrefWidth(560);
+        styleDialog(dialog);
+        dialog.showAndWait();
     }
 
     protected CompletableFuture<Void> setGnomeQuickPinView(String value) {
         String[] fields = value.split("\\t", 2);
         if (fields.length != 2 || !List.of("COMPACT", "EXPANDED").contains(fields[1]))
             return CompletableFuture.failedFuture(new IllegalArgumentException("Pinned node view is malformed"));
+        var current=store.snapshot();
+        DynamicInstanceRegistry.ReconcileResult runtime=dynamicGraphState(String.valueOf(current.getOrDefault("active_route","")));
+        List<Map<String,Object>> projected=fields[0].startsWith("generated-pin:")
+                ?maps(GnomeControlBridge.stateProjection(snapshot,current,current.revision(),browserAdapters,runtime).get("quickPins")):List.of();
         return updateRouteConfigCommand(t("Изменён вид закреплённой ноды", "Pinned node view changed"), config -> {
-            Map<String, Object> pin = QuickSettingsConfig.pins(config).stream()
-                    .filter(item -> fields[0].equals(item.get("id"))).findFirst()
-                    .orElseThrow(() -> new IllegalArgumentException("Pinned node no longer exists"));
+            Map<String,Object> pin=pinForDisclosure(config,fields[0],runtime,projected);
             if (!GraphUiRoutes.available(config, String.valueOf(pin.get("route_id"))))
                 throw new IllegalArgumentException("Pinned node is not on the active route");
-            pin.put("view", fields[1]);
+            pin.put("expanded", "EXPANDED".equals(fields[1]));
+            pin.put("view",fields[1]);
         });
     }
 
-    private boolean validOrder(String value) {
-        try { return Integer.parseInt(value) >= 0; }
-        catch (NumberFormatException invalid) { return false; }
+    static Map<String,Object> pinForDisclosure(Map<String,Object> config,String pinId,
+            DynamicInstanceRegistry.ReconcileResult runtime,List<Map<String,Object>> projected){
+        Map<String,Object> saved=QuickSettingsConfig.pins(config).stream()
+                .filter(pin->pinId.equals(pin.get("id"))&&!Boolean.FALSE.equals(pin.get("pinned"))).findFirst().orElse(null);
+        if(saved!=null)return saved;
+        if(runtime==null)throw new IllegalArgumentException("Закреплённый элемент больше недоступен.");
+        DynamicInstanceRegistry.RuntimeInstance instance=runtime.instances().values().stream()
+                .filter(item->pinId.equals("generated-pin:"+item.generatorId()+":"+item.instanceKey())).findFirst()
+                .orElseThrow(()->new IllegalArgumentException("Созданный экземпляр больше не существует."));
+        Map<String,Object> automatic=projected.stream().filter(pin->pinId.equals(pin.get("id"))).findFirst()
+                .orElseThrow(()->new IllegalArgumentException("Созданный экземпляр больше не закреплён."));
+        String groupId=String.valueOf(automatic.get("groupId"));
+        int order=automatic.get("order") instanceof Number number?number.intValue():0;
+        return QuickSettingsConfig.pinNode(config,runtime.configuredGraph().id(),instance.generatorId(),
+                instance.instanceKey(),groupId,order,String.valueOf(automatic.getOrDefault("view","EXPANDED")));
     }
 
-    private String quickPinGroup(GraphNode node) {
-        if (node instanceof DeviceSlotNode || node instanceof OutputNode) return "outputs";
-        if (node instanceof SourceNode source && source.selector().equals(EventSoundStudioSource.SELECTOR)) return "events";
-        if (node instanceof SourceNode) return "applications";
-        return "routing";
-    }
-
-    private int number(Object value, int fallback) {
-        return value instanceof Number number ? number.intValue() : fallback;
-    }
 }

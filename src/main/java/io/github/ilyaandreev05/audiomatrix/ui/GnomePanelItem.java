@@ -8,5 +8,15 @@ import java.util.Map;
 record GnomePanelItem(String kind, String label, String routeId, String nodeId, String instanceKey, String groupId,
                       Map<String, Object> pin, GraphNode node, GraphSubgraph composite,
                       DynamicInstanceRegistry.RuntimeInstance runtime) {
-    String key() { return kind + "\u0001" + routeId + "\u0001" + nodeId + "\u0001" + instanceKey + "\u0001" + groupId; }
+    String childId() {
+        if (pin != null && pin.get("child_id") instanceof String id) return id;
+        if (runtime == null || node == null) return "";
+        return runtime.nodeIds().entrySet().stream().filter(entry -> node.id().equals(entry.getValue()))
+                .map(Map.Entry::getKey).findFirst().orElse("");
+    }
+
+    String key() {
+        return kind + "\u0001" + routeId + "\u0001" + nodeId + "\u0001" + instanceKey + "\u0001"
+                + childId() + "\u0001" + groupId;
+    }
 }

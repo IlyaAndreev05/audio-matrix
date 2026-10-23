@@ -23,12 +23,12 @@ final class DynamicRegistrySystemInput {
         Map<String, Object> binding = new LinkedHashMap<>();
         binding.put("applicationId", APPLICATION_ID);
         binding.put("processName", "");
-        binding.put("applicationName", "System input");
+        binding.put("applicationName", "Системный звук");
         binding.put("audioMatrixOwned", false);
         binding.put("hasPcmBinding", true);
         binding.put("systemInput", true);
         return new DynamicInstanceRegistry.InstanceSnapshot("applications", "app:" + APPLICATION_ID,
-                "System input", SELECTOR, List.of("FL", "FR"), binding,
+                "Системный звук", SELECTOR, List.of("FL", "FR"), binding,
                 DynamicInstanceRegistry.Confidence.HIGH);
     }
 }

@@ -1,9 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Audio Matrix · управление вкладками",
-  "version": "0.4.0",
-  "description": "Показывает вкладки Firefox и позволяет включать или выключать звук. Независимая громкость доступна только для отдельных системных аудиопотоков.",
-  "permissions": ["tabs"],
+  "version": "0.4.1",
+  "description": "Реальные вкладки Firefox в Audio Matrix: названия, аудиоактивность и выключение звука. Независимая PCM-громкость вкладки недоступна.",
+  "permissions": ["tabs", "storage", "nativeMessaging"],
+  "background": {
+    "scripts": ["background.js"]
+  },
   "action": {
     "default_title": "Audio Matrix · вкладки",
     "default_popup": "popup.html"

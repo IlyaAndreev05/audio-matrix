@@ -36,6 +36,7 @@ final class ConfigMigration {
         } catch (Exception error) {
             throw new ConfigStore.ConfigValidationException(List.of("Legacy YAML could not be read; it was left untouched: " + error.getMessage()));
         }
+        importLegacyYamlDeviceAliases(parsed);
         int version = parsed.get("schema_version") instanceof Number number ? number.intValue() : -1;
         if (version < DefaultConfig.SCHEMA_VERSION) {
             try { upgradeConfig(parsed); }
@@ -53,6 +54,19 @@ final class ConfigMigration {
         } catch (IOException | RuntimeException failure) {
             Files.deleteIfExists(file);
             throw failure;
+        }
+    }
+
+    static void importLegacyYamlDeviceAliases(Map<String,Object> config) {
+        if (!(config.get("devices") instanceof List<?> devices)) return;
+        for (Object item : devices) {
+            if (!(item instanceof Map<?,?> raw)) continue;
+            @SuppressWarnings("unchecked") Map<String,Object> device=(Map<String,Object>)raw;
+            Object alias = device.remove("alias");
+            Object name = device.get("name");
+            if (!(name instanceof String current) || current.isBlank()) {
+                if (alias instanceof String legacyName && !legacyName.isBlank()) device.put("name", legacyName);
+            }
         }
     }
 

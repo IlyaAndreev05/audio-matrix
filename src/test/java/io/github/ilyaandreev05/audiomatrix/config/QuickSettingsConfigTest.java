@@ -94,7 +94,7 @@ class QuickSettingsConfigTest {
                 "octine-vibro-gain".equals(pin.get("node_id"))
                         && ((List<?>) pin.get("control_ids")).contains("my-vibro-level")));
     }
-    @Test void generatedChildPinsUseGeneratorIdentityAndUnpinStoresSparseFalse() {
+    @Test void generatedInstancePinsUseGeneratorIdentityAndUnpinStoresSparseFalse() {
         Map<String, Object> config = DefaultConfig.create();
         String generatorId = "application-generator";
         String instanceKey = "app:org.example.Player";
@@ -166,5 +166,52 @@ class QuickSettingsConfigTest {
         Map<String, Object> replacement = QuickSettingsConfig.groups(config).getFirst();
         assertEquals("Без группы", replacement.get("name"));
         assertNotEquals("only-group", replacement.get("id"));
+    }
+
+    @Test void generatedChildrenKeepIndependentPinsAndUnpinDoesNotHideTheirInstance() {
+        Map<String,Object> config=DefaultConfig.create();
+        QuickSettingsConfig.pinNode(config,"main","generator","app:player","","applications",0,"EXPANDED");
+        QuickSettingsConfig.updatePin(config,"main","generator","app:player","gain","applications",1,"EXPANDED",
+                "Громкость проигрывателя","multimedia-player-symbolic",false,true,false);
+        QuickSettingsConfig.pinNode(config,"main","generator","app:player","source","applications",2,"DEFAULT");
+
+        assertNotSame(QuickSettingsConfig.findPin(config,"main","generator","app:player","gain"),
+                QuickSettingsConfig.findPin(config,"main","generator","app:player","source"));
+        QuickSettingsConfig.unpinNode(config,"main","generator","app:player","gain");
+        Map<String,Object> hidden=QuickSettingsConfig.findPin(config,"main","generator","app:player","gain");
+        assertEquals(false,hidden.get("pinned"));
+        assertEquals("Громкость проигрывателя",hidden.get("display_name"));
+        assertEquals(false,hidden.get("expanded"));
+        assertFalse(Boolean.FALSE.equals(QuickSettingsConfig.findPin(config,"main","generator","app:player","").get("pinned")));
+        assertFalse(Boolean.FALSE.equals(QuickSettingsConfig.findPin(config,"main","generator","app:player","source").get("pinned")));
+
+        QuickSettingsConfig.pinNode(config,"main","generator","app:player","gain","applications",1,"EXPANDED");
+        assertFalse(hidden.containsKey("pinned"));
+        assertEquals("Громкость проигрывателя",hidden.get("display_name"));
+    }
+
+    @Test void movingGroupsProducesAnUnambiguousContiguousOrder() {
+        Map<String,Object> config=DefaultConfig.create();
+        QuickSettingsConfig.moveGroup(config,"events",0);
+        assertEquals(List.of("events","applications","outputs","routing"),
+                QuickSettingsConfig.groups(config).stream().map(group->group.get("id")).toList());
+        QuickSettingsConfig.updateGroup(config,"outputs","Мои устройства",0,true);
+        assertEquals(List.of("outputs","events","applications","routing"),
+                QuickSettingsConfig.groups(config).stream().map(group->group.get("id")).toList());
+        assertEquals(List.of(0,1,2,3),QuickSettingsConfig.groups(config).stream().map(group->group.get("order")).toList());
+        assertTrue(Boolean.TRUE.equals(QuickSettingsConfig.groups(config).getFirst().get("collapsed")));
+    }
+
+    @Test void aSavedCompositeCanBePinnedWithoutPretendingToBeAGraphNode() {
+        Map<String,Object> config=DefaultConfig.create();
+        QuickSettingsConfig.pins(config).clear();
+        var graph=new io.github.ilyaandreev05.audiomatrix.graph.AudioGraph("composite-test","Тест",
+                List.of(new io.github.ilyaandreev05.audiomatrix.graph.GainNode("first","Первый",List.of("FL","FR"),1,false),
+                        new io.github.ilyaandreev05.audiomatrix.graph.GainNode("second","Второй",List.of("FL","FR"),1,false)),List.of());
+        var composite=io.github.ilyaandreev05.audiomatrix.graph.GraphSubgraphLibrary.create(config,graph,"Составной блок",List.of("first","second"));
+        QuickSettingsConfig.pinNode(config,graph.id(),composite.id(),"routing",0,"EXPANDED");
+        List<String> errors=new ArrayList<>();
+        ConfigPinnedNodeRules.validate(config,Map.of(graph.id(),graph),List.of(),errors);
+        assertEquals(List.of(),errors);
     }
 }

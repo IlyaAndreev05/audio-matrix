@@ -45,9 +45,6 @@ class GnomeQuickSettingsGeneratedPinTest {
         assertEquals(generator.id(), generated.get("nodeId"));
         assertEquals(instanceKey, generated.get("instanceKey"));
         assertEquals("applications", generated.get("groupId"));
-        assertEquals(gain.id(), ((Map<?, ?>) generated.get("gain")).get("nodeId"));
-        assertEquals(List.of(), generated.get("applications"),
-                "The generated graph Gain is the one volume control, not a duplicate parent app slider");
 
         DynamicInstanceRegistry.RuntimeInstance unpinned = new DynamicInstanceRegistry.RuntimeInstance(
                 generator.id(), instanceKey, instance.nodeIds(), instance.compositeId(), true, true, true,

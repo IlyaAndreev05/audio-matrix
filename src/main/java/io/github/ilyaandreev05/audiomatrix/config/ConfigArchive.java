@@ -31,7 +31,6 @@ import java.util.zip.ZipOutputStream;
 public final class ConfigArchive {
     private static final int MAX_ENTRIES = 512;
     private static final long MAX_BYTES = 512L * 1024 * 1024;
-    private static final List<String> CALIBRATION_FILE_FIELDS = List.of("measurement_file", "response_curve_file", "decay_curve_file");
     private static final TypeReference<LinkedHashMap<String, Object>> MAP_TYPE = new TypeReference<>() {};
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final ObjectMapper YAML = new ObjectMapper(new YAMLFactory());
@@ -43,7 +42,7 @@ public final class ConfigArchive {
         if (!errors.isEmpty()) throw new ArchiveException("Configuration is invalid: " + String.join("; ", errors));
         Path root = dataDirectory.toAbsolutePath().normalize();
         byte[] document = JSON.writerWithDefaultPrettyPrinter().writeValueAsBytes(config);
-        TreeMap<String, Path> assets = measurementFiles(config, root);
+        TreeMap<String, Path> assets = ArchiveFiles.measurementFiles(config, root);
         TreeMap<String, String> hashes = new TreeMap<>(); hashes.put("config.json", ArchiveFiles.sha256(document));
         for (var asset : assets.entrySet()) hashes.put("data/" + asset.getKey(), ArchiveFiles.sha256(asset.getValue()));
         Map<String, Object> manifest = new LinkedHashMap<>();
@@ -105,11 +104,12 @@ public final class ConfigArchive {
                     ? JSON.readValue(Files.readAllBytes(extracted.get(configEntry)), MAP_TYPE)
                     : YAML.readValue(Files.readAllBytes(extracted.get(configEntry)), MAP_TYPE);
             if (config == null) throw new ArchiveException("Configuration must be a JSON or YAML mapping");
+            if ("config.yaml".equals(configEntry)) ConfigMigration.importLegacyYamlDeviceAliases(config);
             int sourceSchema=integer(config.get("schema_version"),-1);
             manifest = ArchiveManifestMigrator.migrate(manifest, sourceSchema);
             if(sourceSchema<DefaultConfig.SCHEMA_VERSION){ConfigStore.upgradeConfig(config);manifest.put("config_schema_version",integer(config.get("schema_version"),-1));}
             List<String> errors = ConfigValidator.validate(config); if (!errors.isEmpty()) throw new ArchiveException("Imported config is invalid: " + String.join("; ", errors));
-            verifyReferences(config, hashes);
+            ArchiveFiles.verifyReferences(config, hashes);
             return new PreparedImport(staging, copyMap(config), hashes, count(config, "profiles"), count(config, "routes"), (int) hashes.keySet().stream().filter(s -> s.startsWith("data/")).count());
         } catch (Exception e) {
             ArchiveFiles.deleteTree(staging); if (e instanceof IOException io) throw io; throw new ArchiveException("Could not prepare archive: " + e.getMessage(), e);
@@ -142,7 +142,7 @@ public final class ConfigArchive {
         Object calibrationValue = prepared.config.get("calibrations");
         if (calibrationValue instanceof List<?> calibrations) for (Object item : calibrations) if (item instanceof Map<?, ?> raw) {
             @SuppressWarnings("unchecked") Map<String, Object> calibration = (Map<String, Object>) raw;
-            for (String field : CALIBRATION_FILE_FIELDS) {
+            for (String field : ArchiveFiles.CALIBRATION_FILE_FIELDS) {
                 Object path = calibration.get(field);
                 if (path instanceof String relative && remapped.containsKey(relative)) calibration.put(field, remapped.get(relative));
             }
@@ -216,20 +216,6 @@ public final class ConfigArchive {
         return Set.of("output", "speaker", "speakers", "subwoofer", "haptic_output").contains(role) ? "output" : "";
     }
 
-    private static TreeMap<String, Path> measurementFiles(Map<String, Object> config, Path root) throws IOException {
-        TreeMap<String, Path> files = new TreeMap<>(); Object value = config.get("calibrations"); if (!(value instanceof List<?> calibrations)) return files;
-        for (Object item : calibrations) if (item instanceof Map<?, ?> calibration)
-            for (String field : CALIBRATION_FILE_FIELDS) if (calibration.get(field) instanceof String raw) {
-                Path rel = ArchiveFiles.safeRelative(raw); Path file = root.resolve(rel).normalize();
-                if (!file.startsWith(root) || !ArchiveFiles.regularWithoutSymlinks(root, file)) throw new ArchiveException("Measurement file is missing or outside config directory: " + raw);
-                files.put(rel.toString().replace('\\','/'), file);
-            }
-        return files;
-    }
-    private static void verifyReferences(Map<String, Object> config, Map<String, String> hashes) throws IOException {
-        Object value=config.get("calibrations");if(!(value instanceof List<?> calibrations))return;
-        for(Object item:calibrations)if(item instanceof Map<?,?> c)for(String field:CALIBRATION_FILE_FIELDS)if(c.get(field) instanceof String raw){String path="data/"+ArchiveFiles.safeRelative(raw).toString().replace('\\','/');if(!hashes.containsKey(path))throw new ArchiveException("Archive is missing calibration file: "+raw);}
-    }
     private static int integer(Object value,int fallback){return value instanceof Number n?n.intValue():fallback;}
     private static int count(Map<String,Object> config,String key){return config.get(key) instanceof List<?> list?list.size():0;}
     @SuppressWarnings("unchecked") private static List<Map<String,Object>> maps(Object value){return value instanceof List<?> list?(List<Map<String,Object>>) (List<?>)list:List.of();}

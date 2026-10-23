@@ -27,11 +27,9 @@ XDG_DATA_HOME="$scratch/data" gjs -m "$scratch/check-desktop-app-info.mjs"
 extension_source="$repo_root/gnome/audio-matrix-quick-settings"
 gjs -m "$repo_root/scripts/test-gnome-quick-settings-state.js"
 node "$repo_root/scripts/test-menu-state-client.mjs"
-node "$repo_root/scripts/test-volume-menu-lease.mjs"
 node "$repo_root/scripts/test-menu-adapter.mjs"
 node "$repo_root/scripts/test-menu-renderer.mjs"
 node "$repo_root/scripts/test-menu-group-disclosure.mjs"
-node "$repo_root/scripts/test-menu-output.mjs"
 node "$repo_root/scripts/test-menu-control-scale.mjs"
 node "$repo_root/scripts/test-extension-imports.mjs"
 for source_file in "$extension_source"/*.js; do node --check "$source_file"; done
@@ -42,6 +40,7 @@ gnome-extensions pack "$extension_source" --force --out-dir "$scratch" \
     --extra-source=menu-row-utils.js \
     --extra-source=menu-viewport.js \
     --extra-source=menu-quick-controls.js \
+    --extra-source=menu-pinned-controls.js \
     --extra-source=menu-text.js \
     --extra-source=state-client.js \
     --extra-source=menu-rows.js \
@@ -56,14 +55,8 @@ gnome-extensions pack "$extension_source" --force --out-dir "$scratch" \
     --extra-source=menu-groups.js \
     --extra-source=menu-renderer.js \
     --extra-source=menu-state.js \
-    --extra-source=menu-lease.js \
     --extra-source=volume-menu-adapter.js
 unzip -t "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip"
-unzip -p "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" metadata.json |
-    node -e 'let data = ""; process.stdin.on("data", chunk => data += chunk); process.stdin.on("end", () => { if (JSON.parse(data).version !== 19) process.exit(1); });'
-for module in menu-text.js state-client.js menu-pending-intents.js menu-state-render-scheduler.js menu-icons.js menu-row-utils.js menu-viewport.js menu-quick-controls.js menu-rows.js menu-applications.js menu-links.js menu-layout.js menu-control-scale.js menu-matrix.js menu-mixer.js menu-output.js menu-disclosure.js menu-groups.js menu-renderer.js menu-state.js menu-lease.js volume-menu-adapter.js; do
-    unzip -Z1 "$scratch/audio-matrix-quick-settings@ilyaandreev05.shell-extension.zip" | grep -Fxq "$module"
-done
 
 fake_bin="$scratch/fake-bin"
 user_data="$scratch/user-data"

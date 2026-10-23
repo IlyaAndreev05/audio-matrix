@@ -78,6 +78,10 @@ install -m 0644 "$source_dir/metadata.json" "$tmp/metadata.json"
 for source_file in "$source_dir"/*.js; do
     install -m 0644 "$source_file" "$tmp/$(basename "$source_file")"
 done
+for source_file in "$source_dir"/*.css; do
+    [ -f "$source_file" ] || continue
+    install -m 0644 "$source_file" "$tmp/$(basename "$source_file")"
+done
 if [ -n "$upgrade_backup" ]; then mv "$target" "$upgrade_backup"; fi
 mv "$tmp" "$target"
 if [ ! -r "$state_dir/previous-state" ]; then

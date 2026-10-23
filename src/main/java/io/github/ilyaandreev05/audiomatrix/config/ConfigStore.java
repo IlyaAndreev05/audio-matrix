@@ -19,15 +19,14 @@ public final class ConfigStore implements AutoCloseable {
     private final Path file;
     private final Path legacyFile;
     private final ObjectMapper mapper;
-    private final ExecutorService watcherExecutor = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "audio-matrix-config-watch"); t.setDaemon(true); return t;
-    });
     private final ExecutorService storageExecutor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "audio-matrix-config-storage"); t.setDaemon(true); return t;
     });
     private final List<Consumer<ConfigEvent>> listeners = new CopyOnWriteArrayList<>();
     private final ConfigStoreDocument document = new ConfigStoreDocument();
     private volatile boolean closed;
+    private final Object watcherLifecycle = new Object();
+    private ConfigWatcher watcher;
 
     public ConfigStore(Path file) throws IOException, ConfigValidationException {
         this(file, file.toAbsolutePath().normalize().equals(defaultPath()) ? legacyPath() : null);
@@ -196,14 +195,24 @@ public final class ConfigStore implements AutoCloseable {
         return config;
     }
 
-    private void startWatcher() {
-        ConfigWatcher.start(file, watcherExecutor, () -> closed, this::diskMatchesCurrent, this::reload,
-                error -> { document.diagnostic(error.getMessage()); publish(new ConfigEvent(snapshot(), "Configuration rejected: " + document.diagnostic())); },
-                error -> document.diagnostic("Configuration watcher stopped: " + error.getMessage()));
+    private void startWatcher() throws IOException {
+        synchronized (watcherLifecycle) {
+            if (closed) throw new IOException("Configuration store closed before watcher startup for " + file);
+            try {
+                watcher = ConfigWatcher.start(file, () -> closed, this::inspectDisk, this::reload,
+                        error -> { document.diagnostic(error.getMessage()); publish(new ConfigEvent(snapshot(), "Configuration rejected: " + document.diagnostic())); },
+                        error -> document.diagnostic("Configuration watcher stopped: " + error.getMessage()));
+            } catch (IOException | RuntimeException | Error failure) {
+                storageExecutor.shutdownNow();
+                throw failure;
+            }
+        }
     }
 
-    private synchronized boolean diskMatchesCurrent() throws IOException {
-        return document.fingerprint() != null && hash(Files.readAllBytes(file)).equals(document.fingerprint());
+    private synchronized void inspectDisk(ConfigWatcher.DiskState state) throws IOException {
+        String fingerprint = hash(Files.readAllBytes(file));
+        String current = document.fingerprint();
+        state.update(current != null && fingerprint.equals(current), fingerprint);
     }
 
     private void atomicWrite(byte[] data) throws IOException {
@@ -211,8 +220,19 @@ public final class ConfigStore implements AutoCloseable {
     }
     private static String hash(byte[] bytes) { return ConfigFileIO.hash(bytes); }
     private void publish(ConfigEvent event) { listeners.forEach(listener -> { try { listener.accept(event); } catch (RuntimeException ignored) { } }); }
-    @Override public void close() { closed = true; watcherExecutor.shutdownNow(); storageExecutor.shutdownNow(); }
-
+    @Override public void close() {
+        synchronized (watcherLifecycle) {
+            if (closed) return;
+            closed = true;
+            ConfigWatcher active = watcher;
+            watcher = null;
+            try {
+                if (active != null) active.close();
+            } finally {
+                storageExecutor.shutdownNow();
+            }
+        }
+    }
     public record ConfigEvent(Map<String, Object> config, String message) {}
     public static class ConfigValidationException extends Exception {
         private final List<String> errors;

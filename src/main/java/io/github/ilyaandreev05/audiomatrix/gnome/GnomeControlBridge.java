@@ -2,7 +2,6 @@ package io.github.ilyaandreev05.audiomatrix.gnome;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.ilyaandreev05.audiomatrix.audio.AudioNode;
-import io.github.ilyaandreev05.audiomatrix.audio.DeviceSelectorMatcher;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
@@ -11,9 +10,7 @@ import io.github.ilyaandreev05.audiomatrix.graph.DynamicInstanceRegistry;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
 import io.github.ilyaandreev05.audiomatrix.graph.RouterNode;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -38,8 +35,10 @@ public final class GnomeControlBridge implements AutoCloseable {
             "set_output_volume","toggle_output_mute","set_source_volume","toggle_source_mute","set_app_volume","toggle_app_mute","set_stream_volume",
             "set_graph_output_volume","toggle_graph_output_mute","set_graph_gain","toggle_graph_gain_mute","toggle_stream_mute","set_mixer_input_volume","toggle_mixer_input_mute","set_quick_control","toggle_quick_control","set_quick_control_choice",
             "set_quick_group_collapsed","reorder_quick_group","set_quick_pin_view","set_quick_matrix_view","select_route","select_profile","set_channel_map",
-            "setNodeVolume","setNodeMuted","setRouteEnabled");
+            "setNodeVolume","setNodeMuted","setRouteEnabled","setBrowserTabMuted");
     private final Function<Command,CompletableFuture<Void>> commands;
+    private final Function<Command,CompletableFuture<Void>> confirmState;
+    private final SignalEmitter signalEmitter;
     private final ObjectMapper json=new ObjectMapper();
     private final List<BrowserAdapter> browserAdapters;
     private final AtomicBoolean closed=new AtomicBoolean();
@@ -47,7 +46,9 @@ public final class GnomeControlBridge implements AutoCloseable {
     private final GnomeBridgeStateSequencer stateSequencer=new GnomeBridgeStateSequencer(json);
     private CompletableFuture<Void> commandTail=CompletableFuture.completedFuture(null);
     private final ScheduledExecutorService emitter=Executors.newSingleThreadScheduledExecutor(r->{Thread t=new Thread(r,"audio-matrix-dbus-status");t.setDaemon(true);return t;});
-    private volatile Process monitor;
+    private final Object stateSignalLock=new Object();
+    private final GnomeBridgeCommandChannel commandChannel;
+    private final boolean requireCommandListener;
     public void publishState(PipeWireBackend.Snapshot snapshot,Map<String,Object> config,long configRevision,
                              DynamicInstanceRegistry.ReconcileResult graphState){
         emitObservedState(stateProjection(snapshot,config,configRevision,browserAdapters,graphState));
@@ -57,15 +58,38 @@ public final class GnomeControlBridge implements AutoCloseable {
             DynamicInstanceRegistry.ReconcileResult graphState){
         return GnomeBridgeStateBuilder.build(snapshot,config,configRevision,browserAdapters,graphState);
     }
-    static List<Map<String,Object>> outputDevices(PipeWireBackend.Snapshot snapshot){
-        return GnomeOutputState.devices(snapshot,List.of());
-    }
     public GnomeControlBridge(Function<Command,CompletableFuture<Void>> commands,
                               List<BrowserAdapter> browserAdapters){
-        this.commands=commands==null?ignored->CompletableFuture.completedFuture(null):commands;
-        this.browserAdapters=List.copyOf(browserAdapters==null?List.of():browserAdapters);
+        this(commands,browserAdapters,ignored->CompletableFuture.completedFuture(null));
     }
-    public void start(){if(!started.compareAndSet(false,true))return;Thread.ofVirtual().name("audio-matrix-dbus-monitor").start(this::monitorLoop);emitter.scheduleAtFixedRate(this::reemitLatestState,4,4,TimeUnit.SECONDS);}
+    public GnomeControlBridge(Function<Command,CompletableFuture<Void>> commands,
+                              List<BrowserAdapter> browserAdapters,
+                              Function<Command,CompletableFuture<Void>> confirmState){
+        this(commands,browserAdapters,confirmState,GnomeControlBridge::emitOnBus,true);
+    }
+    // The injected sink is ungated until start, keeping command-order unit tests bus-independent.
+    GnomeControlBridge(Function<Command,CompletableFuture<Void>> commands,
+                       List<BrowserAdapter> browserAdapters,
+                       Function<Command,CompletableFuture<Void>> confirmState,SignalEmitter signalEmitter){
+        this(commands,browserAdapters,confirmState,signalEmitter,false);
+    }
+    GnomeControlBridge(Function<Command,CompletableFuture<Void>> commands,
+                       List<BrowserAdapter> browserAdapters,
+                       Function<Command,CompletableFuture<Void>> confirmState,SignalEmitter signalEmitter,
+                       boolean requireCommandListener){
+        this.commands=commands==null?ignored->CompletableFuture.completedFuture(null):commands;
+        this.confirmState=java.util.Objects.requireNonNull(confirmState);
+        this.signalEmitter=java.util.Objects.requireNonNull(signalEmitter);
+        this.browserAdapters=List.copyOf(browserAdapters==null?List.of():browserAdapters);
+        this.requireCommandListener=requireCommandListener;
+        this.commandChannel=new GnomeBridgeCommandChannel(this::dispatch,this::reemitLatestState);
+    }
+    @FunctionalInterface
+    interface SignalEmitter {
+        void emit(String signal,String signature,List<String> arguments);
+    }
+    public void start(){if(!started.compareAndSet(false,true))return;commandChannel.start();emitter.scheduleAtFixedRate(this::reemitLatestState,4,4,TimeUnit.SECONDS);}
+    CompletableFuture<Void> commandListenerReady(){return commandChannel.readyFuture();}
     static List<Map<String,Object>> quickControls(Map<String,Object> config){
         String active=String.valueOf(config.getOrDefault("active_route",""));
         Map<String,Object> route=maps(config.get("route_library")).stream().filter(item->active.equals(item.get("id"))).findFirst().orElse(null);
@@ -94,38 +118,11 @@ public final class GnomeControlBridge implements AutoCloseable {
         }
         result.sort(java.util.Comparator.comparingInt(item->item.get("order") instanceof Number number?number.intValue():0));return List.copyOf(result);
     }
-    static String controlKind(String nodeType,String parameter){if("gain".equals(nodeType)&&"gain".equals(parameter))return "slider";if("gain".equals(nodeType)&&"muted".equals(parameter))return "toggle";if("gate".equals(nodeType)&&"open".equals(parameter))return "toggle";if("filter".equals(nodeType)&&"enabled".equals(parameter))return "toggle";if("filter".equals(nodeType)&&parameter.endsWith("_hz"))return "range";if("filter".equals(nodeType)&&parameter.endsWith("_ms"))return "range";if("filter".equals(nodeType)&&parameter.endsWith("_db"))return "range";if("filter".equals(nodeType)&&("slope_db_oct".equals(parameter)||parameter.endsWith(".type")))return "choice";if(List.of("switch","selector","multi_selector","matrix").contains(nodeType)&&"active_links".equals(parameter))return "links";return "";}
-    private void reemitLatestState(){String payload=stateSequencer.latest();if(!closed.get()&&!payload.isBlank())emit("State",payload);}
-    static List<Map<String,Object>> channelRoutes(PipeWireBackend.Snapshot snapshot,Map<String,Object> config,Map<String,Object> profile,AudioNode selected,int defaultId,List<Map<String,Object>> devices){
-        if(selected==null)return List.of();
-        List<String> activeIds=stringList(profile.get("active_routes"));List<Map<String,Object>> buses=maps(config.get("buses"));List<Map<String,Object>> result=new ArrayList<>();
-        for(Map<String,Object> route:maps(config.get("routes"))){
-            String id=String.valueOf(route.getOrDefault("id",""));if(id.isBlank()||!activeIds.contains(id)||Boolean.FALSE.equals(route.get("enabled")))continue;
-            String target=String.valueOf(route.getOrDefault("to",""));if(buses.stream().anyMatch(bus->target.equals(bus.get("id"))))continue;
-            AudioNode output="system_default".equals(target)?snapshot.sinks().stream().filter(node->node.id()==defaultId).findFirst().orElse(null):DeviceSelectorMatcher.resolve(snapshot.sinks(),target,devices);
-            if(output==null||output.id()!=selected.id())continue;
-            Map<String,Object> item=new LinkedHashMap<>();item.put("id",id);item.put("name",route.getOrDefault("name",id));item.put("channel_map",route.getOrDefault("channel_map","stereo"));result.add(item);
-        }
-        return List.copyOf(result);
+    private void reemitLatestState(){
+        synchronized(stateSignalLock){String payload=stateSequencer.latest();if(!payload.isBlank())emitStateWhenReady(payload);}
     }
     private static String language(Map<String,Object> config){Object ui=config.get("ui");if(ui instanceof Map<?,?> preferences&&"en".equals(preferences.get("language")))return "en";return "ru";}
     private static List<Map<String,Object>> maps(Object value){if(!(value instanceof List<?> list))return List.of();List<Map<String,Object>>result=new ArrayList<>();for(Object item:list)if(item instanceof Map<?,?> raw){Map<String,Object>copy=new LinkedHashMap<>();raw.forEach((key,entry)->copy.put(String.valueOf(key),entry));result.add(copy);}return result;}
-    private static List<String> stringList(Object value){if(!(value instanceof List<?> list))return List.of();return list.stream().filter(String.class::isInstance).map(String.class::cast).toList();}
-    private void monitorLoop(){while(!closed.get()){
-        try{monitor=new ProcessBuilder("dbus-monitor","--session","type='signal',interface='"+INTERFACE+"',member='Command'").redirectErrorStream(true).start();
-            try(BufferedReader reader=new BufferedReader(new InputStreamReader(monitor.getInputStream()))){String line;List<String> arguments=null;while(!closed.get()&&(line=reader.readLine())!=null){
-                if(line.contains("member=Command")||line.contains(INTERFACE+".Command")){
-                    Command command=parseCommandLine(line);if(command!=null){dispatch(command);arguments=null;}else arguments=new ArrayList<>();continue;
-                }
-                if(arguments==null)continue;
-                if(line.contains("member=")){arguments=null;continue;}
-                Command command=parseCommandLine(line);if(command!=null){dispatch(command);arguments=null;continue;}
-                if(!collectMonitorArgument(line,arguments))continue;
-                Command split=parseCommandArguments(arguments);if(split!=null){dispatch(split);arguments=null;}
-            }}
-            if(!closed.get())Thread.sleep(1200);
-        }catch(Exception e){if(!closed.get())try{Thread.sleep(2500);}catch(InterruptedException ignored){Thread.currentThread().interrupt();return;}}
-    }}
     /** Collects one typed argument line of a {@code dbus-monitor} signal dump. */
     static boolean collectMonitorArgument(String line,List<String> arguments){
         if(arguments==null||arguments.size()>=5)return false;
@@ -147,26 +144,40 @@ public final class GnomeControlBridge implements AutoCloseable {
         }
         catch(NumberFormatException invalid){return null;}
     }
-    void dispatch(Command command){
-        CompletableFuture<CommandResult> execution;
-        synchronized(this){
-            execution=commandTail.thenCompose(ignored->execute(command,commands));
-            commandTail=execution.handle((result,error)->(Void)null);
-        }
-        execution.whenComplete((result,error)->{
+    synchronized CompletableFuture<Void> dispatch(Command command){
+        CompletableFuture<CommandResult> execution=commandTail.thenCompose(ignored->execute(command,commands))
+                .thenCompose(result->confirmCommandState(command,result));
+        commandTail=execution.handle((result,error)->{
             CommandResult confirmed=error==null&&result!=null?result:new CommandResult("error",error==null?"Command handler returned no result":safeMessage(error));
             emitAcknowledgment(command,confirmed);
-            emitResult(command,confirmed.status(),confirmed.message());
+            if(!closed.get())emitter.execute(()->emitResult(command,confirmed.status(),confirmed.message()));
+            return null;
         });
+        return commandTail;
     }
-    private synchronized void emitObservedState(Map<String,Object> state){
-        String payload=stateSequencer.observe(state);
-        if(!payload.isBlank())emitter.execute(()->emit("State",payload));
+    private CompletableFuture<CommandResult> confirmCommandState(Command command,CommandResult result){
+        try{
+            CompletableFuture<Void> confirmed=confirmState.apply(command);
+            if(confirmed==null)throw new IllegalStateException("State publisher returned no completion result");
+            return confirmed.handle((ignored,error)->error==null?result:
+                    new CommandResult("error","Could not publish confirmed state: "+safeMessage(error)));
+        }catch(RuntimeException error){
+            return CompletableFuture.completedFuture(new CommandResult("error","Could not publish confirmed state: "+safeMessage(error)));
+        }
     }
-    private synchronized void emitAcknowledgment(Command command,CommandResult result){
+    synchronized void emitObservedState(Map<String,Object> state){
+        synchronized(stateSignalLock){String payload=stateSequencer.observe(state);if(!payload.isBlank())emitStateWhenReady(payload);}
+    }
+    private void emitAcknowledgment(Command command,CommandResult result){
         if(command.requestId().isBlank())return;
-        String payload=stateSequencer.acknowledge(GnomeBridgeCommandAck.create(command,result,json));
-        if(!payload.isBlank())emitter.execute(()->emit("State",payload));
+        synchronized(stateSignalLock){String payload=stateSequencer.acknowledge(GnomeBridgeCommandAck.create(command,result,json));if(!payload.isBlank())emitStateWhenReady(payload);}
+    }
+    private boolean stateSignalListenerReady(){
+        return (!requireCommandListener&&!started.get())||commandChannel.isReady();
+    }
+    private void emitStateWhenReady(String payload){
+        if(closed.get()||!stateSignalListenerReady())return;
+        emitter.execute(()->{if(!closed.get()&&stateSignalListenerReady())emit("State",payload);});
     }
     static CompletableFuture<CommandResult> execute(Command command,Function<Command,CompletableFuture<Void>> handler){
         if(command.apiVersion()!=API_VERSION)return CompletableFuture.completedFuture(new CommandResult("error","Unsupported Audio Matrix D-Bus API version "+command.apiVersion()));
@@ -187,11 +198,19 @@ public final class GnomeControlBridge implements AutoCloseable {
                 unescapeGVariantString(versioned.group(5)));
     }
     private static String unescapeGVariantString(String value){StringBuilder decoded=new StringBuilder(value.length());for(int i=0;i<value.length();i++){char c=value.charAt(i);if(c!='\\'||i+1>=value.length()){decoded.append(c);continue;}char escaped=value.charAt(++i);decoded.append(switch(escaped){case 'a'->'\u0007';case 'b'->'\b';case 'f'->'\f';case 'n'->'\n';case 'r'->'\r';case 't'->'\t';case 'v'->'\u000b';case '\\'->'\\';case '\''->'\'';case '"'->'"';default->escaped;});}return decoded.toString();}
-    private void emit(String signal,String value){try{run(List.of("busctl","--user","emit",OBJECT_PATH,INTERFACE,signal,"s",value),Duration.ofSeconds(2));}catch(Exception ignored){}}
-    private void emitResult(Command command,String status,String message){if(command.requestId().isBlank())return;try{run(List.of("busctl","--user","emit",OBJECT_PATH,INTERFACE,"Result","usss",Integer.toString(API_VERSION),command.requestId(),status,message),Duration.ofSeconds(2));}catch(Exception ignored){}}
+    private void emit(String signal,String value){signalEmitter.emit(signal,"s",List.of(value));}
+    private void emitResult(Command command,String status,String message){
+        if(command.requestId().isBlank())return;
+        signalEmitter.emit("Result","usss",List.of(Integer.toString(API_VERSION),command.requestId(),status,message));
+    }
+    private static void emitOnBus(String signal,String signature,List<String> arguments){
+        List<String> command=new ArrayList<>(List.of("busctl","--user","emit",OBJECT_PATH,INTERFACE,signal,signature));
+        command.addAll(arguments);
+        try{run(command,Duration.ofSeconds(2));}catch(Exception ignored){}
+    }
     private static String safeMessage(Throwable error){Throwable cause=error;while(cause instanceof CompletionException&&cause.getCause()!=null)cause=cause.getCause();String message=cause.getMessage();return message==null||message.isBlank()?cause.getClass().getSimpleName():message;}
     private static String run(List<String>command,Duration timeout)throws Exception{Path out=Files.createTempFile("audio-matrix-dbus-",".out");try{Process p=new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(out.toFile()).start();if(!p.waitFor(timeout.toMillis(),java.util.concurrent.TimeUnit.MILLISECONDS)){p.destroyForcibly();throw new IOException("gdbus timed out");}if(p.exitValue()!=0)throw new IOException(Files.readString(out));return Files.readString(out);}finally{Files.deleteIfExists(out);}}
-    @Override public void close(){closed.set(true);if(monitor!=null)monitor.destroyForcibly();emitter.shutdownNow();}
+    @Override public void close(){closed.set(true);commandChannel.close();emitter.shutdownNow();}
     public record Command(int apiVersion,String requestId,String revision,String name,String value){
         public Command(int apiVersion,String requestId,String name,String value){this(apiVersion,requestId,"",name,value);}
         public Command(String name,String value){this(API_VERSION,"","",name,value);}

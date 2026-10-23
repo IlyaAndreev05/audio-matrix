@@ -2,20 +2,7 @@ package io.github.ilyaandreev05.audiomatrix.gnome;
 
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.config.QuickSettingsConfig;
-import io.github.ilyaandreev05.audiomatrix.graph.DynamicInstanceRegistry;
-import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
-import io.github.ilyaandreev05.audiomatrix.graph.DeviceSlotNode;
-import io.github.ilyaandreev05.audiomatrix.graph.DynamicGeneratorNode;
-import io.github.ilyaandreev05.audiomatrix.graph.GraphConnection;
-import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
-import io.github.ilyaandreev05.audiomatrix.graph.GraphCommonVibro;
-import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
-import io.github.ilyaandreev05.audiomatrix.graph.FilterNode;
-import io.github.ilyaandreev05.audiomatrix.graph.GainNode;
-import io.github.ilyaandreev05.audiomatrix.graph.MixerNode;
-import io.github.ilyaandreev05.audiomatrix.graph.OutputNode;
-import io.github.ilyaandreev05.audiomatrix.graph.RouterNode;
-import io.github.ilyaandreev05.audiomatrix.graph.SourceNode;
+import io.github.ilyaandreev05.audiomatrix.graph.*;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -34,6 +21,9 @@ final class GnomeQuickSettingsPins {
                                            Map<DynamicInstanceRegistry.InstanceAddress,
                                                    DynamicInstanceRegistry.RuntimeInstance> instances) {
         String routeId = String.valueOf(config.getOrDefault("active_route", ""));
+        List<Map<String,Object>> savedPins=QuickSettingsConfig.pins(config).stream()
+                .filter(pin->!Boolean.FALSE.equals(pin.get("pinned"))).toList();
+        GnomeQuickSettingsNodeState.Inputs input=new GnomeQuickSettingsNodeState.Inputs(config,snapshot,quickControls,applications);
         AudioGraph commonGraph = null;
         try { commonGraph = GraphCommonVibro.graph(config); }
         catch (RuntimeException invalid) { /* Invalid common state is not published. */ }
@@ -42,17 +32,17 @@ final class GnomeQuickSettingsPins {
         Set<String> generatedNodes = generatedNodeIds(instances);
         if (commonGraph != null) {
             graphs.put(GraphCommonVibro.COMMON_ROUTE_ID, commonGraph);
-            claims.put(GraphCommonVibro.COMMON_ROUTE_ID, GnomeQuickSettingsPinDetails.claimSelectors(commonGraph, generatedNodes));
+            claims.put(GraphCommonVibro.COMMON_ROUTE_ID, GnomeQuickSettingsPinDetails.claimSelectors(commonGraph, generatedNodes, savedPins));
         }
         AudioGraph activeGraph = effectiveGraph != null && routeId.equals(effectiveGraph.id())
                 ? effectiveGraph : routeGraph(config, routeId);
         if (activeGraph != null) {
             graphs.put(routeId, activeGraph);
-            claims.put(routeId, GnomeQuickSettingsPinDetails.claimSelectors(activeGraph, generatedNodes));
+            claims.put(routeId, GnomeQuickSettingsPinDetails.claimSelectors(activeGraph, generatedNodes, savedPins));
         }
         List<Map<String, Object>> result = new ArrayList<>();
         List<Map<String, Object>> deferredSharedGain = new ArrayList<>();
-        for (Map<String, Object> pin : QuickSettingsConfig.pins(config)) {
+        for (Map<String, Object> pin : savedPins) {
             String pinRouteId = String.valueOf(pin.getOrDefault("route_id", ""));
             boolean common = GraphCommonVibro.COMMON_ROUTE_ID.equals(pinRouteId);
             boolean active = routeId.equals(pinRouteId);
@@ -60,7 +50,7 @@ final class GnomeQuickSettingsPins {
                 AudioGraph inactive = routeGraph(config, pinRouteId);
                 if (inactive != null) {
                     graphs.put(pinRouteId, inactive);
-                    claims.put(pinRouteId, GnomeQuickSettingsPinDetails.claimSelectors(inactive, generatedNodes));
+                    claims.put(pinRouteId, GnomeQuickSettingsPinDetails.claimSelectors(inactive, generatedNodes, savedPins));
                 }
             }
             AudioGraph pinGraph = graphs.get(pinRouteId);
@@ -75,43 +65,35 @@ final class GnomeQuickSettingsPins {
                 continue;
             }
             GraphNode node = pinGraph.nodes().stream().filter(item -> nodeId.equals(item.id())).findFirst().orElse(null);
-            if (node == null) continue;
-            if (!common && !active && !(node instanceof OutputNode) && !(node instanceof DeviceSlotNode)) continue;
-            if (node instanceof FilterNode filter && "phase_invert".equals(filter.processor())) continue;
-            Map<String, Object> state = pinState(pin, node);
-            state.put("pinned", common);
-            state.put("controls", controlsFor(pin, quickControls, node));
-            if (node instanceof RouterNode router && router.multiple())
-                state.put("routeControl", routeControl(pinRouteId, router, pinGraph));
-            if (node instanceof SourceNode source) {
-                publishApplications(state, source.selector(), applications, claimSelectors);
-                GainNode sourceGain = GnomeGraphSourceGain.forSource(pinGraph, source.id());
-                if (sourceGain != null) state.put("sourceGain", sourceGainState(
-                        String.valueOf(pin.get("route_id")), source, sourceGain));
-            }
-            if (node instanceof DynamicGeneratorNode generator && "applications".equals(generator.registry()))
-                publishApplications(state, generator.selector(), applications, claimSelectors);
-            if (node instanceof OutputNode output)
-                state.put("output", GnomeQuickSettingsPinDetails.outputFor(output, pinGraph, snapshot, config, outputs));
-            if (node instanceof DeviceSlotNode slot)
-                state.put("output", GnomeDeviceSlotState.describe(slot, snapshot, config));
-            if (node instanceof GainNode gain) {
-                if (GraphCommonVibro.COMMON_ROUTE_ID.equals(pinRouteId)
-                        && GraphCommonVibro.VIBRO_GAIN_ID.equals(gain.id())) {
-                    Map<String, Object> shared = GnomeQuickSettingsHapticGain.targetState(config);
-                    if (shared != null)
-                        deferredSharedGain.add(GnomeQuickSettingsHapticGain.savedPinState(pin, shared, false));
-                    continue;
+            if(node==null){
+                List<GraphSubgraph> groups=GraphSubgraphLibrary.forRoute(config,pinRouteId);
+                GraphSubgraph composite=groups.stream().filter(group->nodeId.equals(group.id())).findFirst().orElse(null);
+                if(composite!=null){
+                    Map<String,Object> state=compositeState(pin,composite,pinGraph,input,claimSelectors,groups,new LinkedHashSet<>());
+                    if(visible(state))result.add(state);
                 }
-                state.put("gain", Map.of("routeId", String.valueOf(pin.get("route_id")),
-                        "nodeId", gain.id(), "volume", gain.gain(), "muted", gain.muted()));
+                continue;
             }
-            if (node instanceof MixerNode mixer)
-                state.put("mixerInputs", mixerInputs(pinGraph, mixer));
-            result.add(state);
+            if (!common && !active && !(node instanceof OutputNode) && !(node instanceof DeviceSlotNode)) continue;
+            if(node instanceof GainNode gain&&GraphCommonVibro.COMMON_ROUTE_ID.equals(pinRouteId)
+                    &&GraphCommonVibro.VIBRO_GAIN_ID.equals(gain.id())){
+                Map<String,Object> shared=GnomeQuickSettingsHapticGain.targetState(config);
+                if(shared!=null)deferredSharedGain.add(GnomeQuickSettingsHapticGain.savedPinState(pin,shared,false));
+                continue;
+            }
+            Map<String,Object> state=GnomeQuickSettingsNodeState.describe(pin,node,pinGraph,input,claimSelectors);
+            if(visible(state))result.add(state);
         }
         GnomeQuickSettingsGeneratedPins.appendAutoPins(result, config, routeId, activeGraph, snapshot,
                 applications, outputs, instances);
+        Set<String> individualApps = result.stream().filter(pin -> pin.containsKey("instanceKey"))
+                .flatMap(pin -> maps(pin.get("applications")).stream()).map(app -> String.valueOf(app.get("id")))
+                .collect(java.util.stream.Collectors.toSet());
+        for (Map<String, Object> pin : result) {
+            if (!pin.containsKey("instanceKey") && pin.containsKey("applications"))
+                pin.put("applications", maps(pin.get("applications")).stream()
+                        .filter(app -> !individualApps.contains(String.valueOf(app.get("id")))).toList());
+        }
         boolean hapticOutput = GnomeQuickSettingsHapticGain.hasAssignedOutput(instances);
         if (result.stream().noneMatch(pin -> pin.containsKey("sharedGain")))
             for (Map<String, Object> pin : deferredSharedGain)
@@ -129,20 +111,6 @@ final class GnomeQuickSettingsPins {
         catch (RuntimeException invalid) { return null; }
     }
 
-    private static Map<String, Object> sourceGainState(String routeId, SourceNode source, GainNode gain) {
-        return Map.of("routeId", routeId, "sourceNodeId", source.id(), "gainNodeId", gain.id(),
-                "volume", gain.gain(), "muted", gain.muted());
-    }
-
-    /** Publishes the applications served by a source node or by the catch-all application generator. */
-    private static void publishApplications(Map<String, Object> state, String selector,
-                                            List<Map<String, Object>> applications, List<String> claims) {
-        List<Map<String, Object>> served = GnomeQuickSettingsPinDetails.applicationsFor(
-                selector, applications, claims);
-        state.put("applications", served);
-        state.put("tabAdapterAvailable", served.stream()
-                .anyMatch(app -> Boolean.TRUE.equals(app.get("tabAdapterAvailable"))));
-    }
 
     /** The nodes the registry materialized for a generator instance: they never claim an application. */
     private static Set<String> generatedNodeIds(Map<DynamicInstanceRegistry.InstanceAddress,
@@ -154,80 +122,50 @@ final class GnomeQuickSettingsPins {
         return result;
     }
 
-    private static Map<String, Object> pinState(Map<String, Object> pin, GraphNode node) {
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("id", pin.get("id"));
-        result.put("routeId", pin.get("route_id"));
-        result.put("nodeId", node.id());
-        result.put("name", pin.getOrDefault("display_name", node.name()));
-        result.put("nodeType", node.type());
-        result.put("groupId", pin.get("group_id"));
-        result.put("order", pin.getOrDefault("order", 0));
-        result.put("view", pin.getOrDefault("view", "DEFAULT"));
-        if (pin.get("icon") instanceof String icon && !icon.isBlank()) result.put("icon", icon);
-        if (pin.get("show_children") instanceof Boolean children) result.put("showChildren", children);
-        if (pin.get("show_when_offline") instanceof Boolean offline) result.put("showWhenOffline", offline);
-        return result;
+    private static boolean visible(Map<String,Object> state){
+        return Boolean.TRUE.equals(state.get("available"))||Boolean.TRUE.equals(state.get("showWhenOffline"));
     }
 
-    private static List<Map<String, Object>> controlsFor(Map<String, Object> pin,
-                                                          List<Map<String, Object>> controls,
-                                                          GraphNode node) {
-        Set<String> ids = strings(pin.get("control_ids"));
-        return controls.stream().filter(control -> ids.contains(String.valueOf(control.get("id"))))
-                .filter(control -> !(node instanceof GainNode
-                        && Set.of("gain", "muted").contains(String.valueOf(control.get("parameterId")))))
-                .toList();
-    }
-
-    private static List<Map<String, Object>> mixerInputs(AudioGraph graph, MixerNode mixer) {
-        List<Map<String, Object>> result = new ArrayList<>();
-        for (Map.Entry<String, Double> input : mixer.inputGains().entrySet()) {
-            GraphConnection connection = graph.connections().stream().filter(GraphConnection::enabled)
-                    .filter(edge -> mixer.id().equals(edge.toNode()) && input.getKey().equals(edge.toPort()))
-                    .findFirst().orElse(null);
-            GraphNode source = connection == null ? null : graph.nodes().stream()
-                    .filter(node -> node.id().equals(connection.fromNode())).findFirst().orElse(null);
-            if (source instanceof GainNode gain && !gain.endpointNodeId().isBlank())
-                source = graph.nodes().stream().filter(node -> node.id().equals(gain.endpointNodeId()))
-                        .findFirst().orElse(source);
-            Map<String, Object> state = new LinkedHashMap<>();
-            state.put("id", input.getKey());
-            state.put("name", source == null ? input.getKey() : source.name());
-            state.put("volume", input.getValue());
-            state.put("muted", mixer.inputMuted(input.getKey()));
-            result.add(state);
+    private static Map<String,Object> compositeState(Map<String,Object> pin,GraphSubgraph composite,AudioGraph graph,
+            GnomeQuickSettingsNodeState.Inputs input,List<String> claims,List<GraphSubgraph> groups,Set<String> ancestors){
+        Map<String,Object> state=GnomeQuickSettingsNodeState.presentation(pin,composite.id(),composite.name(),"composite");
+        List<Map<String,Object>> children=new ArrayList<>();
+        if(!ancestors.add(composite.id())){state.put("children",children);state.put("available",false);return state;}
+        int order=0;
+        for(String nodeId:composite.nodeIds()){
+            GraphNode node=graph.nodes().stream().filter(candidate->nodeId.equals(candidate.id())).findFirst().orElse(null);
+            if(node==null)continue;
+            Map<String,Object> childPin=childPin(pin,nodeId,order++);
+            Map<String,Object> individual=QuickSettingsConfig.findPin(input.config(),graph.id(),nodeId,"","");
+            if(individual!=null){if(Boolean.FALSE.equals(individual.get("pinned")))continue;childPin.putAll(individual);}
+            Map<String,Object> child=GnomeQuickSettingsNodeState.describe(childPin,node,graph,input,claims);
+            if(visible(child))children.add(child);
         }
-        return List.copyOf(result);
+        for(GraphSubgraph nested:groups){
+            if(!composite.id().equals(nested.parentId()))continue;
+            Map<String,Object> child=compositeState(childPin(pin,nested.id(),order++),nested,graph,input,claims,groups,ancestors);
+            if(visible(child))children.add(child);
+        }
+        ancestors.remove(composite.id());
+        state.put("children",List.copyOf(children));
+        state.put("available",input.snapshot().connected()&&children.stream().anyMatch(child->Boolean.TRUE.equals(child.get("available"))));
+        return state;
     }
 
-    private static Map<String, Object> routeControl(String routeId, RouterNode router, AudioGraph graph) {
-        List<GraphConnection> inputs = graph.connections().stream().filter(GraphConnection::enabled)
-                .filter(edge -> router.id().equals(edge.toNode())).toList();
-        List<GraphConnection> outputs = graph.connections().stream().filter(GraphConnection::enabled)
-                .filter(edge -> router.id().equals(edge.fromNode())).toList();
-        List<Map<String, Object>> options = new ArrayList<>();
-        for (GraphConnection input : inputs) for (GraphConnection output : outputs) {
-            GraphNode target = graph.nodes().stream().filter(node -> node.id().equals(output.toNode()))
-                    .findFirst().orElse(null);
-            options.add(Map.of("id", input.toPort() + "->" + output.fromPort(),
-                    "label", target == null ? output.fromPort() : target.name()));
-        }
-        return Map.of("id", "route:" + routeId + ":" + router.id(), "routeId", routeId,
-                "nodeId", router.id(), "switchNodeId", router.id(), "nodeType", "switch", "kind", "choice",
-                "label", "Музыкальный маршрут", "multiple", true,
-                "value", router.activeLinks(), "options", options);
+    private static Map<String,Object> childPin(Map<String,Object> parent,String nodeId,int order){
+        Map<String,Object> pin=new LinkedHashMap<>();
+        pin.put("id",parent.get("id")+":"+nodeId);pin.put("route_id",parent.get("route_id"));pin.put("node_id",nodeId);
+        pin.put("group_id",parent.get("group_id"));pin.put("order",order);pin.put("view","DEFAULT");
+        pin.put("show_when_offline",parent.getOrDefault("show_when_offline",false));
+        return pin;
     }
+
 
 
     private static int number(Object value, int fallback) {
         return value instanceof Number number ? number.intValue() : fallback;
     }
 
-    private static Set<String> strings(Object value) {
-        if (!(value instanceof List<?> list)) return Set.of();
-        return list.stream().map(String::valueOf).collect(java.util.stream.Collectors.toSet());
-    }
 
     @SuppressWarnings("unchecked")
     private static List<Map<String, Object>> maps(Object value) {

@@ -13,11 +13,27 @@ import java.util.function.BiConsumer;
 
 /** Applies saved application and captured-tab levels to live playback streams. */
 public final class ApplicationStreamRuleApplier {
-    private final PipeWireBackend backend;
+    private final VolumeSetter volumeSetter;
+    private final MuteSetter muteSetter;
     private final ConcurrentMap<Integer, TargetState> targets = new ConcurrentHashMap<>();
 
     public ApplicationStreamRuleApplier(PipeWireBackend backend) {
-        this.backend = backend;
+        this(backend::setVolume, backend::setMute);
+    }
+
+    ApplicationStreamRuleApplier(VolumeSetter volumeSetter, MuteSetter muteSetter) {
+        this.volumeSetter = volumeSetter;
+        this.muteSetter = muteSetter;
+    }
+
+    @FunctionalInterface
+    interface VolumeSetter {
+        CompletableFuture<Void> setVolume(int nodeId, double volume);
+    }
+
+    @FunctionalInterface
+    interface MuteSetter {
+        CompletableFuture<Void> setMute(int nodeId, boolean muted, double savedVolume);
     }
 
     public CompletableFuture<Void> apply(PipeWireBackend.Snapshot current, List<Map<String, Object>> rules,
@@ -31,9 +47,9 @@ public final class ApplicationStreamRuleApplier {
         return apply(current, rules, bindings, false, onFailure);
     }
 
-    public CompletableFuture<Void> apply(PipeWireBackend.Snapshot current, List<Map<String, Object>> rules,
-                                         Map<String, CapturedStreamBinding> bindings, boolean force,
-                                         BiConsumer<AudioNode, Throwable> onFailure) {
+    public synchronized CompletableFuture<Void> apply(PipeWireBackend.Snapshot current, List<Map<String, Object>> rules,
+                                                      Map<String, CapturedStreamBinding> bindings, boolean force,
+                                                      BiConsumer<AudioNode, Throwable> onFailure) {
         if (current == null || !current.connected()) return CompletableFuture.completedFuture(null);
         Map<String, CapturedStreamBinding> capturedBindings = bindings == null ? Map.of() : bindings;
         for (Map.Entry<String, CapturedStreamBinding> entry : capturedBindings.entrySet()) {
@@ -46,7 +62,17 @@ public final class ApplicationStreamRuleApplier {
         for (AudioNode stream : current.streams()) {
             liveIds.add(stream.id());
         }
-        targets.keySet().removeIf(id -> !liveIds.contains(id));
+        targets.forEach((id, state) -> {
+            if (!liveIds.contains(id)) {
+                synchronized (state) {
+                    state.nodeName = "";
+                    state.generation++;
+                    state.applied = null;
+                    state.uncertain = true;
+                    if (state.tail.isDone()) targets.remove(id, state);
+                }
+            }
+        });
 
         List<CompletableFuture<Void>> writes = new ArrayList<>();
         for (AudioNode stream : current.streams()) {
@@ -60,14 +86,12 @@ public final class ApplicationStreamRuleApplier {
                     forgetRule(stream);
                     continue;
                 }
-                desired = new DesiredControl(ruleGain(rule), Boolean.TRUE.equals(rule.get("mute")),
-                        String.valueOf(rule.getOrDefault("id", "")) + "|" + rule.get("volume")
-                                + "|" + Boolean.TRUE.equals(rule.get("mute")));
+                desired = new DesiredControl(ruleGain(rule), Boolean.TRUE.equals(rule.get("mute")));
             }
 
             TargetState state = targets.computeIfAbsent(stream.id(), ignored -> new TargetState());
-            writes.add(schedule(state, stream, desired,
-                    force || !observedMatches(stream, desired)).whenComplete((ignored, error) -> {
+            writes.add(schedule(state, stream, desired, current.capturedAtMillis(), force)
+                    .whenComplete((ignored, error) -> {
                 if (error != null && onFailure != null) onFailure.accept(stream, unwrap(error));
             }));
         }
@@ -75,44 +99,68 @@ public final class ApplicationStreamRuleApplier {
     }
 
     private CompletableFuture<Void> schedule(TargetState state, AudioNode stream, DesiredControl desired,
-                                              boolean force) {
+                                              long observedAtMillis, boolean force) {
         synchronized (state) {
             if (!stream.name().equals(state.nodeName)) {
                 state.nodeName = stream.name();
-                state.appliedSignature = "";
+                state.generation++;
+                state.applied = null;
+                state.uncertain = !state.tail.isDone();
             }
-            state.desired = desired;
-            state.generation++;
-            state.force |= force;
+            long generation = state.generation;
             CompletableFuture<Void> next = state.tail.handle((ignored, priorError) -> null)
-                    .thenCompose(ignored -> {
-                        DesiredControl target;
-                        long generation;
-                        boolean mustWrite;
-                        synchronized (state) {
-                            target = state.desired;
-                            generation = state.generation;
-                            mustWrite = state.force || !target.signature().equals(state.appliedSignature);
-                            state.force = false;
-                        }
-                        if (!mustWrite) return CompletableFuture.completedFuture(null);
-                        CompletableFuture<Void> volume = !Double.isFinite(stream.volume())
-                                || Math.abs(stream.volume() - target.volume()) > 0.01
-                                ? backend.setVolume(stream.id(), target.volume())
-                                : CompletableFuture.completedFuture(null);
-                        return volume.thenCompose(unused -> stream.muted() != target.muted()
-                                        ? backend.setMute(stream.id(), target.muted())
-                                        : CompletableFuture.completedFuture(null))
-                                .thenRun(() -> {
-                                    synchronized (state) {
-                                        if (generation == state.generation)
-                                            state.appliedSignature = target.signature();
-                                    }
-                                });
-                    });
+                    .thenCompose(ignored -> write(state, generation, stream, desired, observedAtMillis, force));
             state.tail = next;
             return next;
         }
+    }
+
+    private CompletableFuture<Void> write(TargetState state, long generation, AudioNode stream,
+                                           DesiredControl desired, long observedAtMillis, boolean force) {
+        synchronized (state) {
+            if (generation != state.generation) return replaced(stream);
+            DesiredControl applied = state.applied;
+            // A snapshot taken before our completed write must not override its known result.
+            boolean freshObservation = applied == null || observedAtMillis > state.appliedAtMillis;
+            boolean volumeChanged = applied != null && Double.compare(applied.volume(), desired.volume()) != 0;
+            boolean writeVolume = force || state.uncertain || volumeChanged
+                    || (freshObservation && (!stream.muted() || applied == null)
+                    && !volumeMatches(stream.volume(), desired.volume()));
+            boolean writeMute = force || state.uncertain || (applied != null && applied.muted() != desired.muted())
+                    || (freshObservation && stream.muted() != desired.muted()) || (writeVolume && desired.muted());
+            if (!writeVolume && !writeMute) {
+                state.applied = desired;
+                if (applied == null) state.appliedAtMillis = observedAtMillis;
+                return CompletableFuture.completedFuture(null);
+            }
+
+            // Failed or partially completed controls leave no trustworthy cached state.
+            state.applied = null;
+            state.uncertain = true;
+            CompletableFuture<Void> volume = writeVolume
+                    ? volumeSetter.setVolume(stream.id(), desired.volume())
+                    : CompletableFuture.completedFuture(null);
+            return volume.thenCompose(ignored -> {
+                synchronized (state) {
+                    if (generation != state.generation) return replaced(stream);
+                    return writeMute ? muteSetter.setMute(stream.id(), desired.muted(), desired.volume())
+                            : CompletableFuture.completedFuture(null);
+                }
+            }).thenRun(() -> {
+                synchronized (state) {
+                    if (generation != state.generation)
+                        throw new IllegalStateException("Playback stream was replaced: " + stream.name());
+                    state.applied = desired;
+                    state.appliedAtMillis = System.currentTimeMillis();
+                    state.uncertain = false;
+                }
+            });
+        }
+    }
+
+    private static CompletableFuture<Void> replaced(AudioNode stream) {
+        return CompletableFuture.failedFuture(
+                new IllegalStateException("Playback stream was replaced: " + stream.name()));
     }
 
     private static DesiredControl capturedControl(CapturedStreamBinding binding, AudioNode captureStream,
@@ -123,10 +171,7 @@ public final class ApplicationStreamRuleApplier {
         double appGain = ruleGain(rule);
         double effectiveGain = appGain * binding.tabGain();
         boolean muted = Boolean.TRUE.equals(rule.get("mute")) || binding.tabMuted();
-        String signature = binding.applicationRuleId() + "|" + appGain + "|" + binding.tabGain()
-                + "|" + Boolean.TRUE.equals(rule.get("mute")) + "|" + binding.tabMuted()
-                + "|" + binding.sourceNodeId() + "|" + binding.instanceKey();
-        return new DesiredControl(effectiveGain, muted, signature);
+        return new DesiredControl(effectiveGain, muted);
     }
 
     private static double ruleGain(Map<String, Object> rule) {
@@ -139,7 +184,8 @@ public final class ApplicationStreamRuleApplier {
         TargetState state = targets.get(stream.id());
         if (state == null) return;
         synchronized (state) {
-            state.appliedSignature = "";
+            state.applied = null;
+            state.uncertain = true;
         }
     }
 
@@ -148,9 +194,8 @@ public final class ApplicationStreamRuleApplier {
                 || stream.name().startsWith(CapturedStreamBinding.NODE_PREFIX);
     }
 
-    private static boolean observedMatches(AudioNode stream, DesiredControl desired) {
-        return Double.isFinite(stream.volume()) && Math.abs(stream.volume() - desired.volume()) <= 0.01
-                && stream.muted() == desired.muted();
+    private static boolean volumeMatches(double observed, double desired) {
+        return Double.isFinite(observed) && Math.abs(observed - desired) <= 0.01;
     }
 
     private static Throwable unwrap(Throwable error) {
@@ -161,14 +206,14 @@ public final class ApplicationStreamRuleApplier {
         return current;
     }
 
-    private record DesiredControl(double volume, boolean muted, String signature) {}
+    private record DesiredControl(double volume, boolean muted) {}
 
     private static final class TargetState {
         private String nodeName = "";
-        private String appliedSignature = "";
-        private DesiredControl desired;
+        private DesiredControl applied;
+        private long appliedAtMillis;
         private long generation;
-        private boolean force;
+        private boolean uncertain;
         private CompletableFuture<Void> tail = CompletableFuture.completedFuture(null);
     }
 }

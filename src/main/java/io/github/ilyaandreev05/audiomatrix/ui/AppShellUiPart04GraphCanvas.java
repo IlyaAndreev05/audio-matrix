@@ -113,11 +113,11 @@ abstract class AppShellUiPart04GraphCanvas extends AppShellUiPart04GnomeEditor {
             VBox groupView=new VBox(5);groupView.setPrefWidth(GraphCanvasLayout.NODE_WIDTH);
             groupView.setStyle("-fx-background-color: #123b3a; -fx-border-color: #37b5a5; -fx-border-width: 2; -fx-border-radius: 9; -fx-background-radius: 9; -fx-padding: 9;");
             Label title=label(group.name(),"card-title");title.setWrapText(true);
-            Label description=label(t("Composite · ","Composite · ")+members.size()+t(" нод"," nodes")
-                    +(group.generatorId().isBlank()?"":t(" · runtime"," · runtime")),"muted");
+            Label description=label(t("Составной блок · ","Composite · ")+members.size()+t(" узлов"," nodes")
+                    +(group.generatorId()==null?"":t(" · создан генератором"," · generated")),"muted");
             groupView.getChildren().addAll(title,description);
             for(GraphSubgraph.BoundaryPort port:boundary)groupView.getChildren().add(label((port.direction()==GraphSubgraph.Direction.INPUT?"← ":"→ ")+port.label(),"muted"));
-            if(group.generatorId().isBlank())
+            if(group.generatorId()==null)
                 groupView.getChildren().add(actionButton(t("Развернуть","Expand"),()->setSubgraphCollapsed(graph.id(),group.id(),false)));
             else groupView.getChildren().add(actionButton(t("Развернуть","Expand"),()->setGeneratedCompositeCollapsed(group,false)));
             double x=0,y=0;int positioned=0;

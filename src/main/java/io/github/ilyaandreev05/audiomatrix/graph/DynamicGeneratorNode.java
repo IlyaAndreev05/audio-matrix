@@ -42,6 +42,10 @@ public final class DynamicGeneratorNode extends GraphNode {
     public Map<String, Object> connectTo() { return DynamicGeneratorParameters.map(parameters.get("connect_to")); }
     public double initialGain() { return DynamicGeneratorParameters.number(parameters.get("initial_gain"), 1.0); }
     public boolean autoPin() { return DynamicGeneratorParameters.bool(parameters.get("auto_pin"), true); }
+    public boolean onlyAudioActiveTabs() { return DynamicGeneratorParameters.bool(parameters.get("only_audio_active_tabs"), true); }
+    public boolean acceptsBrowserTabActivity(boolean audible, boolean muted, boolean captured, boolean individuallyPinned) {
+        return individuallyPinned || !onlyAudioActiveTabs() || audible || muted || captured;
+    }
     public String groupId() { return DynamicGeneratorParameters.text(parameters.get("group_id"), ""); }
     public boolean retainOnDisappear() { return DynamicGeneratorParameters.bool(parameters.get("retain_on_disappear"), true); }
     public boolean restoreOnReappear() { return DynamicGeneratorParameters.bool(parameters.get("restore_on_reappear"), true); }

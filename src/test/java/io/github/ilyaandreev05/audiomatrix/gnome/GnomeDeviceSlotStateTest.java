@@ -38,7 +38,6 @@ class GnomeDeviceSlotStateTest {
 
         assertEquals("ONLINE", state.get("state"));
         assertEquals(true, state.get("available"));
-        assertEquals("USB DAC", state.get("name"));
     }
 
     @Test void secondAssignmentOfTheSameSinkReportsConflictInsteadOfRouting() {

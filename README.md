@@ -1,16 +1,35 @@
-# Audio Matrix 0.4.0
+# Audio Matrix 0.4.1
 
-Audio Matrix manages PipeWire playback with one editable graph and a GNOME Quick Settings extension. The graph has one **Основной** profile, a dynamic ordinary-application source, a MultiSwitch for outputs, a separate Event Sound Studio path, and a shared output limiter. The default music route reaches the monitor only; the vibration output stays unassigned or disabled until selected. The old bass-only branch and required low-pass filter are removed.
+Audio Matrix manages PipeWire playback through an editable graph and a native GNOME Shell extension embedded in the system's Quick Settings. The extension uses native Shell controls, with Russian-language panel labels. It is not a web view or a separate mixer window.
 
-Volumes are linear: `0.5` is half amplitude and `1.0` is unity. Physical output levels are read from PipeWire and changed through WirePlumber's Mixer API. The GNOME commands set absolute volume, mute, or route state; mute preserves the previous level. The Quick Settings bridge is API v4, and its extension version is 18.
+The Java-to-GNOME bridge uses API v5; the Quick Settings extension is version 20. The current configuration schema is 11.
 
-Configuration schema 10 migrates older settings after creating a `config.json.before-schema-10` backup and a full `migration_archive`. It retains user device bindings, mute and level values, names, and pins. See [the 0.4.0 migration report](docs/migration-report-0.4.0.md) for the migration details and [browser adapter limits](docs/browser-adapters.md).
+Device display aliases are stored in the existing JSON configuration as `device.name`; no separate alias database is used. The canonical user config is `~/.config/audio-matrix/config.json` (or the equivalent under `XDG_CONFIG_HOME`). When that JSON file is absent, a legacy `config.yaml` is imported, upgraded as needed, and retained as `config.yaml.before-json`.
 
-Build and verify the Java application and GNOME extension with:
+Chrome's optional browser adapter provides tab metadata and mute/focus commands. It exposes a separate per-tab volume control only after explicit tab capture is active and the captured PipeWire stream is ready. Firefox's optional adapter provides tab metadata and mute/unmute but no independent per-tab PCM volume, so its per-tab volume control is disabled. Both browsers retain ordinary PipeWire stream controls for browser-wide volume. See [Browser audio controls](docs/browser-adapters.md) for details.
+
+## Manual installation
+
+The built integration archive is `build/Audio-Matrix-GNOME-install.zip`. It contains `audiomatrix_0.4.1_amd64.deb`, `eventsoundstudio_0.2.4_amd64.deb`, and `INSTALL.txt` at the archive root.
+
+Download and extract the ZIP, then manually install both `.deb` files together using a package installer, or from the extracted archive directory run:
 
 ```sh
-./gradlew check build packageDeb
-bash scripts/test-gnome-quick-settings.sh
+sudo apt install ./*.deb
 ```
 
-The Debian packages are written to `build/deb/`. The private PipeWire smoke test is available as `python3 scripts/pipewire-route-smoke.py`; it creates a temporary virtual sink and does not play audio through physical devices. Event Sound Studio 0.2.3 is built from its companion project.
+After package installation, run the GNOME extension installer as the logged-in user:
+
+```sh
+/opt/audiomatrix/bin/install-gnome-quick-settings.sh
+```
+
+That helper copies the extension into the user's GNOME extensions directory; it does **not** enable it. Enable it separately in GNOME Extensions or run:
+
+```sh
+gnome-extensions enable audio-matrix-quick-settings@ilyaandreev05
+```
+
+Then log out of GNOME and log back in so the updated Shell integration is loaded. The user performs these installation and session steps manually.
+
+The repository's GitHub Actions workflow is manual (`workflow_dispatch`) only: it has no automatic `push` or `pull_request` trigger.

@@ -2,7 +2,13 @@ import GLib from 'gi://GLib';
 
 export const TEXT = {
     ru: {
-        title: 'Audio Matrix', connecting: 'Подключение к движку…', unavailable: 'Движок Audio Matrix недоступен',
+        title: 'Audio Matrix', subtitle: 'Управление звуком',
+        connecting: 'Подключение к движку…', unavailable: 'Движок Audio Matrix недоступен',
+        disconnected: 'Не подключено', noOutputs: 'Нет доступных выходных устройств',
+        noPinnedItems: 'Нет закреплённых аудиоэлементов',
+        tabVolumeUnavailable: 'Независимая громкость вкладки недоступна',
+        applicationVolumeUnavailable: 'Громкостью приложения нельзя управлять отдельно',
+        outputVolumeUnavailable: 'Громкость выхода недоступна',
         outputUnavailable: 'Устройство вывода недоступно',
         outputs: 'УСТРОЙСТВА ВЫВОДА', applications: 'ПРИЛОЖЕНИЯ', open: 'Эквалайзер и маршруты',
         volume: 'Громкость', mute: 'Выключить звук', unmute: 'Включить звук', streams: 'Потоки',
@@ -20,7 +26,13 @@ export const TEXT = {
         },
     },
     en: {
-        title: 'Audio Matrix', connecting: 'Connecting to engine…', unavailable: 'Audio Matrix engine unavailable',
+        title: 'Audio Matrix', subtitle: 'Sound controls',
+        connecting: 'Connecting to engine…', unavailable: 'Audio Matrix engine unavailable',
+        disconnected: 'Disconnected', noOutputs: 'No available output devices',
+        noPinnedItems: 'No pinned audio controls',
+        tabVolumeUnavailable: 'Independent tab volume is unavailable',
+        applicationVolumeUnavailable: 'Independent application volume is unavailable',
+        outputVolumeUnavailable: 'Output volume is unavailable',
         outputUnavailable: 'Output device unavailable',
         outputs: 'OUTPUT DEVICES', applications: 'APPLICATIONS', open: 'EQ and routes',
         volume: 'Volume', mute: 'Mute', unmute: 'Unmute', streams: 'Streams',

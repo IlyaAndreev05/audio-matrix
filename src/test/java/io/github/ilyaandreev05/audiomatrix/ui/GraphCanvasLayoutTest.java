@@ -64,14 +64,13 @@ class GraphCanvasLayoutTest {
         assertEquals("Выход", GraphNodeLabels.typeName(slot, (russian, english) -> russian));
     }
 
-    @Test void usesFriendlyMergeAndMultiSwitchLabels() {
+    @Test void usesRussianFriendlyLabelsForInternalRoutingNodes() {
         MixerNode merge = new MixerNode("merge", "Merge", STEREO, Map.of("one", 1.0, "two", 1.0));
         SwitchNode multiSwitch = new SwitchNode("switch", "MultiSwitch", STEREO, List.of("out"), List.of());
 
-        assertEquals("Merge · сумматор", GraphNodeLabels.typeName(merge, (russian, english) -> russian));
-        assertEquals("MultiSwitch", GraphNodeLabels.typeName(multiSwitch, (russian, english) -> russian));
+        assertEquals("Сумматор", GraphNodeLabels.typeName(merge, (russian, english) -> russian));
+        assertEquals("Распределитель звука", GraphNodeLabels.typeName(multiSwitch, (russian, english) -> russian));
     }
-
     private static GraphConnection edge(String id, String from, String fromPort, String to, String toPort) {
         return new GraphConnection(id, from, fromPort, to, toPort, true, 1.0);
     }

@@ -15,7 +15,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
@@ -70,31 +69,19 @@ final class WirePlumberMixerControl {
         }
     }
 
-    static CompletableFuture<Void> setVolumeAsync(int nodeId, double level, ExecutorService executor) {
-        return CompletableFuture.runAsync(() -> runVolume(nodeId, level), executor);
+    /** PipeWire stream volume follows wpctl's cubic convention; Mixer API sink volume remains linear. */
+    static void setStreamVolume(int nodeId, double gainLinear) throws Exception {
+        if (!Double.isFinite(gainLinear) || gainLinear < 0 || gainLinear > 1)
+            throw new IllegalArgumentException("Stream volume must be between zero and one");
+        PipeWireCommandRunner.run(java.util.List.of("wpctl", "set-volume", Integer.toString(nodeId),
+                Double.toString(wpctlCubicValue(gainLinear))), Duration.ofSeconds(3));
     }
 
-    static CompletableFuture<Void> setMutedAsync(int nodeId, boolean muted, ExecutorService executor) {
-        return CompletableFuture.runAsync(() -> runMute(nodeId, muted), executor);
+    static void setStreamMuted(int nodeId, boolean muted) throws Exception {
+        PipeWireCommandRunner.run(java.util.List.of("wpctl", "set-mute", Integer.toString(nodeId),
+                muted ? "1" : "0"), Duration.ofSeconds(3));
     }
 
-    static CompletableFuture<Void> setMutedAsync(int nodeId, boolean muted, double savedLevel,
-                                                  ExecutorService executor) {
-        return CompletableFuture.runAsync(() -> {
-            try { setMuted(nodeId, muted, savedLevel); }
-            catch (Exception error) { throw new java.util.concurrent.CompletionException(error); }
-        }, executor);
-    }
-
-    private static void runVolume(int nodeId, double level) {
-        try { setVolume(nodeId, level); }
-        catch (Exception error) { throw new java.util.concurrent.CompletionException(error); }
-    }
-
-    private static void runMute(int nodeId, boolean muted) {
-        try { setMuted(nodeId, muted); }
-        catch (Exception error) { throw new java.util.concurrent.CompletionException(error); }
-    }
 
     static double wpctlCubicValue(double gainLinear) {
         return Math.cbrt(Math.max(0, Math.min(1, gainLinear)));

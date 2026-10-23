@@ -1,4 +1,9 @@
 import Atk from 'gi://Atk';
+import {allQuickPins} from './menu-state.js';
+
+function pinView(pin) {
+    return typeof pin.expanded === 'boolean' ? pin.expanded ? 'EXPANDED' : 'COMPACT' : String(pin.view || 'DEFAULT');
+}
 
 export default class AudioMatrixMenuDisclosure {
     constructor() {
@@ -28,7 +33,7 @@ export default class AudioMatrixMenuDisclosure {
 
     pinOpen(pin) {
         const id = String(pin.id);
-        const view = String(pin.view || 'DEFAULT');
+        const view = pinView(pin);
         const previous = this._pinView.get(id);
         const open = previous !== undefined && previous !== view
             ? view !== 'COMPACT' : (this._pinOpen.get(id) ?? view !== 'COMPACT');
@@ -41,8 +46,8 @@ export default class AudioMatrixMenuDisclosure {
         this._groupRows.set(id, {header, content});
     }
 
-    trackPin(id, header, content) {
-        this._pinRows.set(id, {header, content});
+    trackPin(id, header, content, showChildren = true) {
+        this._pinRows.set(id, {header, content, showChildren});
     }
 
     toggleGroup(id) {
@@ -70,9 +75,9 @@ export default class AudioMatrixMenuDisclosure {
             }
             this._groupCollapsed.set(id, collapsed);
         }
-        for (const pin of state.quickPins || []) {
+        for (const pin of allQuickPins(state)) {
             const id = String(pin.id);
-            const view = String(pin.view || 'DEFAULT');
+            const view = pinView(pin);
             if (this._pinView.has(id) && this._pinView.get(id) !== view) {
                 const open = view !== 'COMPACT';
                 this._pinOpen.set(id, open);
@@ -85,8 +90,9 @@ export default class AudioMatrixMenuDisclosure {
     retain(state) {
         this._retain(this._groupOpen, (state.quickGroups || []).map(group => String(group.id || group.name)));
         this._retain(this._groupCollapsed, (state.quickGroups || []).map(group => String(group.id || group.name)));
-        this._retain(this._pinOpen, (state.quickPins || []).map(pin => String(pin.id)));
-        this._retain(this._pinView, (state.quickPins || []).map(pin => String(pin.id)));
+        const pinIds = [...allQuickPins(state)].map(pin => String(pin.id));
+        this._retain(this._pinOpen, pinIds);
+        this._retain(this._pinView, pinIds);
     }
 
     _retain(map, ids) {
@@ -97,7 +103,7 @@ export default class AudioMatrixMenuDisclosure {
 
     _apply(row, open) {
         if (!row) return;
-        row.content.actor.visible = open;
+        row.content.actor.visible = open && row.showChildren !== false;
         row.header.setIcon(open ? 'pan-down-symbolic' : 'pan-end-symbolic');
         if (open) row.header.add_accessible_state(Atk.StateType.EXPANDED);
         else row.header.remove_accessible_state(Atk.StateType.EXPANDED);

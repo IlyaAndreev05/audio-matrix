@@ -1,196 +1,116 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {orderedQuickGroups, visibleApplicationStreams, visibleBrowserTabs} from '../gnome/audio-matrix-quick-settings/menu-state.js';
+import {orderedQuickGroups, visibleBrowserTabs} from '../gnome/audio-matrix-quick-settings/menu-state.js';
 import {captureMenuViewport, restoreMenuViewport} from '../gnome/audio-matrix-quick-settings/menu-viewport.js';
 
-const commands = [];
 class Actor {
-    constructor() { this.visible = true; this.parent = null; this.y = 0; this.height = 20; }
+    constructor(properties = {}) { Object.assign(this, {visible: true, parent: null, children: [], handlers: {}, y: 0, height: 20}, properties); }
     get_parent() { return this.parent; }
     get_transformed_position() { return [0, this.y]; }
     get_height() { return this.height; }
     set_style() {}
-    remove_child(child) { if (child.parent === this) child.parent = null; }
-}
-class Label {
-    constructor(text = '') { this.text = text; }
-    set_width() {}
-}
-class MenuItem {
-    constructor(label = '', options = {}) {
-        this.label = {text: label};
-        this.actor = new Actor();
-        this.handlers = {};
-        this.children = [];
-        this.states = [];
-        this.options = options;
-        this.reactive = options.reactive ?? true;
-        this.can_focus = options.can_focus ?? true;
-    }
-    set_style() {}
-    add_accessible_state(state) { this.states.push(state); }
-    remove_accessible_state(state) { this.states = this.states.filter(value => value !== state); }
-    setIcon(icon) { this.icon_name = icon; }
-    setOrnament(value) { this.ornament = value; }
+    add_style_class_name() {}
+    add_style_pseudo_class() {}
+    remove_style_pseudo_class() {}
+    add_accessible_state() {}
+    remove_accessible_state() {}
+    add_child(child) { this.children.push(child); child.parent = this; }
+    remove_child(child) { this.children = this.children.filter(item => item !== child); child.parent = null; }
+    set_child(child) { this.child = child; this.children = [child]; child.parent = this; }
+    get_child() { return this.child || this.children[0]; }
     connect(signal, callback) { this.handlers[signal] = callback; return signal; }
-    emit(signal) { this.handlers[signal]?.(); }
+    emit(signal, ...args) { this.handlers[signal]?.(this, ...args); }
     stop_emission_by_name() {}
-    block_signal_handler() {}
-    unblock_signal_handler() {}
-    set_sensitive(value) { this.sensitive = value; }
-    add_child(child) { this.children.push(child); }
-    get_child() { return this.children[0]; }
+    destroy() { this.destroyed = true; this.parent?.remove_child(this); }
 }
-class Section {
-    constructor() {
-        this.actor = new Actor();
-        this.items = [];
-        this.box = {};
-    }
-    addMenuItem(item) {
-        if (item.actor?.parent) item.actor.parent.remove_child(item.actor);
-        this.items.push(item);
-        if (item.actor) item.actor.parent = this.actor;
-    }
-    removeMenuItem(item) {
-        const index = this.items.indexOf(item);
-        if (index >= 0) this.items.splice(index, 1);
-        if (item.actor?.parent === this.actor) item.actor.parent = null;
-    }
-    removeAll() { for (const item of [...this.items]) this.removeMenuItem(item); }
+class MenuItem extends Actor {
+    constructor(label = '', options = {}) { super(options); this.actor = this; this.label = {text: label}; }
+    setIcon(icon) { this.icon_name = icon; }
 }
-class Switch extends MenuItem {
-    constructor(label, state) { super(label); this.state = state; }
+class Section extends Actor {
+    constructor() { super(); this.actor = this; this.box = this; this.items = []; }
+    addMenuItem(item) { item.parent?.remove_child(item); this.items.push(item); this.add_child(item); }
+    remove_child(item) { super.remove_child(item); this.items = this.items.filter(value => value !== item); }
+    removeMenuItem(item) { this.remove_child(item); }
+    removeAll() { for (const item of [...this.items]) item.destroy(); }
 }
-class Submenu extends MenuItem {
-    constructor(label) { super(label); this.menu = new Section(); }
+class Label extends Actor {
+    constructor(properties) { super(properties); this.clutter_text = {}; }
 }
-const PopupMenu = {
-    PopupMenuSection: Section,
-    PopupMenuItem: MenuItem,
-    PopupImageMenuItem: MenuItem,
-    PopupBaseMenuItem: MenuItem,
-    PopupSwitchMenuItem: Switch,
-    PopupSubMenuMenuItem: Submenu,
-    PopupSeparatorMenuItem: MenuItem,
-    Ornament: {DOT: 1, NO_DOT: 0},
-};
+const PopupMenu = {PopupMenuSection: Section, PopupMenuItem: MenuItem,
+    PopupImageMenuItem: MenuItem, PopupBaseMenuItem: MenuItem};
+const commands = [];
 function removeMenuItem(section, item) { section.removeMenuItem(item); }
 function reorderMenuItems(section, previous, desired) {
     if (previous.length === desired.length && previous.every((item, index) => item === desired[index])) return;
     for (const item of previous) removeMenuItem(section, item);
     for (const item of desired) section.addMenuItem(item);
 }
-const fixture = {PopupMenu, Atk: {StateType: {EXPANDABLE: 1, EXPANDED: 2}, Role: {RADIO_BUTTON: 1}},
-    orderedQuickGroups, visibleApplicationStreams, visibleBrowserTabs, removeMenuItem, reorderMenuItems,
+const fixture = {PopupMenu, Atk: {StateType: {EXPANDABLE: 1, EXPANDED: 2, CHECKED: 3}, Role: {CHECK_BOX: 1}},
+    St: {Label, Icon: Actor, Bin: Actor}, Clutter: {ActorAlign: {CENTER: 0}},
+    boxLayout: properties => new Actor(properties), outputIcon: () => 'audio-speakers-symbolic',
+    orderedQuickGroups, visibleBrowserTabs, removeMenuItem, reorderMenuItems,
     applicationIcon: () => 'application-x-executable-symbolic'};
 globalThis.audioMatrixRendererFixture = fixture;
-
-async function loadModule(name, bindings, replacements) {
-    let source = await readFile(new URL(`../gnome/audio-matrix-quick-settings/${name}`, import.meta.url), 'utf8');
-    source = source.replace(/^import .*;\n/gm, line => replacements[line.trim()] || '');
-    source = `const {${bindings}} = globalThis.audioMatrixRendererFixture;\n${source}`;
-    return (await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)).default;
+async function loadModule(name) {
+    const source = (await readFile(new URL(`../gnome/audio-matrix-quick-settings/${name}`, import.meta.url), 'utf8'))
+        .replace(/^import .*;\n/gm, '');
+    return (await import(`data:text/javascript;base64,${Buffer.from(`const {${Object.keys(fixture).join(',')}} = globalThis.audioMatrixRendererFixture;\n${source}`).toString('base64')}`)).default;
 }
-const moduleImports = {
-    "import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';": '',
-    "import Atk from 'gi://Atk';": '',
-    "import {orderedQuickGroups} from './menu-state.js';": '',
-    "import {removeMenuItem, reorderMenuItems} from './menu-row-utils.js';": '',
-    "import {visibleApplicationStreams, visibleBrowserTabs} from './menu-state.js';": '',
-    "import {reorderMenuItems} from './menu-row-utils.js';": '',
-    "import {applicationIcon} from './menu-icons.js';": '',
-};
-const Links = await loadModule('menu-links.js', 'PopupMenu, Atk', moduleImports);
-const Groups = await loadModule('menu-groups.js',
-    'PopupMenu, Atk, orderedQuickGroups, removeMenuItem, reorderMenuItems', moduleImports);
-const Applications = await loadModule('menu-applications.js',
-    'PopupMenu, visibleApplicationStreams, visibleBrowserTabs, reorderMenuItems, applicationIcon', moduleImports);
-
-const language = {unmute: 'Unmute', mute: 'Mute', noApplications: 'No applications',
-    outputUnavailable: 'Unavailable', allApplications: 'All applications', mainMixer: 'Main Mixer',
-    vibroOverall: 'Vibro Gain', vibroLimiter: 'Limiter', vibroOutput: 'Vibro output', events: 'Events'};
+const Links = await loadModule('menu-links.js');
+const Groups = await loadModule('menu-groups.js');
+const Applications = await loadModule('menu-applications.js');
 const routeControl = {id: 'route:main:multi', routeId: 'main', nodeId: 'multi', nodeType: 'switch',
-    kind: 'choice', label: 'Music routing', multiple: true, value: ['in->monitor'], options: [
-        {id: 'in->monitor', label: 'Monitor'}, {id: 'in->vibro', label: 'Vibro'},
-    ]};
-const linkRows = new Map();
+    multiple: true, value: ['in->monitor'], options: [{id: 'in->monitor', label: 'Монитор'}, {id: 'in->vibro', label: 'Вибродинамик'}]};
 const links = new Links((name, value) => commands.push([name, value]));
-const disclosures = {
-    groups: new Map(), pins: new Map(),
-    groupOpen: group => !group.collapsed, pinOpen: pin => pin.view !== 'COMPACT',
-    trackGroup(id, header, content) { this.groups.set(id, {header, content}); },
-    trackPin(id, header, content) { this.pins.set(id, {header, content}); },
-    toggleGroup() { return true; }, togglePin() { return true; },
-};
-const groups = new Groups({send: (name, value) => commands.push([name, value]), disclosures,
-    applications: {render() {}}, links, mixer: {render() {}}, output: {render() {}},
-    renderControls() {}, registerLinkRow: (id, row) => linkRows.set(id, row)});
+const groups = new Groups({send() {}, disclosures: {groupOpen: () => true, trackGroup() {}},
+    applications: {render() {}}, links, output: {render() {}}});
 const column = new Section();
-const state = {quickGroups: [{id: 'routing', name: 'Routing', order: 0, collapsed: false}],
-    quickPins: [{id: 'pin-switch', routeId: 'main', nodeId: 'multi', name: 'MultiSwitch',
-        nodeType: 'switch', groupId: 'routing', order: 0, routeControl}], quickControls: []};
-groups.render(column, state, state.quickPins, language);
-const pinEntry = groups._pinEntries.get('pin-switch');
-const firstPinRow = pinEntry.wrapper;
-const multiSwitch = linkRows.get(routeControl.id);
-assert.ok(multiSwitch, 'An existing pinned routeControl is registered for live updates');
-assert.equal(pinEntry.routeSection.items[0].label.text, 'MultiSwitch');
-assert.equal(pinEntry.routeSection.items[1].label.text, '1 вход → несколько выходов');
-const monitor = pinEntry.routeSection.items[2];
-monitor.state = false;
-monitor.handlers.toggled();
-assert.deepEqual(commands.pop(), ['setRouteEnabled', {
-    routeId: 'main', switchNodeId: 'multi', linkId: 'in->monitor', enabled: false,
-}], 'MultiSwitch publishes the exact route and activeLink endpoint IDs');
-const liveControl = {...routeControl, value: ['in->vibro']};
-links.update(multiSwitch, liveControl);
-assert.equal(monitor.state, false);
-assert.equal(pinEntry.routeSection.items[3].state, true,
-    'A published activeLinks change updates the existing checkbox actors');
-groups.render(column, state, state.quickPins, language);
-assert.equal(groups._pinEntries.get('pin-switch').wrapper, firstPinRow,
-    'A value-only route update preserves the keyed pin row');
+const pin = {id: 'pin-switch', routeId: 'main', nodeId: 'multi', name: 'Распределитель звука', nodeType: 'switch', groupId: 'routing', routeControl};
+const state = {quickGroups: [{id: 'routing', name: 'Маршрутизация', order: 0}], quickPins: [pin]};
+groups.render(column, state, state.quickPins, {});
+const firstPin = groups._pinEntries.get(pin.id).wrapper;
+const routeCard = firstPin.items[0];
+const monitor = routeCard.items[1];
+const vibration = routeCard.items[2];
+monitor.emit('activate', {});
+assert.deepEqual(commands.pop(), ['setRouteEnabled', {routeId: 'main', switchNodeId: 'multi', linkId: 'in->monitor', enabled: false}]);
+const reference = groups._pinEntries.get(pin.id).routeRef;
+links.update(reference, {...routeControl, value: ['in->vibro']});
+assert.equal(monitor.children.at(-1).get_child().visible, false);
+assert.equal(vibration.children.at(-1).get_child().visible, true);
+groups.render(column, state, state.quickPins, {});
+assert.equal(groups._pinEntries.get(pin.id).wrapper, firstPin, 'A route value change preserves the focused row');
+links.update(reference, {...routeControl, value: ['in->vibro'], options: [routeControl.options[0], {...routeControl.options[1], available: false}]});
+assert.equal(vibration.reactive, false);
+assert.equal(vibration.children.at(-1).get_child().visible, false, 'An offline output cannot look actively routed');
 
-const rowOptions = [];
 const fakeRows = {
-    createLevelRow(options) { const item = new MenuItem(options.name); item.rowOptions = {...options}; return item; },
-    updateLevelRow(item, options) { item.rowOptions = {...item.rowOptions, ...options}; },
-    applicationIcon: () => 'application-x-executable-symbolic',
+    createLevelRow(options) { const item = new MenuItem(); item.options = options; item.tabs = new Section(); return item; },
+    updateLevelRow(item, options) { item.options = {...item.options, ...options}; },
+    childSection(item) { return item.tabs; },
 };
 const appRenderer = new Applications({rows: fakeRows, send() {}});
 const appSection = new Section();
 const appPin = {id: 'app-source', routeId: 'main', nodeId: 'apps'};
-const appA = {id: 'app:chrome', name: 'Chrome', volume: .7, muted: false,
-    streams: [{id: 'stream-1', name: 'Audio one', volume: .4, muted: false}]};
-appRenderer.render(appPin, [appA], language, appSection);
-const appRow = appSection.items.find(row => row.rowOptions?.id === 'app:app:chrome');
-const streamRow = appSection.items.find(row => row.rowOptions?.id === 'stream:stream-1');
-const appB = {...appA, streams: [...appA.streams, {id: 'stream-2', name: 'Audio two', volume: .2, muted: false}]};
-appRenderer.render(appPin, [appB], language, appSection);
-assert.equal(appSection.items.find(row => row.rowOptions?.id === 'app:app:chrome'), appRow,
-    'Adding a stream retains the existing keyed application row actor');
-assert.equal(appSection.items.find(row => row.rowOptions?.id === 'stream:stream-1'), streamRow,
-    'Adding a stream retains the existing keyed stream row actor');
-assert.equal(appSection.items.length, 3, 'Only the new stream row is inserted');
+const appA = {id: 'chrome', name: 'Chrome', volume: .7, streams: [{id: 'stream-1'}]};
+appRenderer.render(appPin, [appA], {}, appSection);
+const appRow = appSection.items[0];
+appRenderer.render(appPin, [{...appA, streams: [...appA.streams, {id: 'stream-2'}]}], {}, appSection);
+assert.equal(appSection.items[0], appRow, 'New streams must not replace the application card');
+assert.equal(appSection.items.length, 1, 'Technical PipeWire streams are not separate application cards');
 
 const scroll = {adjustment: {value: 20, lower: 0, upper: 220, page_size: 50},
     get_vadjustment() { return this.adjustment; }, get_transformed_position() { return [0, 0]; }};
 const anchorActor = {visible: true, height: 10, get_height() { return this.height; },
     get_parent() { return scroll; }, get_transformed_position() { return [0, 30 - scroll.adjustment.value]; }};
 const focus = {get_parent: () => anchorActor};
-const viewport = captureMenuViewport(scroll, [
-    {id: 'removed-above', actor: {visible: true, height: 10, get_height() { return 10; }, get_transformed_position: () => [0, -30]}},
-    {id: 'stream:stream-1', actor: anchorActor},
-], focus);
-assert.equal(viewport.anchor.id, 'stream:stream-1');
+const viewport = captureMenuViewport(scroll, [{id: 'retained-card', actor: anchorActor}], focus);
 scroll.adjustment.upper += 30;
 anchorActor.get_transformed_position = () => [0, 50 - scroll.adjustment.value];
 let focusedActor = null;
-restoreMenuViewport(scroll, viewport, [{id: 'stream:stream-1', actor: anchorActor}], actor => focusedActor = actor);
-assert.equal(anchorActor.get_transformed_position()[1], viewport.anchor.offset,
-    'Structural insertion preserves the stable row anchor pixel offset');
-assert.equal(focusedActor, null, 'A still-mounted focused row keeps its actor and keyboard focus');
-
+restoreMenuViewport(scroll, viewport, [{id: 'retained-card', actor: anchorActor}], actor => focusedActor = actor);
+assert.equal(anchorActor.get_transformed_position()[1], viewport.anchor.offset, 'Insertion preserves the scroll anchor offset');
+assert.equal(focusedActor, null, 'The retained actor keeps keyboard focus');
 delete globalThis.audioMatrixRendererFixture;
-console.log('Menu behavior covers keyed stream identity, viewport anchors, and exact MultiSwitch links');
+console.log('Native card behavior: exact routing, offline state, stable application cards and scroll anchors');

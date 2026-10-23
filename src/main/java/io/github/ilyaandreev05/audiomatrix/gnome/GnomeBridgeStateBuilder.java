@@ -47,7 +47,7 @@ final class GnomeBridgeStateBuilder {
         state.put("routes", GnomeQuickSettingsState.routes(config));
         state.put("quickGroups", GnomeQuickSettingsState.groups(config));
         state.put("quickControls", quickControls);
-        state.put("channelRoutes", GnomeControlBridge.channelRoutes(
+        state.put("channelRoutes", GnomeChannelRouteState.channelRoutes(
                 snapshot, config, profile, active, defaultId, devices));
         List<Map<String, Object>> applications = GnomeApplicationProjection.applications(snapshot, config,
                 browserAdapters, graphState);

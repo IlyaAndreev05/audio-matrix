@@ -77,6 +77,7 @@ abstract class AppShellState extends AppShellContract02 {
     protected CompletableFuture<Void> closeFuture;
     protected volatile boolean closing;
     protected boolean suppressConfigListener;
+    protected volatile boolean gnomeCommandInFlight;
     protected boolean routesRequested;
     protected long routeHistoryRevision = -1;
     protected boolean routeUndoInProgress;
@@ -103,8 +104,43 @@ abstract class AppShellState extends AppShellContract02 {
         if(runtimeInitialized)throw new IllegalStateException("Audio Matrix runtime was already initialized");
         browserSocketServer=server;
         browserAdapters=List.copyOf(BrowserAdapterRegistry.createAdapters(server));
-        gnomeBridge=new GnomeControlBridge(this::handleGnomeCommand,browserAdapters);
+        gnomeBridge=new GnomeControlBridge(this::executeGnomeCommand,browserAdapters,this::confirmGnomeCommandState);
         runtimeInitialized=true;
+    }
+
+    private CompletableFuture<Void> executeGnomeCommand(GnomeControlBridge.Command command) {
+        gnomeCommandInFlight = true;
+        return handleGnomeCommand(command);
+    }
+
+    /** Completes only after a fresh post-command observation is published ahead of its ACK. */
+    private CompletableFuture<Void> confirmGnomeCommandState(GnomeControlBridge.Command command) {
+        CompletableFuture<Void> reconcile = new CompletableFuture<>();
+        Platform.runLater(() -> {
+            try {
+                gnomeCommandInFlight = false;
+                var config = store.snapshot();
+                applyConfiguredDeviceRules(snapshot,config);
+                applyConfiguredStreamRules(snapshot,config);
+                reconcile.complete(null);
+            } catch (RuntimeException failure) {
+                reconcile.completeExceptionally(failure);
+            }
+        });
+        return reconcile.thenCompose(ignored -> "open".equals(command.name())
+                ? CompletableFuture.completedFuture(snapshot) : backend.refresh()).thenCompose(next -> {
+            CompletableFuture<Void> published = new CompletableFuture<>();
+            Platform.runLater(() -> {
+                try {
+                    if (next.capturedAtMillis() >= snapshot.capturedAtMillis()) snapshot = next;
+                    publishGnomeState();
+                    published.complete(null);
+                } catch (RuntimeException failure) {
+                    published.completeExceptionally(failure);
+                }
+            });
+            return published;
+        }).whenComplete((ignored,failure) -> gnomeCommandInFlight = false);
     }
 
     protected DynamicInstanceRegistry.ReconcileResult dynamicGraphState(String routeId) {

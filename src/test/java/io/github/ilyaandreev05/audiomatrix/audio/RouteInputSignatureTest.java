@@ -1,6 +1,7 @@
 package io.github.ilyaandreev05.audiomatrix.audio;
 
 import io.github.ilyaandreev05.audiomatrix.config.DefaultConfig;
+import io.github.ilyaandreev05.audiomatrix.graph.EventSoundStudioSource;
 import org.junit.jupiter.api.Test;
 
 import java.util.LinkedHashMap;
@@ -51,6 +52,102 @@ class RouteInputSignatureTest {
                 before.channels(), before.sampleRates(), 0.25, true, before.pulseId(), before.identity());
         assertEquals(RouteInputSignature.dynamicBindings(first),
                 RouteInputSignature.dynamicBindings(snapshot(sinks, List.of(presentationChanged))));
+    }
+
+    @Test
+    void transientShellSoundChurnDoesNotChangeDynamicBindings() {
+        List<AudioNode> sinks = List.of(sink(69, "alsa_output.hdmi-stereo"));
+        String idle = RouteInputSignature.dynamicBindings(snapshot(sinks, List.of()));
+        List<AudioNode> shellSounds = List.of(
+                stream(401, "gnome-shell", ""),
+                stream(402, "notification", "", "gnome-shell"),
+                stream(403, "volume-feedback", "", "gsd-media-keys"),
+                stream(404, "xdg-desktop-portal", ""));
+
+        for (AudioNode shellSound : shellSounds) {
+            assertEquals(idle, RouteInputSignature.dynamicBindings(snapshot(sinks, List.of(shellSound))));
+        }
+    }
+
+    @Test
+    void eventStreamChurnUsesTheStableMonitorWithoutChangingBindingsOrTopology() {
+        Map<String, Object> config = Map.of("active_route", "desktop");
+        List<AudioNode> sinks = List.of(sink(69, "alsa_output.hdmi-stereo"));
+        List<AudioNode> sources = List.of(eventInput(203));
+        PipeWireBackend.Snapshot idle = snapshot(sinks, sources, List.of());
+        PipeWireBackend.Snapshot first = snapshot(sinks, sources,
+                List.of(stream(401, "pw-cat", EventSoundStudioSource.APPLICATION_ID, "pw-cat")));
+        PipeWireBackend.Snapshot next = snapshot(sinks, sources,
+                List.of(stream(402, "pw-cat", EventSoundStudioSource.APPLICATION_ID, "pw-cat")));
+
+        assertEquals(RouteInputSignature.dynamicBindings(idle), RouteInputSignature.dynamicBindings(first));
+        assertEquals(RouteInputSignature.dynamicBindings(first), RouteInputSignature.dynamicBindings(next));
+        assertEquals(RouteInputSignature.create(config, idle, 1), RouteInputSignature.create(config, first, 1));
+        assertEquals(RouteInputSignature.create(config, first, 1), RouteInputSignature.create(config, next, 1));
+    }
+
+    @Test
+    void eventStreamChurnStillTriggersLegacyBindingsWithoutTheMonitor() {
+        List<AudioNode> sinks = List.of(sink(69, "alsa_output.hdmi-stereo"));
+        PipeWireBackend.Snapshot idle = snapshot(sinks, List.of());
+        PipeWireBackend.Snapshot first = snapshot(sinks,
+                List.of(stream(401, "pw-cat", EventSoundStudioSource.APPLICATION_ID, "pw-cat")));
+        PipeWireBackend.Snapshot next = snapshot(sinks,
+                List.of(stream(402, "pw-cat", EventSoundStudioSource.APPLICATION_ID, "pw-cat")));
+
+        assertNotEquals(RouteInputSignature.dynamicBindings(idle), RouteInputSignature.dynamicBindings(first));
+        assertNotEquals(RouteInputSignature.dynamicBindings(first), RouteInputSignature.dynamicBindings(next));
+    }
+
+    @Test
+    void ordinaryPwCatStreamsStillTriggerBindingsWithTheEventMonitor() {
+        List<AudioNode> sinks = List.of(sink(69, "alsa_output.hdmi-stereo"));
+        List<AudioNode> sources = List.of(eventInput(203));
+        String idle = RouteInputSignature.dynamicBindings(snapshot(sinks, sources, List.of()));
+
+        for (String applicationId : List.of("", "org.example.Player")) {
+            PipeWireBackend.Snapshot first = snapshot(sinks, sources,
+                    List.of(stream(401, "pw-cat", applicationId, "pw-cat")));
+            PipeWireBackend.Snapshot next = snapshot(sinks, sources,
+                    List.of(stream(402, "pw-cat", applicationId, "pw-cat")));
+            assertNotEquals(idle, RouteInputSignature.dynamicBindings(first));
+            assertNotEquals(RouteInputSignature.dynamicBindings(first), RouteInputSignature.dynamicBindings(next));
+        }
+    }
+
+    @Test
+    void eventMonitorRuntimeIdentityChangesBindingsWithoutChangingStaticTopology() {
+        Map<String, Object> config = Map.of("active_route", "desktop");
+        List<AudioNode> sinks = List.of(sink(69, "alsa_output.hdmi-stereo"));
+        AudioNode monitor = eventInput(203);
+        AudioNode changedChannels = new AudioNode(monitor.id(), monitor.name(), monitor.description(),
+                monitor.mediaClass(), monitor.state(), monitor.applicationName(), monitor.processName(),
+                monitor.applicationId(), 1, monitor.sampleRates(), monitor.volume(), monitor.muted(),
+                monitor.pulseId(), monitor.identity());
+        PipeWireBackend.Snapshot first = snapshot(sinks, List.of(monitor), List.of());
+        PipeWireBackend.Snapshot replaced = snapshot(sinks, List.of(eventInput(204)), List.of());
+        PipeWireBackend.Snapshot reconfigured = snapshot(sinks, List.of(changedChannels), List.of());
+
+        assertNotEquals(RouteInputSignature.dynamicBindings(first), RouteInputSignature.dynamicBindings(replaced));
+        assertNotEquals(RouteInputSignature.dynamicBindings(first), RouteInputSignature.dynamicBindings(reconfigured));
+        assertEquals(RouteInputSignature.create(config, first, 1), RouteInputSignature.create(config, replaced, 1));
+        assertEquals(RouteInputSignature.create(config, first, 1), RouteInputSignature.create(config, reconfigured, 1));
+    }
+
+    @Test
+    void eventMonitorPresentationAndLevelsDoNotChangeBindingsOrTopology() {
+        Map<String, Object> config = Map.of("active_route", "desktop");
+        List<AudioNode> sinks = List.of(sink(69, "alsa_output.hdmi-stereo"));
+        AudioNode monitor = eventInput(203);
+        AudioNode changed = new AudioNode(monitor.id(), monitor.name(), "Renamed event input",
+                monitor.mediaClass(), "suspended", "Renamed application", monitor.processName(),
+                monitor.applicationId(), monitor.channels(), monitor.sampleRates(), 0.25, true,
+                monitor.pulseId(), monitor.identity());
+        PipeWireBackend.Snapshot first = snapshot(sinks, List.of(monitor), List.of());
+        PipeWireBackend.Snapshot next = snapshot(sinks, List.of(changed), List.of());
+
+        assertEquals(RouteInputSignature.dynamicBindings(first), RouteInputSignature.dynamicBindings(next));
+        assertEquals(RouteInputSignature.create(config, first, 1), RouteInputSignature.create(config, next, 1));
     }
 
     @Test
@@ -108,7 +205,12 @@ class RouteInputSignatureTest {
         return RouteInputSignature.create(config, snapshot, 1);
     }
     private static PipeWireBackend.Snapshot snapshot(List<AudioNode> sinks, List<AudioNode> streams) {
-        return new PipeWireBackend.Snapshot(true, "", sinks, List.of(), streams,
+        return snapshot(sinks, List.of(), streams);
+    }
+
+    private static PipeWireBackend.Snapshot snapshot(List<AudioNode> sinks, List<AudioNode> sources,
+                                                    List<AudioNode> streams) {
+        return new PipeWireBackend.Snapshot(true, "", sinks, sources, streams,
                 List.of(), Map.of(), sinks.isEmpty() ? -1 : sinks.getFirst().id(), 0);
     }
 
@@ -125,8 +227,16 @@ class RouteInputSignatureTest {
                 List.of(48000), 1.0, false, null);
     }
 
+    private static AudioNode eventInput(int id) {
+        return EventInputMonitor.sourceView(sink(id, EventInputMonitor.NODE_NAME));
+    }
+
     private static AudioNode stream(int id, String name, String applicationId) {
-        return new AudioNode(id, name, name, "Stream/Output/Audio", "running", name, "pw-loopback",
+        return stream(id, name, applicationId, "pw-loopback");
+    }
+
+    private static AudioNode stream(int id, String name, String applicationId, String processName) {
+        return new AudioNode(id, name, name, "Stream/Output/Audio", "running", name, processName,
                 applicationId, 2, List.of(48000), 1.0, false, null);
     }
 }

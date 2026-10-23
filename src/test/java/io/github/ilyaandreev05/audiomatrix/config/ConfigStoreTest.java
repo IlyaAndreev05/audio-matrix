@@ -7,6 +7,8 @@ import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
@@ -27,6 +29,28 @@ class ConfigStoreTest {
         }
     }
 
+
+    @Test void legacyYamlAliasMovesIntoCanonicalNameAndSurvivesJsonReload() throws Exception {
+        Path legacy=temp.resolve("config.yaml"), json=temp.resolve("config.json");
+        Map<String,Object> old=DefaultConfig.create();
+        old.put("devices",new ArrayList<>(List.of(DefaultConfig.map("id","desk-dac","alias","Мои наушники",
+                "selector",Map.of("kind","name_equals","value","alsa_output.usb-dac"),"volume",1.0,"mute",false))));
+        byte[] original=new ObjectMapper(new YAMLFactory()).writeValueAsBytes(old);Files.write(legacy,original);
+        try(ConfigStore store=new ConfigStore(json,legacy)){
+            @SuppressWarnings("unchecked") Map<String,Object> imported=(Map<String,Object>)((List<?>)store.snapshot().get("devices")).getFirst();
+            assertEquals("Мои наушники",imported.get("name"));
+            assertFalse(imported.containsKey("alias"));
+            store.updateAsync(config->{
+                @SuppressWarnings("unchecked") List<Map<String,Object>> devices=(List<Map<String,Object>>)config.get("devices");
+                devices.getFirst().put("name","Наушники Sony");
+            }).join();
+        }
+        try(ConfigStore reloaded=new ConfigStore(json,temp.resolve("absent.yaml"))){
+            @SuppressWarnings("unchecked") Map<String,Object> saved=(Map<String,Object>)((List<?>)reloaded.snapshot().get("devices")).getFirst();
+            assertEquals("Наушники Sony",saved.get("name"));
+            assertFalse(saved.containsKey("alias"));
+        }
+    }
     @Test void legacyProfilesAndRoutesAreArchivedIntoTheSingleMainProfile() throws Exception {
         Path file=temp.resolve("config.json");
         Map<String,Object> old=DefaultConfig.create();old.put("schema_version",2);

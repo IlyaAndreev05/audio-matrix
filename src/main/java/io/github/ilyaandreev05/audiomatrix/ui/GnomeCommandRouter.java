@@ -29,6 +29,7 @@ final class GnomeCommandRouter {
             case "toggle_app_mute" -> shell.setGnomeApplicationLevel(command.value(),true);
             case "set_stream_volume" -> shell.setGnomeStreamLevel(command.value(),false);
             case "toggle_stream_mute" -> shell.setGnomeStreamLevel(command.value(),true);
+            case "setBrowserTabMuted" -> GnomeBrowserTabCommands.setMuted(shell,command.value());
             case "set_mixer_input_volume" -> shell.setGnomeMixerInputLevel(command.value(),false);
             case "toggle_mixer_input_mute" -> shell.setGnomeMixerInputLevel(command.value(),true);
             case "set_quick_control" -> shell.setGnomeQuickControl(command.value(),false);

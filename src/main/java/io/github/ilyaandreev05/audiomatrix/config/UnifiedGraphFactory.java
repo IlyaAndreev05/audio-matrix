@@ -156,7 +156,7 @@ final class UnifiedGraphFactory {
         static Settings defaults() {
             return new Settings(0.6, false, 0.65, false, 0.6, false,
                     1.0, false, 1.0, false, null, Map.of(),
-                    List.of(), List.of(), List.of(), List.of(), true);
+                    List.of(), List.of(), List.of(), List.of(), false);
         }
     }
 }

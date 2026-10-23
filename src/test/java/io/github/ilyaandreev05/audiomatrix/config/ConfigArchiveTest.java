@@ -4,10 +4,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -53,6 +55,25 @@ class ConfigArchiveTest {
         assertThrows(ConfigArchive.ArchiveException.class, () -> ConfigArchive.prepare(mismatch));
     }
 
+
+    @Test void legacyYamlArchivePromotesDeviceAliasesIntoTheCanonicalJsonField() throws Exception {
+        Map<String,Object> config=DefaultConfig.create();
+        config.put("devices",new ArrayList<>(List.of(DefaultConfig.map("id","desk-dac","alias","Мои наушники",
+                "selector",Map.of("kind","name_equals","value","alsa_output.usb-dac"),"volume",1.0,"mute",false))));
+        Path source=temp.resolve("alias-source.amx.zip"),archive=temp.resolve("alias-legacy.amx.zip");
+        ConfigArchive.exportArchive(source,config,temp);
+        rewriteConfigAsYaml(source,archive,config);
+        Path json=temp.resolve("installed/config.json");
+        try(ConfigArchive.PreparedImport prepared=ConfigArchive.prepare(archive);
+            ConfigStore store=new ConfigStore(json,temp.resolve("absent.yaml"))){
+            assertEquals("Мои наушники",prepared.deviceMappings().getFirst().name());
+            ConfigArchive.install(prepared,temp.resolve("installed-data"),store);
+            @SuppressWarnings("unchecked") Map<String,Object> saved=(Map<String,Object>)((List<?>)store.snapshot().get("devices")).getFirst();
+            assertEquals("Мои наушники",saved.get("name"));
+            assertFalse(saved.containsKey("alias"));
+            assertTrue(Files.readString(json).startsWith("{"));
+        }
+    }
     @Test void restoresProfilesAndMeasurementsWithoutOverwritingDifferentFile() throws Exception {
         Path sourceDir = temp.resolve("source");
         try (ConfigStore source = new ConfigStore(sourceDir.resolve("config.yaml"))) {
@@ -191,6 +212,27 @@ class ConfigArchiveTest {
         entries.put("manifest.json", json.writeValueAsBytes(manifest));
         try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(destination))) {
             for (Map.Entry<String, byte[]> entry : entries.entrySet()) { zip.putNextEntry(new ZipEntry(entry.getKey())); zip.write(entry.getValue()); zip.closeEntry(); }
+        }
+    }
+
+    private static void rewriteConfigAsYaml(Path source,Path destination,Map<String,Object> config) throws Exception {
+        ObjectMapper json=new ObjectMapper();
+        Map<String,byte[]> entries=new LinkedHashMap<>();
+        try(ZipInputStream zip=new ZipInputStream(Files.newInputStream(source))){
+            ZipEntry entry;
+            while((entry=zip.getNextEntry())!=null){entries.put(entry.getName(),zip.readAllBytes());zip.closeEntry();}
+        }
+        byte[] document=new ObjectMapper(new YAMLFactory()).writerWithDefaultPrettyPrinter().writeValueAsBytes(config);
+        entries.remove("config.json");entries.put("config.yaml",document);
+        Map<String,Object> manifest=json.readValue(entries.get("manifest.json"),new TypeReference<>(){});
+        manifest.put("config_entry","config.yaml");
+        @SuppressWarnings("unchecked") Map<String,String> files=(Map<String,String>)manifest.get("files");
+        files.remove("config.json");files.put("config.yaml",ArchiveFiles.sha256(document));
+        entries.put("manifest.json",json.writeValueAsBytes(manifest));
+        try(ZipOutputStream zip=new ZipOutputStream(Files.newOutputStream(destination))){
+            for(Map.Entry<String,byte[]> entry:entries.entrySet()){
+                zip.putNextEntry(new ZipEntry(entry.getKey()));zip.write(entry.getValue());zip.closeEntry();
+            }
         }
     }
 }

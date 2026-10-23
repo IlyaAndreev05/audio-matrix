@@ -2,7 +2,6 @@ package io.github.ilyaandreev05.audiomatrix.audio;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.github.ilyaandreev05.audiomatrix.audio.PipeWireRouteTypes.Link;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -12,13 +11,13 @@ import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -32,6 +31,9 @@ import java.util.zip.CRC32;
 public final class PipeWireBackend implements AutoCloseable {
     public static final String SYSTEM_MIXER_SINK_NAME = "audiomatrix_system";
     private final ExecutorService io = Executors.newFixedThreadPool(3, r -> daemon(r, "audio-matrix-pipewire-io"));
+    // Snapshots and mutations share one lane: an older observation must not overtake a mixer write.
+    // Calibration owns the separate IO pool so recording never blocks interactive controls.
+    private final ExecutorService controls = Executors.newSingleThreadExecutor(r -> daemon(r, "audio-matrix-pipewire-control"));
     private final ScheduledExecutorService changes = Executors.newSingleThreadScheduledExecutor(r -> daemon(r, "audio-matrix-pipewire-events"));
     private final PipeWireCalibrationController calibration = new PipeWireCalibrationController(io);
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -62,7 +64,7 @@ public final class PipeWireBackend implements AutoCloseable {
     public PipeWireLevelMonitor.Reading inputLevel() { return inputLevelMonitor.reading(); }
 
     public CompletableFuture<Snapshot> refresh() {
-        return CompletableFuture.supplyAsync(() -> {
+        return control(() -> {
             try {
                 Snapshot snapshot = readSnapshot();
                 last = snapshot;
@@ -74,13 +76,23 @@ public final class PipeWireBackend implements AutoCloseable {
                 backendMessage = "PipeWire unavailable: " + safeMessage(e);
                 return snapshot;
             }
-        }, io);
+        });
     }
 
-    public CompletableFuture<Void> setVolume(int nodeId, double volume) { return WirePlumberMixerControl.setVolumeAsync(nodeId, clamp(volume, 0, 1), io); }
-    public CompletableFuture<Void> setMute(int nodeId, boolean muted) { return WirePlumberMixerControl.setMutedAsync(nodeId, muted, io); }
+    public CompletableFuture<Void> setVolume(int nodeId, double volume) {
+        return control(() -> {
+            if (isLiveStream(nodeId)) WirePlumberMixerControl.setStreamVolume(nodeId, clamp(volume, 0, 1));
+            else WirePlumberMixerControl.setVolume(nodeId, clamp(volume, 0, 1));
+            return null;
+        });
+    }
+    public CompletableFuture<Void> setMute(int nodeId, boolean muted) { return setMute(nodeId, muted, -1.0); }
     public CompletableFuture<Void> setMute(int nodeId, boolean muted, double savedLevel) {
-        return WirePlumberMixerControl.setMutedAsync(nodeId, muted, savedLevel, io);
+        return control(() -> {
+            if (isLiveStream(nodeId)) WirePlumberMixerControl.setStreamMuted(nodeId, muted);
+            else WirePlumberMixerControl.setMuted(nodeId, muted, savedLevel);
+            return null;
+        });
     }
     public CompletableFuture<Void> setDefaultOutput(int nodeId) {
         return execute("wpctl", "set-default", Integer.toString(nodeId));
@@ -92,28 +104,7 @@ public final class PipeWireBackend implements AutoCloseable {
         if (executable("pactl") && stream.pulseId() != null)
             return execute("pactl", "move-sink-input", stream.pulseId().toString(), sink.name());
         if (!executable("pw-link")) return CompletableFuture.failedFuture(new IOException("Neither pactl nor pw-link is available for stream transfer"));
-        return CompletableFuture.runAsync(() -> {
-            List<Link> previous = List.of(), connected = new ArrayList<>();
-            try {
-                List<String> sourcePorts = PipeWireLinkOperations.portsForNode(run(List.of("pw-link", "-o"), Duration.ofSeconds(3)), stream.name());
-                List<String> targetPorts = PipeWireLinkOperations.portsForNode(run(List.of("pw-link", "-i"), Duration.ofSeconds(3)), sink.name());
-                List<Link> replacement = PipeWireRouteManager.channelLinks(sourcePorts, targetPorts, "stereo", false);
-                if (replacement.isEmpty()) throw new IOException("No compatible audio ports are available on the selected sink");
-                previous = PipeWireLinkOperations.linksFromNode(run(List.of("pw-link", "-l"), Duration.ofSeconds(3)), stream.name());
-                if (previous.equals(replacement)) return;
-                for (Link link : previous) run(List.of("pw-link", "-d", link.output(), link.input()), Duration.ofSeconds(3));
-                for (Link link : replacement) {
-                    run(List.of("pw-link", "--wait", link.output(), link.input()), Duration.ofSeconds(3));
-                    connected.add(link);
-                }
-            } catch (Exception failure) {
-                for (Link link : connected) try { run(List.of("pw-link", "-d", link.output(), link.input()), Duration.ofSeconds(2)); }
-                catch (Exception ignored) {}
-                for (Link link : previous) try { run(List.of("pw-link", "--wait", link.output(), link.input()), Duration.ofSeconds(3)); }
-                catch (Exception restoreFailure) { failure.addSuppressed(restoreFailure); }
-                throw new java.util.concurrent.CompletionException(failure);
-            }
-        }, io);
+        return control(() -> { PipeWireLinkOperations.moveStream(stream.name(), sink.name(), PipeWireBackend::run); return null; });
     }
 
     public CompletableFuture<Void> playTestTone(AudioNode sink, double frequencyHz, int durationMs) {
@@ -221,10 +212,21 @@ public final class PipeWireBackend implements AutoCloseable {
         changes.schedule(() -> refresh().thenAccept(snapshot -> listener.accept(snapshot)), 250, TimeUnit.MILLISECONDS);
     }
     private CompletableFuture<Void> execute(String... command) {
-        return CompletableFuture.runAsync(() -> {
-            try { run(List.of(command), Duration.ofSeconds(4)); }
-            catch (Exception e) { throw new java.util.concurrent.CompletionException(e); }
-        }, io);
+        return control(() -> { run(List.of(command), Duration.ofSeconds(4)); return null; });
+    }
+    <T> CompletableFuture<T> control(Callable<T> operation) {
+        return CompletableFuture.supplyAsync(() -> {
+            try { return operation.call(); }
+            catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new java.util.concurrent.CompletionException(interrupted);
+            }
+            catch (Exception error) { throw new java.util.concurrent.CompletionException(error); }
+        }, controls);
+    }
+
+    private boolean isLiveStream(int nodeId) {
+        return last.streams().stream().anyMatch(stream -> stream.id() == nodeId);
     }
     static String run(List<String> command, Duration timeout) throws Exception {
         return PipeWireCommandRunner.run(command, timeout);
@@ -242,6 +244,7 @@ public final class PipeWireBackend implements AutoCloseable {
         inputLevelMonitor.close();
         Process current = monitor;
         if (current != null) current.destroyForcibly();
+        controls.shutdownNow();
         io.shutdownNow(); changes.shutdownNow();
     }
 

@@ -16,7 +16,9 @@ final class QuickSettingsGroupLibrary {
         if (order < 0) throw new IllegalArgumentException("Quick settings group order must not be negative");
         Map<String, Object> group = DefaultConfig.map("id", "quick-" + UUID.randomUUID(),
                 "name", normalizedName, "order", order, "collapsed", false);
-        QuickSettingsConfig.groups(config).add(group);
+        List<Map<String, Object>> groups = QuickSettingsConfig.groups(config);
+        groups.add(group);
+        move(config, String.valueOf(group.get("id")), order);
         return group;
     }
 
@@ -25,9 +27,19 @@ final class QuickSettingsGroupLibrary {
         if (order < 0) throw new IllegalArgumentException("Quick settings group order must not be negative");
         Map<String, Object> group = requireGroup(config, groupId);
         group.put("name", requireName(name));
-        group.put("order", order);
+        move(config, groupId, order);
         group.put("collapsed", collapsed);
         return group;
+    }
+
+    static void move(Map<String, Object> config, String groupId, int destination) {
+        if (destination < 0) throw new IllegalArgumentException("Quick settings group order must not be negative");
+        List<Map<String, Object>> groups = QuickSettingsConfig.groups(config);
+        Map<String, Object> moving = requireGroup(config, groupId);
+        groups.sort(Comparator.comparingInt(item -> number(item.get("order"))));
+        groups.remove(moving);
+        groups.add(Math.min(destination, groups.size()), moving);
+        for (int index = 0; index < groups.size(); index++) groups.get(index).put("order", index);
     }
 
     static void remove(Map<String, Object> config, String groupId) {

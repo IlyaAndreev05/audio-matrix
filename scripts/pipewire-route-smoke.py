@@ -285,56 +285,26 @@ def read_route_measurement(root):
     return measurement
 
 
-def latency_probe(root, environment, logs, processes, output_files, sink_name, monitor_name):
-    capture_name = "am_latency_capture"
-    capture, output, path = start_recording(capture_name, monitor_name, root,
-                                            environment, logs, processes, output_files)
-    player_name = "am_latency_probe"
-    player_properties = json.dumps({"node.name": player_name, "media.name": player_name})
-    player = start(player_name, [
-        "pw-cat", "--playback", "--target", sink_name, "--latency=20ms", "--properties", player_properties,
-        "--raw", "--format", "f32", "--rate", str(SAMPLE_RATE), "--channels", "2",
-        "--channel-map", "FL,FR", "-",
-    ], environment, logs, processes, stdin=subprocess.PIPE)
-    wait_for_node(environment, player_name, process=player)
-    time.sleep(0.2)
-    frames_per_chunk = 480
-    silence = bytes(frames_per_chunk * CHANNELS * 4)
-    marks = []
-    started = time.monotonic()
-    for chunk_index in range(65):
-        chunk = bytearray(silence)
-        if chunk_index in (15, 25, 35, 45, 55):
-            base_frame = path.stat().st_size // (CHANNELS * 4)
-            struct.pack_into("<ff", chunk, 0, 0.25, 0.25)
-            marks.append(base_frame)
-        player.stdin.write(chunk)
-        player.stdin.flush()
-        # An absolute schedule keeps the player fed; a drifting sleep starves the stream.
-        deadline = started + (chunk_index + 1) * (frames_per_chunk / SAMPLE_RATE)
-        remaining = deadline - time.monotonic()
-        if remaining > 0:
-            time.sleep(remaining)
-    player.stdin.close()
-    stop(player)
-    time.sleep(0.1)
-    stop(capture)
-    output.close()
-    samples = read_mono_f32(path)
-    measured = []
-    for base_frame in marks:
-        onset = next((index for index in range(base_frame, len(samples)) if abs(samples[index]) > 0.05), None)
-        if onset is not None:
-            measured.append((onset - base_frame) * 1000.0 / SAMPLE_RATE)
-    if len(measured) < 4:
-        raise RuntimeError(f"Too few private PCM impulses were captured for latency measurement: {measured}")
-    measured.sort()
-    p50 = measured[len(measured) // 2]
-    p95 = measured[min(len(measured) - 1, math.ceil(0.95 * len(measured)) - 1)]
-    maximum = measured[-1]
-    if maximum > 100.0:
-        raise RuntimeError(f"Private PipeWire signal latency exceeded 100 ms: max={maximum:.2f} ms")
-    return p50, p95, maximum
+def read_route_latency(root):
+    """Reads simultaneous PCM taps measured while the Audio Matrix event route is alive."""
+    path = root / "route-latency-result.json"
+    if not path.exists():
+        raise RuntimeError("The Audio Matrix event route published no PCM latency measurement")
+    measurement = json.loads(path.read_text())
+    expected = ("latency_ms_p50", "latency_ms_p95", "latency_ms_max", "sample_count",
+                "reference_node", "output_node", "capture_node", "sample_rate", "links")
+    if any(key not in measurement for key in expected):
+        raise RuntimeError(f"The routed event latency measurement is incomplete: {measurement}")
+    if (measurement.get("measurement") != "simultaneous-reference-and-routed-monitor-pcm"
+            or measurement["reference_node"] != "audiomatrix_events"
+            or measurement["sample_rate"] != SAMPLE_RATE or measurement["sample_count"] < 5
+            or not measurement["links"]):
+        raise RuntimeError(f"The latency probe did not measure the isolated event route: {measurement}")
+    latencies = [measurement[key] for key in ("latency_ms_p50", "latency_ms_p95", "latency_ms_max")]
+    if any(not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0
+           for value in latencies) or latencies != sorted(latencies) or latencies[-1] > 100.0:
+        raise RuntimeError(f"The routed event latency is invalid or exceeded 100 ms: {measurement}")
+    return measurement
 
 
 def start_continuous_pcm(name, sink_name, environment, logs, processes):
@@ -475,6 +445,7 @@ def main():
             secondary_id = wait_for_sink(secondary, environment, EVENT_SINK, root / "secondary-sink.log")
             environment["AUDIO_MATRIX_LIVE_MIXER_NODE_ID"] = str(primary_id)
             environment["AUDIO_MATRIX_ROUTE_SMOKE_RESULT"] = str(root / "route-smoke-result.json")
+            environment["AUDIO_MATRIX_ROUTE_LATENCY_RESULT"] = str(root / "route-latency-result.json")
 
             churn_wav = root / "churn-tone.wav"
             write_tone(churn_wav, 440, 0.25, PCM_DURATION_SECONDS)
@@ -483,17 +454,15 @@ def main():
             # The routed PCM measurement: Audio Matrix applies the real fixture and the smoke measures it.
             owned_ids, xrun_peak, period_peak = run_live_tests(
                 root, environment, logs, processes, stats_before["xrun_errors"], 0.0,
-                ["io.github.ilyaandreev05.audiomatrix.audio.AudioMatrixRoutePcmLiveSmokeTest"],
+                ["io.github.ilyaandreev05.audiomatrix.audio.AudioMatrixRoutePcmLiveSmokeTest",
+                 "io.github.ilyaandreev05.audiomatrix.audio.AudioMatrixEventLatencyLiveSmokeTest"],
                 "gradle-route-smoke")
             measurement = read_route_measurement(root)
+            latency = read_route_latency(root)
             owned_ids = sorted(set(owned_ids) | set(owned_audio_matrix_nodes(environment)))
             xrun_peak = max(xrun_peak, pipewire_stats(environment)["xrun_errors"])
             route_xruns = xrun_peak - stats_before["xrun_errors"]
 
-            latency = latency_probe(root, environment, logs, processes, output_files,
-                                    PRIMARY_SINK, PRIMARY_MONITOR)
-            xrun_peak = max(xrun_peak, pipewire_stats(environment)["xrun_errors"])
-            latency_xruns = xrun_peak - stats_before["xrun_errors"] - route_xruns
             main_writer = start_continuous_pcm("am_smoke_continuous_pcm", PRIMARY_SINK, environment, logs, processes)
             time.sleep(1.0)
             continuity_capture, continuity_output, continuity_path = start_recording(
@@ -528,7 +497,7 @@ def main():
                               environment, logs, processes)
             secondary_id_after = wait_for_sink(secondary, environment, EVENT_SINK, root / "secondary-sink-return.log")
             xrun_peak = max(xrun_peak, pipewire_stats(environment)["xrun_errors"])
-            churn_xruns = xrun_peak - stats_before["xrun_errors"] - route_xruns - latency_xruns
+            churn_xruns = xrun_peak - stats_before["xrun_errors"] - route_xruns
 
             stop_continuous_pcm(*main_writer)
             main_writer = None
@@ -542,7 +511,7 @@ def main():
             stats_after = pipewire_stats(environment)
             xrun_peak = max(xrun_peak, stats_after["xrun_errors"])
             xrun_delta = max(0, xrun_peak - stats_before["xrun_errors"])
-            regression_xruns = xrun_delta - route_xruns - latency_xruns - churn_xruns
+            regression_xruns = xrun_delta - route_xruns - churn_xruns
             print(
                 "Private route smoke measured: "
                 f"measured_app_gain={measurement['app_gain']:.3f} "
@@ -555,16 +524,19 @@ def main():
                 f"stream_churn_ids={first_stream_id}->{second_stream_id} "
                 f"output_churn_id={secondary_id}->{secondary_id_after} "
                 f"surviving_branch_signal={continuity_before:.4f}->{continuity_during:.4f} "
-                f"latency_ms_p50={latency[0]:.2f} p95={latency[1]:.2f} max={latency[2]:.2f} "
+                f"routed_event_latency_ms_p50={latency['latency_ms_p50']:.2f} "
+                f"p95={latency['latency_ms_p95']:.2f} max={latency['latency_ms_max']:.2f} "
+                f"latency_samples={latency['sample_count']} "
+                f"latency_reference={latency['reference_node']} latency_output={latency['output_node']} "
                 f"graph_period_ms={max(period_peak, stats_after['period_ms']):.2f} xrun_delta={xrun_delta} "
-                f"xrun_route={route_xruns} xrun_latency={latency_xruns} xrun_churn={churn_xruns} "
+                f"xrun_route_including_latency={route_xruns} xrun_churn={churn_xruns} "
                 f"xrun_regression={regression_xruns}"
             )
             if regression_failure is not None:
                 raise regression_failure
             # The route manager starts and stops its own loopback nodes while streams are live;
             # those nodes report their own xruns. The harness phases must stay clean.
-            harness_xruns = latency_xruns + churn_xruns + regression_xruns
+            harness_xruns = churn_xruns + regression_xruns
             if harness_xruns:
                 raise RuntimeError(f"Private PipeWire reported {harness_xruns} new xruns/errors "
                                    f"in the smoke harness phases")

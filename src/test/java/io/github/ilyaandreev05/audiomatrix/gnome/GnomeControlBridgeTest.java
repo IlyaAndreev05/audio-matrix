@@ -42,7 +42,7 @@ class GnomeControlBridgeTest {
                         Map.of("id", "other-output", "to", "missing", "channel_map", "stereo", "enabled", true)));
         Map<String, Object> profile = Map.of("active_routes", List.of("active-usb", "disabled-usb", "bus-route", "other-output"));
 
-        List<Map<String, Object>> routes = GnomeControlBridge.channelRoutes(snapshot, config, profile, selected, 12,
+        List<Map<String, Object>> routes = GnomeChannelRouteState.channelRoutes(snapshot, config, profile, selected, 12,
                 List.of(Map.of("id", "usb", "selector", Map.of("kind", "name_equals", "value", selected.name()))));
 
         assertEquals(List.of(Map.of("id", "active-usb", "name", "Transducer", "channel_map", "mono_sum")), routes);
@@ -50,7 +50,7 @@ class GnomeControlBridgeTest {
 
     @Test void noPhysicalSelectionPublishesNoChannelControls() {
         PipeWireBackend.Snapshot snapshot = PipeWireBackend.Snapshot.offline("Disconnected");
-        assertEquals(List.of(), GnomeControlBridge.channelRoutes(snapshot, Map.of("routes", List.of()),
+        assertEquals(List.of(), GnomeChannelRouteState.channelRoutes(snapshot, Map.of("routes", List.of()),
                 Map.of("active_routes", List.of()), null, -1, List.of()));
     }
 
@@ -60,9 +60,10 @@ class GnomeControlBridgeTest {
         PipeWireBackend.Snapshot snapshot = new PipeWireBackend.Snapshot(true, "", List.of(selected, systemSink),
                 List.of(), List.of(), List.of(), Map.of(), systemSink.id(), 0);
 
-        List<Map<String, Object>> outputs = GnomeControlBridge.outputDevices(snapshot);
-
-        assertEquals(List.of("alsa_output.usb-test"), outputs.stream().map(output -> output.get("name")).toList());
+        List<Map<String, Object>> outputs = GnomeOutputState.devices(snapshot, List.of());
+        assertEquals(1, outputs.size());
+        assertEquals(selected, GnomeOutputState.resolve(snapshot.sinks(),
+                String.valueOf(outputs.getFirst().get("id")), List.of()));
         assertEquals(false, outputs.getFirst().get("default"));
     }
 

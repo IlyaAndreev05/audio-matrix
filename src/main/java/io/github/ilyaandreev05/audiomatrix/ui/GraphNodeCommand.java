@@ -19,11 +19,12 @@ import java.util.Map;
 final class GraphNodeCommand {
     private GraphNodeCommand() {}
 
+    /** Moving the GNOME slider sets its configured gain and releases mute in the same saved graph. */
     static void setVolume(Map<String, Object> config, String routeId, String nodeId, double volume) {
         if (!Double.isFinite(volume) || volume < 0 || volume > 1)
             throw new IllegalArgumentException("Node volume must be between 0 and 1");
         mutateGain(config, routeId, nodeId, gain -> new GainNode(gain.id(), gain.name(),
-                gain.inputs().getFirst().channels(), volume, gain.muted(), gain.endpointNodeId()));
+                gain.inputs().getFirst().channels(), volume, false, gain.endpointNodeId()));
     }
 
     static void setMuted(Map<String, Object> config, String routeId, String nodeId, boolean muted) {

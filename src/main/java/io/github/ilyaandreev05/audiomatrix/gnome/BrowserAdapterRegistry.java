@@ -8,7 +8,7 @@ public final class BrowserAdapterRegistry {
     private BrowserAdapterRegistry() {}
 
     public static List<BrowserAdapter> createAdapters(BrowserSocketServer socket) {
-        return List.of(new ChromeBrowserAdapter(socket), new FirefoxBrowserAdapter());
+        return List.of(new ChromeBrowserAdapter(socket), new FirefoxBrowserAdapter(socket));
     }
 
     public static Map<String, Object> capabilities(String applicationId, String process, String applicationName,

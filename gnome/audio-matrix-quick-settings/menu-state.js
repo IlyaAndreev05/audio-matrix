@@ -44,21 +44,20 @@ export function hasAvailableMenuState(snapshot) {
 
 export function menuLevelRows(state) {
     const rows = new Map();
-    for (const application of state.applications || []) {
-        rows.set(`app:${application.id}`, application);
-        for (const stream of application.streams || [])
-            rows.set(`stream:${stream.id}`, stream);
-    }
-    for (const pin of state.quickPins || []) {
-        if (pin.sourceGain)
-            rows.set(`source:${pin.nodeId}`, pin.sourceGain);
-        if (pin.gain)
-            rows.set(`graph-gain:${pin.nodeId}`, pin.gain);
-        if (pin.output)
-            rows.set(`graph-output:${pin.nodeId}`, pin.output);
-        for (const input of pin.mixerInputs || [])
-            rows.set(`mixer:${pin.nodeId}:${input.id}`, input);
-    }
+    const visit = pin => {
+        const level = pin.sourceGain || pin.sharedGain || pin.gain || pin.output;
+        const parentId = `pin-level:${pin.id}`;
+        if (level) rows.set(parentId, level);
+        for (const app of pin.applications || []) {
+            const appId = level ? parentId : `app:${pin.id}:${app.id}`;
+            if (!level) rows.set(appId, app);
+            for (const tab of app.browserTabs || [])
+                rows.set(`browser-tab:${appId}:${[tab.browser, tab.instanceId, tab.profileId, tab.sessionToken].map(String).join(':')}`, tab);
+        }
+        for (const input of pin.mixerInputs || []) rows.set(`mixer:${pin.id}:${input.id}`, input);
+        for (const child of pin.children || []) visit(child);
+    };
+    for (const pin of state.quickPins || []) visit(pin);
     return rows;
 }
 
@@ -100,4 +99,14 @@ export function stableMenuRows(state) {
         }
     }
     return rows;
+}
+
+export function* allQuickPins(state) {
+    function* visit(pins) {
+        for (const pin of pins || []) {
+            yield pin;
+            yield* visit(pin.children);
+        }
+    }
+    yield* visit(state.quickPins);
 }

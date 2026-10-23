@@ -10,7 +10,6 @@ import java.util.function.Consumer;
 
 /** Reconciles live bindings into one effective graph and derives the runtime capture bindings. */
 final class DynamicRouteRuntime implements AutoCloseable {
-    private static final String TRUSTED_HDMI = "alsa_output.pci-0000_09_00.1.hdmi-stereo";
     private static final long FALLBACK_MILLIS = 5_000;
     record Prepared(String routeId, DynamicInstanceRegistry.ReconcileResult reconcile, Map<String,Object> runtimeConfig, Map<String,CapturedStreamBinding> bindings, String signature, AudioGraph baseGraph, List<Map<String,Object>> newRules) {}
     private record Cached(String input, long at, DynamicInstanceRegistry.ReconcileResult result) {}
@@ -105,10 +104,12 @@ final class DynamicRouteRuntime implements AutoCloseable {
             else if ("outputs".equals(generator.registry())) for (AudioNode sink : snapshot.sinks()) {
                 if (AudioMatrixOwnedStream.matches(sink)) continue;
                 String role = exactRole(sink, devices), fingerprint = sink.identity() == null ? "" : sink.identity().fingerprint();
-                boolean selected = generator.autoSelectTrustedHdmiOnFirstDiscovery() && TRUSTED_HDMI.equals(sink.name())
-                        && sink.identity() != null && sink.identity().reliable() && !"haptic_output".equals(role) && !"device:role:haptic_output".equals(generator.selector());
-                items.add(DynamicInstanceRegistry.output(sink, selected, endpointGain(config, "device:" + fingerprint), role));
-            } else if ("browser_tabs".equals(generator.registry())) items.addAll(browserTabs(snapshot, adapters, ruleIds));
+                // A new physical endpoint is never selected by discovery. Saved instance choices
+                // are restored by the registry's stable identity policy, not by a hardware name.
+                items.add(DynamicInstanceRegistry.output(sink, false, endpointGain(config, "device:" + fingerprint), role));
+            } else if ("browser_tabs".equals(generator.registry())) {
+                items.addAll(DynamicBrowserTabSnapshots.collect(graph.id(),config,generator,snapshot,adapters,ruleIds));
+            }
             result.put(generator.id(), List.copyOf(items));
         }
         return new SnapshotSet(result, parentComposites(generators, apps));
@@ -120,19 +121,6 @@ final class DynamicRouteRuntime implements AutoCloseable {
                 .anyMatch(sink -> PipeWireBackend.SYSTEM_MIXER_SINK_NAME.equals(sink.name()));
     }
 
-    private static List<DynamicInstanceRegistry.InstanceSnapshot> browserTabs(PipeWireBackend.Snapshot snapshot, List<BrowserAdapter> adapters, Map<String,String> ruleIds) {
-        List<DynamicInstanceRegistry.InstanceSnapshot> result = new ArrayList<>(); List<AudioNode> parents = snapshot.streams().stream().filter(s -> !excluded(s)).toList();
-        for (BrowserAdapter a : adapters) for (BrowserAdapter.BrowserSnapshot b : a.snapshots()) {
-            if (!a.id().equals(b.browser())) continue;
-            AudioNode parent = parents.stream().filter(s -> (!s.applicationId().isBlank() || !s.processName().isBlank())
-                    && a.matches(s.applicationId(), s.processName(), s.applicationName())).findFirst().orElse(null);
-            String ruleId = parent == null ? "" : ruleIds.getOrDefault(applicationKey(parent), "");
-            for (BrowserAdapter.BrowserTab tab : b.tabs()) result.add(DynamicInstanceRegistry.browserTab(a.id(), b.instanceId(), b.profileId(),
-                    tab.sessionToken(), tab.tabId(), tab.title(), tab.audible(), tab.muted(), tab.volumeCapability(), tab.captureStreamKey(),
-                    ruleId, parent == null ? "" : text(parent.applicationId()), parent == null ? "" : text(parent.processName())));
-        }
-        return result;
-    }
 
     private static Map<String,String> parentComposites(List<DynamicGeneratorNode> generators, List<DynamicInstanceRegistry.InstanceSnapshot> apps) {
         List<DynamicGeneratorNode> tabs = generators.stream().filter(g -> "browser_tabs".equals(g.registry())).toList();
@@ -146,12 +134,12 @@ final class DynamicRouteRuntime implements AutoCloseable {
     private static boolean accepts(String selector, DynamicInstanceRegistry.InstanceSnapshot p) {
         Map<String,Object> b = p.runtimeBinding(); return Set.of("application:*", "application:unassigned", "application:" + text(b.get("applicationId")), "process:" + text(b.get("processName"))).contains(selector);
     }
-    private static String applicationKey(AudioNode stream) { return text(stream.applicationId()) + "\u0000" + text(stream.processName()); }
+    static String applicationKey(AudioNode stream) { return text(stream.applicationId()) + "\u0000" + text(stream.processName()); }
     private static DynamicInstanceRegistry.InstanceSnapshot withRuleId(DynamicInstanceRegistry.InstanceSnapshot app, String ruleId) {
         if (ruleId.isBlank()) return app; Map<String,Object> binding = new LinkedHashMap<>(app.runtimeBinding()); binding.put("applicationRuleId", ruleId);
         return new DynamicInstanceRegistry.InstanceSnapshot(app.registry(), app.stableKey(), app.displayName(), app.selector(), app.channels(), binding, app.confidence());
     }
-    private static boolean excluded(AudioNode stream) { return AudioMatrixOwnedStream.matches(stream) || EventSoundStudioSource.APPLICATION_ID.equals(stream.applicationId()) || EventSoundStudioSource.APPLICATION_ID.equals(stream.processName()); }
+    static boolean excluded(AudioNode stream) { return !ApplicationStreamEligibility.isEligibleApplicationStream(stream); }
 
     private static DynamicInstanceRegistry.GainState applicationGain(Map<String,Object> config, DynamicInstanceRegistry.InstanceSnapshot instance) {
         Map<String,Object> b = instance.runtimeBinding(); String app = text(b.get("applicationId")), process = text(b.get("processName"));

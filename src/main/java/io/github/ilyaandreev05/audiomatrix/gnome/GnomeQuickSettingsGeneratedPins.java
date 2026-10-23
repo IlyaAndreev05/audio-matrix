@@ -19,17 +19,14 @@ final class GnomeQuickSettingsGeneratedPins {
     private GnomeQuickSettingsGeneratedPins() {}
 
     static Map<String, Object> savedPin(Map<String, Object> pin, String routeId, AudioGraph graph,
-                                        PipeWireBackend.Snapshot snapshot, Map<String, Object> config,
-                                        List<Map<String, Object>> applications, List<Map<String, Object>> outputs,
-                                        Map<DynamicInstanceRegistry.InstanceAddress, DynamicInstanceRegistry.RuntimeInstance> instances) {
-        String generatorId = String.valueOf(pin.getOrDefault("node_id", ""));
-        String instanceKey = String.valueOf(pin.getOrDefault("instance_key", ""));
-        DynamicInstanceRegistry.RuntimeInstance instance = instances.get(
-                new DynamicInstanceRegistry.InstanceAddress(generatorId, instanceKey));
-        DynamicGeneratorNode generator = generator(graph, generatorId);
-        if (instance == null || generator == null) return null;
-        return state(pin, generator, instance, routeId, graph, snapshot, config, applications, outputs);
+                                       PipeWireBackend.Snapshot snapshot, Map<String, Object> config,
+                                       List<Map<String, Object>> applications, List<Map<String, Object>> outputs,
+                                       Map<DynamicInstanceRegistry.InstanceAddress, DynamicInstanceRegistry.RuntimeInstance> instances) {
+        return GnomeQuickSettingsSavedGeneratedPin.savedPin(pin, routeId, graph, snapshot, config,
+                applications, outputs, instances);
     }
+
+
 
     static void appendAutoPins(List<Map<String, Object>> result, Map<String, Object> config, String routeId,
                                AudioGraph graph, PipeWireBackend.Snapshot snapshot,
@@ -42,11 +39,12 @@ final class GnomeQuickSettingsGeneratedPins {
                         .thenComparing(DynamicInstanceRegistry.RuntimeInstance::instanceKey)).toList();
         for (DynamicInstanceRegistry.RuntimeInstance instance : ordered) {
             DynamicGeneratorNode generator = generator(graph, instance.generatorId());
-            if (generator == null || !generator.autoPin()) continue;
-            if (Boolean.FALSE.equals(instance.overrides().get("pinned"))) continue;
+            if (generator == null || "browser_tabs".equals(generator.registry())) continue;
+            if (!Boolean.TRUE.equals(instance.overrides().getOrDefault("pinned", generator.autoPin()))) continue;
             if (QuickSettingsConfig.pins(config).stream().anyMatch(pin -> routeId.equals(pin.get("route_id"))
                     && instance.generatorId().equals(pin.get("node_id"))
-                    && instance.instanceKey().equals(pin.get("instance_key")))) continue;
+                    && instance.instanceKey().equals(pin.get("instance_key"))
+                    && !pin.containsKey("child_id"))) continue;
             Map<String, Object> automatic = new LinkedHashMap<>();
             automatic.put("id", "generated-pin:" + instance.generatorId() + ":" + instance.instanceKey());
             automatic.put("route_id", routeId);
@@ -62,7 +60,7 @@ final class GnomeQuickSettingsGeneratedPins {
         }
     }
 
-    private static Map<String, Object> state(Map<String, Object> pin, DynamicGeneratorNode generator,
+    static Map<String, Object> state(Map<String, Object> pin, DynamicGeneratorNode generator,
                                               DynamicInstanceRegistry.RuntimeInstance instance, String routeId,
                                               AudioGraph graph, PipeWireBackend.Snapshot snapshot,
                                               Map<String, Object> config, List<Map<String, Object>> applications,
@@ -92,30 +90,40 @@ final class GnomeQuickSettingsGeneratedPins {
         state.put("groupId", groupId);
         state.put("order", pin.getOrDefault("order", 0));
         state.put("view", pin.getOrDefault("view", "EXPANDED"));
+        state.put("expanded", pin.getOrDefault("expanded",
+                instance.overrides().getOrDefault("expanded", !"COMPACT".equals(pin.get("view")))));
         state.put("pinned", true);
         state.put("available", controllable && instance.available());
         state.put("showWhenOffline", showOffline);
-        state.put("showChildren", Boolean.TRUE.equals(pin.get("show_children"))
-                || Boolean.TRUE.equals(instance.overrides().get("show_children")));
+        state.put("showChildren", pin.getOrDefault("show_children",
+                instance.overrides().getOrDefault("show_children", true)));
         Object icon = pin.get("icon");
         if (icon instanceof String text && !text.isBlank()) state.put("icon", text);
+        List<Map<String, Object>> served = applicationGroup(generator, instance, applications, controllable);
+        Map<String, Object> app = "applications".equals(generator.registry()) && !served.isEmpty() ? served.getFirst() : Map.of();
         if (hapticOutput) {
             Map<String, Object> sharedGain = GnomeQuickSettingsHapticGain.targetState(config);
             if (sharedGain == null) return null;
             state.put("sharedGain", sharedGain);
         } else {
-            state.put("gain", Map.of("routeId", routeId, "nodeId", gain.id(),
-                    "volume", gain.gain(), "muted", gain.muted()));
+            state.put("gain", Map.of("routeId", routeId, "nodeId", generator.id(),
+                    "instanceKey", instance.instanceKey(), "volume", app.getOrDefault("volume", gain.gain()),
+                    "muted", app.getOrDefault("muted", gain.muted())));
         }
-        state.put("applications", applicationGroup(generator, instance, applications, controllable));
+        state.put("applications", served);
         Map<String, Object> tab = browserTab(instance, applications);
         if (tab != null) state.put("browserTabs", List.of(tab));
         if ("outputs".equals(generator.registry())) {
             GraphNode output = graph.nodes().stream().filter(node -> node.id().equals(instance.nodeIds().get("output")))
                     .findFirst().orElse(null);
-            if (output instanceof OutputNode outputNode)
-                state.put("output", GnomeQuickSettingsPinDetails.outputFor(outputNode, graph,
-                        snapshot, config, outputs));
+            if (output instanceof OutputNode outputNode) {
+                Map<String, Object> device = GnomeQuickSettingsPinDetails.outputFor(outputNode, graph,
+                        snapshot, config);
+                state.put("output", device);
+                if (!GnomeQuickSettingsPinNames.hasDisplayName(pin.get("display_name"))
+                        && !GnomeQuickSettingsPinNames.hasDisplayName(instance.overrides().get("display_name")))
+                    state.put("name", device.getOrDefault("name", "Выходное устройство"));
+            }
         }
         return state;
     }
@@ -123,30 +131,29 @@ final class GnomeQuickSettingsGeneratedPins {
     private static String displayName(Map<String, Object> pin,
                                       DynamicInstanceRegistry.RuntimeInstance instance,
                                       List<Map<String, Object>> applications) {
-        Object configured = pin.get("display_name");
-        if (configured instanceof String text && !text.isBlank()) return text;
-        Object override = instance.overrides().get("display_name");
-        if (override instanceof String text && !text.isBlank()) return text;
+        String value = GnomeQuickSettingsPinNames.displayLabel(pin.get("display_name"));
+        if (!value.isBlank()) return value;
+        value = GnomeQuickSettingsPinNames.displayLabel(instance.overrides().get("display_name"));
+        if (!value.isBlank()) return value;
         Map<String, Object> app = applicationGroupFor(instance, applications);
-        if (app != null && app.get("name") instanceof String name && !name.isBlank()) return name;
+        if (app != null) {
+            value = GnomeQuickSettingsPinNames.displayLabel(app.get("name"));
+            if (!value.isBlank()) return value;
+        }
         Map<String, Object> tab = browserTab(instance, applications);
-        if (tab != null && tab.get("title") instanceof String title && !title.isBlank()) return title;
-        return generatedGainName(instance);
+        if (tab != null) {
+            value = GnomeQuickSettingsPinNames.displayLabel(tab.get("title"));
+            if (!value.isBlank()) return value;
+        }
+        return GnomeQuickSettingsPinNames.generatedFallback(instance);
     }
 
-    private static String generatedGainName(DynamicInstanceRegistry.RuntimeInstance instance) {
-        Object name = instance.runtimeBinding().get("applicationName");
-        if (name instanceof String value && !value.isBlank()) return value;
-        Object process = instance.runtimeBinding().get("processName");
-        if (process instanceof String value && !value.isBlank()) return value;
-        return instance.instanceKey();
-    }
 
     private static List<Map<String, Object>> applicationGroup(DynamicGeneratorNode generator,
                                                                DynamicInstanceRegistry.RuntimeInstance instance,
                                                                List<Map<String, Object>> applications,
                                                                boolean controllable) {
-        if ("browser_tabs".equals(generator.registry())) {
+        if ("applications".equals(generator.registry()) || "browser_tabs".equals(generator.registry())) {
             Map<String, Object> group = applicationGroupFor(instance, applications);
             return group == null ? List.of() : List.of(group);
         }
@@ -168,7 +175,7 @@ final class GnomeQuickSettingsGeneratedPins {
         }).findFirst().orElse(null);
     }
 
-    private static Map<String, Object> browserTab(DynamicInstanceRegistry.RuntimeInstance instance,
+    static Map<String, Object> browserTab(DynamicInstanceRegistry.RuntimeInstance instance,
                                                    List<Map<String, Object>> applications) {
         Map<String, Object> binding = instance.runtimeBinding();
         String sessionToken = text(binding.get("sessionToken"));
@@ -186,14 +193,14 @@ final class GnomeQuickSettingsGeneratedPins {
         return null;
     }
 
-    private static DynamicGeneratorNode generator(AudioGraph graph, String generatorId) {
+    static DynamicGeneratorNode generator(AudioGraph graph, String generatorId) {
         if (graph == null) return null;
         return graph.nodes().stream().filter(DynamicGeneratorNode.class::isInstance)
                 .map(DynamicGeneratorNode.class::cast).filter(node -> node.id().equals(generatorId))
                 .findFirst().orElse(null);
     }
 
-    private static GainNode generatedGain(AudioGraph graph, DynamicInstanceRegistry.RuntimeInstance instance) {
+    static GainNode generatedGain(AudioGraph graph, DynamicInstanceRegistry.RuntimeInstance instance) {
         String id = instance.nodeIds().get("gain");
         return graph.nodes().stream().filter(GainNode.class::isInstance).map(GainNode.class::cast)
                 .filter(node -> node.id().equals(id)).findFirst().orElse(null);

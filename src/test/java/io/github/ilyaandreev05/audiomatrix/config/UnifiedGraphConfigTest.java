@@ -67,13 +67,13 @@ class UnifiedGraphConfigTest {
         assertEquals("device:*", normalOutputs.selector());
         assertEquals(List.of("device:role:haptic_output"), normalOutputs.excludedSelectors());
         assertEquals(Map.of("node_id", UnifiedGraphConfig.SWITCH_ID, "port_id", "in"), normalOutputs.connectTo());
-        assertTrue(normalOutputs.autoSelectTrustedHdmiOnFirstDiscovery());
+        assertFalse(normalOutputs.autoSelectTrustedHdmiOnFirstDiscovery());
         assertTrue(normalOutputs.instances().isEmpty());
         assertEquals("device:role:haptic_output", hapticOutputs.selector());
         assertEquals(Map.of("node_id", UnifiedGraphConfig.LIMITER_ID, "port_id", "out"), hapticOutputs.connectTo());
         assertFalse(hapticOutputs.autoSelectTrustedHdmiOnFirstDiscovery());
         assertTrue(hapticOutputs.instances().isEmpty());
-        assertEquals(1, outputGenerators.stream().filter(DynamicGeneratorNode::autoSelectTrustedHdmiOnFirstDiscovery).count());
+        assertEquals(0, outputGenerators.stream().filter(DynamicGeneratorNode::autoSelectTrustedHdmiOnFirstDiscovery).count());
         assertTrue(graph.nodes().stream().noneMatch(node -> node instanceof DeviceSlotNode || node instanceof OutputNode));
         assertTrue(maps(config.get("devices")).stream().noneMatch(device -> "haptic_output".equals(device.get("role"))));
         assertFalse(GraphCodec.toMap(graph).toString().contains("system_default"));

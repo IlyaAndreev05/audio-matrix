@@ -39,11 +39,23 @@ final class ConfigQuickSettingsRules {
         List<Map<String, Object>> pins = ConfigValidationValues.optionalList(
                 settings.get("pins"), "quick_settings.pins", errors);
         ConfigValidationValues.checkUniqueIds(pins, "quick_settings.pins", errors);
+        Set<List<Object>> targets = new HashSet<>();
         for (int index = 0; index < pins.size(); index++) {
             Map<String, Object> pin = pins.get(index);
             for (String key : List.of("route_id", "node_id", "group_id"))
                 if (!(pin.get(key) instanceof String value) || value.isBlank())
                     errors.add("quick_settings.pins[" + index + "]." + key + " must not be blank");
+            if (!targets.add(java.util.Arrays.asList(pin.getOrDefault("route_id", ""), pin.getOrDefault("node_id", ""),
+                    pin.getOrDefault("instance_key", ""), pin.getOrDefault("child_id", ""))))
+                errors.add("quick_settings.pins[" + index + "] duplicates a pinned target");
+            for (String key : List.of("display_name", "icon", "instance_key", "child_id"))
+                if (pin.containsKey(key) && !(pin.get(key) instanceof String))
+                    errors.add("quick_settings.pins[" + index + "]." + key + " must be a string");
+            for (String key : List.of("show_children", "show_when_offline", "expanded", "pinned"))
+                if (pin.containsKey(key) && !(pin.get(key) instanceof Boolean))
+                    errors.add("quick_settings.pins[" + index + "]." + key + " must be boolean");
+            if (pin.containsKey("child_id") && String.valueOf(pin.getOrDefault("instance_key", "")).isBlank())
+                errors.add("quick_settings.pins[" + index + "].child_id requires instance_key");
             if (!groupIds.contains(String.valueOf(pin.get("group_id"))))
                 errors.add("quick_settings.pins[" + index + "].group_id must reference a quick settings group");
             Object order = pin.get("order");

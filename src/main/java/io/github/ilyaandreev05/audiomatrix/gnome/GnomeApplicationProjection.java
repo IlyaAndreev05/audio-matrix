@@ -1,11 +1,10 @@
 package io.github.ilyaandreev05.audiomatrix.gnome;
 
-import io.github.ilyaandreev05.audiomatrix.audio.AudioMatrixOwnedStream;
+import io.github.ilyaandreev05.audiomatrix.audio.ApplicationStreamEligibility;
 import io.github.ilyaandreev05.audiomatrix.audio.AudioNode;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
 import io.github.ilyaandreev05.audiomatrix.graph.DynamicInstanceRegistry;
-import io.github.ilyaandreev05.audiomatrix.graph.EventSoundStudioSource;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -20,7 +19,7 @@ final class GnomeApplicationProjection {
                                                    DynamicInstanceRegistry.ReconcileResult graphState) {
         Map<String, Map<String, Object>> groups = new LinkedHashMap<>();
         for (AudioNode stream : snapshot.streams()) {
-            if (AudioMatrixOwnedStream.matches(stream) || eventStream(stream)) continue;
+            if (!ApplicationStreamEligibility.isEligibleApplicationStream(stream)) continue;
             String appId = stream.applicationId() == null ? "" : stream.applicationId();
             String process = stream.processName() == null ? "" : stream.processName();
             String key = !appId.isBlank() ? "app:" + appId
@@ -31,15 +30,10 @@ final class GnomeApplicationProjection {
             children.add(stream(stream));
         }
         applyLevels(groups, config, graphState);
-        appendBrowserTabs(groups, snapshot, browserAdapters, graphState);
+        appendBrowserTabs(groups, snapshot, browserAdapters, graphState, config);
         return List.copyOf(groups.values());
     }
 
-    /** The event branch owns its own application: the ordinary list never shows the event stream. */
-    private static boolean eventStream(AudioNode stream) {
-        return EventSoundStudioSource.APPLICATION_ID.equals(stream.applicationId())
-                || EventSoundStudioSource.APPLICATION_ID.equals(stream.processName());
-    }
 
     /** Every application carries the level its owner keeps: a saved rule first, the generated instance otherwise. */
     private static void applyLevels(Map<String, Map<String, Object>> groups, Map<String, Object> config,
@@ -83,7 +77,7 @@ final class GnomeApplicationProjection {
 
     private static void appendBrowserTabs(Map<String, Map<String, Object>> groups, PipeWireBackend.Snapshot snapshot,
                                            List<BrowserAdapter> browserAdapters,
-                                           DynamicInstanceRegistry.ReconcileResult graphState) {
+                                           DynamicInstanceRegistry.ReconcileResult graphState, Map<String, Object> config) {
         for (BrowserAdapter adapter : browserAdapters == null ? List.<BrowserAdapter>of() : browserAdapters) {
             List<BrowserAdapter.BrowserSnapshot> browsers = adapter.snapshots();
             if (browsers.isEmpty()) continue;
@@ -100,8 +94,12 @@ final class GnomeApplicationProjection {
             @SuppressWarnings("unchecked") List<Map<String, Object>> tabs =
                     (List<Map<String, Object>>) group.computeIfAbsent("browserTabs",
                             ignored -> new ArrayList<Map<String, Object>>());
-            for (BrowserAdapter.BrowserSnapshot browser : browsers)
-                for (BrowserAdapter.BrowserTab tab : browser.tabs()) tabs.add(browserTab(browser, tab));
+            for (BrowserAdapter.BrowserSnapshot browser : browsers) {
+                for (BrowserAdapter.BrowserTab tab : browser.tabs()) {
+                    Map<String, Object> projected = GnomeBrowserTabState.describe(browser, tab, config, graphState);
+                    if (projected != null) tabs.add(projected);
+                }
+            }
             boolean captured = tabs.stream().anyMatch(tab ->
                     tab.get("captureStreamKey") instanceof String key && !key.isBlank()
                             && capturedBindingReady(key, snapshot, graphState));
@@ -146,24 +144,6 @@ final class GnomeApplicationProjection {
         return group;
     }
 
-    private static Map<String, Object> browserTab(BrowserAdapter.BrowserSnapshot browser,
-                                                   BrowserAdapter.BrowserTab tab) {
-        Map<String, Object> state = new LinkedHashMap<>();
-        state.put("id", browser.browser() + ":" + browser.instanceId() + ":" + browser.profileId()
-                + ":" + tab.sessionToken());
-        state.put("browser", browser.browser());
-        state.put("instanceId", browser.instanceId());
-        state.put("profileId", browser.profileId());
-        state.put("sessionToken", tab.sessionToken());
-        state.put("tabId", tab.tabId());
-        state.put("title", tab.title());
-        state.put("audible", tab.audible());
-        state.put("muted", tab.muted());
-        state.put("volumeCapability", tab.volumeCapability());
-        if (tab.captureStreamKey() != null && !tab.captureStreamKey().isBlank())
-            state.put("captureStreamKey", tab.captureStreamKey());
-        return state;
-    }
 
     private static double level(double volume) {
         return Double.isFinite(volume) ? Math.max(0, Math.min(1, volume)) : 1.0;

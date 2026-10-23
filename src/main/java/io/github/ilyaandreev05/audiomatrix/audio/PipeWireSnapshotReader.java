@@ -41,20 +41,22 @@ final class PipeWireSnapshotReader {
             JsonNode info = object.path("info"), props = info.path("props");
             String mediaClass = props.path("media.class").asText("");
             String name = props.path("node.name").asText("");
-            if (!isSnapshotAudioNode(mediaClass, name)) continue;
-            AudioNode node = audioNode(object, info, props, mediaClass, name, clients, levels, root);
+            int id = object.path("id").asInt(-1);
+            boolean namelessPlayback = name.isBlank() && mediaClass.startsWith("Stream/Output/Audio") && id >= 0;
+            if (!isSnapshotAudioNode(mediaClass, name) && !namelessPlayback) continue;
+            PipeWireBackend.ApplicationIdentity app = applicationIdentity(props, clients);
+            if (namelessPlayback && app.applicationId().isBlank() && app.processName().isBlank()) continue;
+            AudioNode node = audioNode(id, info, props, mediaClass, name, app, levels, root);
             if (EventInputMonitor.isSink(mediaClass, name)) sources.add(EventInputMonitor.sourceView(node));
             else addNode(node, mediaClass, sinks, sources, streams);
         }
     }
 
-    private static AudioNode audioNode(JsonNode object, JsonNode info, JsonNode props, String mediaClass,
-                                       String name, Map<Integer, JsonNode> clients,
+    private static AudioNode audioNode(int id, JsonNode info, JsonNode props, String mediaClass,
+                                       String name, PipeWireBackend.ApplicationIdentity app,
                                        Map<Integer, PipeWireBackend.LevelState> levels, JsonNode root) {
-        int id = object.path("id").asInt(-1);
         String description = props.path("node.description").asText(name);
         String state = info.path("state").asText("unknown").toLowerCase();
-        PipeWireBackend.ApplicationIdentity app = applicationIdentity(props, clients);
         int channels = props.path("audio.channels").asInt(2);
         List<Integer> rates = sampleRates(info.path("params").path("EnumFormat"));
         Integer pulseId = props.path("pulse.id").isInt() ? props.path("pulse.id").asInt() : null;

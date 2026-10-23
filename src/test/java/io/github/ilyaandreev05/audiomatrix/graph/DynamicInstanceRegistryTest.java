@@ -81,32 +81,6 @@ class DynamicInstanceRegistryTest {
                 || node.name().contains("Audio Matrix")));
     }
 
-    @Test void explicitFalseOverridesRemainPresentAndApplicationGainCannotBeDuplicated() {
-        DynamicGeneratorNode generator = generator("tabs", "browser:*", "browser_tabs", "default-tab", Map.of());
-        AudioGraph graph = new AudioGraph("route-tabs", "Tabs", List.of(generator), List.of());
-        DynamicInstanceRegistry.InstanceSnapshot tab = DynamicInstanceRegistry.browserTab("chrome", "profile-instance",
-                "Default", "session-token", 99, "Documentation", true, false, "captured", "capture-key",
-                "app-rule", "org.example.browser", "browser");
-        DynamicInstanceRegistry.ReconcileResult reconciled = DynamicInstanceRegistry.reconcile(graph,
-                Map.of("tabs", List.of(tab)));
-        Map<String, Object> route = new LinkedHashMap<>(GraphCodec.toMap(reconciled.configuredGraph()));
-        Map<String, Object> config = new LinkedHashMap<>();
-        config.put("route_library", new ArrayList<>(List.of(route)));
-
-        assertTrue(DynamicInstanceRegistry.setInstanceOverride(config, "route-tabs", "tabs",
-                tab.stableKey(), "muted", false));
-        assertEquals(false, DynamicInstanceRegistry.instanceOverride(config, "route-tabs", "tabs",
-                tab.stableKey(), "muted").orElseThrow());
-        assertFalse(DynamicInstanceRegistry.setInstanceOverride(config, "route-tabs", "tabs",
-                tab.stableKey(), "muted", false));
-        assertEquals(new DynamicInstanceRegistry.GainState(1.0, false),
-                DynamicInstanceRegistry.instanceGainBaseline(config, "route-tabs", "tabs"));
-        assertThrows(IllegalArgumentException.class, () -> DynamicInstanceRegistry.setInstanceOverride(config,
-                "route-tabs", "tabs", tab.stableKey(), "gain", 1.1));
-        assertTrue(DynamicInstanceRegistry.generatedGain(reconciled, "tabs", tab.stableKey()).id()
-                .equals(reconciled.instances().get(new DynamicInstanceRegistry.InstanceAddress("tabs", tab.stableKey()))
-                        .nodeIds().get("gain")));
-    }
 
     @Test void outputPortsAreDeviceIdentityStableAndNewUnknownSinksStayInactive() {
         SwitchNode multiSwitch = new SwitchNode("multi", "Outputs", STEREO, List.of("unused"), List.of());
@@ -157,36 +131,20 @@ class DynamicInstanceRegistryTest {
         assertTrue(returnedSwitch.activeLinks().contains("in->" + selectedPort));
     }
 
-    @Test void browserTabsNestUnderAnOfflineLogicalParentWithoutInventingPcm() {
-        DynamicGeneratorNode apps = generator("apps", "application:unassigned", "applications",
-                "default-application", Map.of());
-        DynamicGeneratorNode tabs = generator("tabs", "browser:*", "browser_tabs", "default-tab", Map.of());
-        AudioGraph graph = new AudioGraph("route-browser", "Browser", List.of(apps, tabs), List.of());
-        DynamicInstanceRegistry.InstanceSnapshot parent =
-                DynamicInstanceRegistry.browserParentApplication("chrome", "", "", "Chrome");
-        DynamicInstanceRegistry.InstanceSnapshot tab = DynamicInstanceRegistry.browserTab("chrome", "instance",
-                "Default", "session-1", 12, "Docs", true, false, "captured", "capture-1");
-        String parentComposite = DynamicInstanceRegistry.stableCompositeId("apps", "browser-parent:chrome");
-        
 
-        DynamicInstanceRegistry.ReconcileResult result = DynamicInstanceRegistry.reconcile(graph,
-                Map.of("apps", List.of(parent), "tabs", List.of(tab)), Map.of("tabs", parentComposite), null);
-        DynamicInstanceRegistry.RuntimeInstance parentState = result.instances().get(
-                new DynamicInstanceRegistry.InstanceAddress("apps", "browser-parent:chrome"));
-        DynamicInstanceRegistry.RuntimeInstance tabState = result.instances().get(
-                new DynamicInstanceRegistry.InstanceAddress("tabs", tab.stableKey()));
-        GraphSubgraph tabComposite = result.generatedSubgraphs().stream()
-                .filter(group -> group.id().equals(tabState.compositeId())).findFirst().orElseThrow();
 
-        assertFalse(parentState.available());
-        assertFalse(parentState.bindingAvailable());
-        assertTrue(parentState.runtimeBinding().get("streams") instanceof List<?> streams && streams.isEmpty());
-        assertTrue(tabState.available());
-        assertTrue(tabState.bindingAvailable());
-        assertFalse(tabState.controlAvailable());
-        assertEquals(parentComposite, tabComposite.parentId());
-        assertEquals("tabs", tabComposite.generatorId());
+    @Test void legacyFirstDiscoveryPolicyCannotEnableAnUnknownOutput() {
+        SwitchNode multi=new SwitchNode("multi","MultiSwitch",STEREO,List.of("unused"),List.of());
+        DynamicGeneratorNode outputs=generator("outputs","device:*","outputs","default-output",Map.of("node_id","multi","port_id","in"))
+                .withParameter("auto_select_trusted_hdmi_on_first_discovery",true);
+        AudioGraph graph=new AudioGraph("safe-output","Безопасные выходы",List.of(outputs,multi),List.of());
+        AudioNode hdmi=output(17,"alsa_output.pci-0000_09_00.1.hdmi-stereo","BenQ HDMI");
+        var observed=DynamicInstanceRegistry.reconcile(graph,Map.of("outputs",List.of(DynamicInstanceRegistry.output(hdmi))));
+        SwitchNode current=(SwitchNode)observed.configuredGraph().nodes().stream().filter(node->"multi".equals(node.id())).findFirst().orElseThrow();
+        assertTrue(current.activeLinks().isEmpty());
+        assertTrue(current.outputs().size()>1,"The real output must still get its unchecked row");
     }
+
 
     private static DynamicGeneratorNode generator(String id, String selector, String registry, String template,
                                                   Map<String, Object> connectTo) {

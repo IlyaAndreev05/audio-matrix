@@ -25,6 +25,8 @@ public final class ChromeBrowserAdapter implements BrowserAdapter {
             "brave", "brave-browser", "brave-browser.desktop", "com.brave.browser", "brave browser",
             "firefox", "firefox-esr", "org.mozilla.firefox", "org.mozilla.firefox.desktop",
             "mozilla firefox", "firefox browser");
+    private final Map<Consumer<BrowserEvent>, Consumer<BrowserEvent>> listeners =
+            new java.util.concurrent.ConcurrentHashMap<>();
     private final BrowserSocketServer socket;
 
     public ChromeBrowserAdapter() { this(null); }
@@ -48,30 +50,40 @@ public final class ChromeBrowserAdapter implements BrowserAdapter {
     }
 
     @Override public Map<String, Object> capabilities(int streamCount, boolean capturedTabStream) {
-        boolean connected = socket != null && !socket.snapshots().isEmpty();
-        boolean captured = capturedTabStream && (streamCount == 0 || streamCount == 1);
-        String reason = captured ? "Отдельный поток захваченной вкладки доступен для регулировки."
-                : connected ? "Доступны вкладки и общая громкость Chrome; независимая громкость вкладки требует подтверждённого единственного потока захваченной вкладки."
+        boolean connected = !snapshots().isEmpty();
+        String reason = capturedTabStream ? "Отдельный поток захваченной вкладки подтверждён и доступен для регулировки."
+                : connected ? "Доступны вкладки и общая громкость Chrome; независимая громкость вкладки включится только для подтверждённого отдельного потока."
                 : "Доступна общая громкость Chrome; подключите расширение для управления вкладками и явного захвата.";
         return Map.of("browser", "Chrome", "tabMetadata", connected, "tabMute", connected,
                 "tabCapture", true, "captureRequiresUserGesture", true, "streamVolume", streamCount > 0,
-                "independentTabVolume", captured, "reason", reason);
+                "independentTabVolume", capturedTabStream, "reason", reason);
     }
 
-    @Override public List<BrowserSnapshot> snapshots() { return socket == null ? List.of() : socket.snapshots(); }
+    @Override public List<BrowserSnapshot> snapshots() {
+        return socket == null ? List.of() : socket.snapshots().stream()
+                .filter(snapshot -> id().equals(snapshot.browser())).toList();
+    }
 
     @Override public void addListener(Consumer<BrowserEvent> listener) {
-        if (socket != null) socket.addListener(listener);
+        if (socket == null || listener == null) return;
+        Consumer<BrowserEvent> filtered = event -> {
+            if (id().equals(event.browser())) listener.accept(event);
+        };
+        if (listeners.putIfAbsent(listener, filtered) == null) socket.addListener(filtered);
     }
     @Override public void removeListener(Consumer<BrowserEvent> listener) {
-        if (socket != null) socket.removeListener(listener);
+        Consumer<BrowserEvent> filtered = listeners.remove(listener);
+        if (socket != null && filtered != null) socket.removeListener(filtered);
     }
 
     @Override public CompletableFuture<BrowserCommandAck> command(BrowserCommand command) {
-        return socket == null
-                ? CompletableFuture.failedFuture(new IllegalStateException("The Chrome browser bridge is unavailable."))
-                : socket.command(command);
+        if (socket == null)
+            return CompletableFuture.failedFuture(new IllegalStateException("The Chrome browser bridge is unavailable."));
+        if (command == null || !id().equals(command.browser()))
+            return CompletableFuture.failedFuture(new IllegalArgumentException("The browser command does not target Chrome."));
+        return socket.command(command);
     }
+
 
     private static String normalize(String value) {
         return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);

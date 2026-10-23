@@ -4,7 +4,7 @@ plugins {
 }
 
 group = 'io.github.ilyaandreev05'
-version = '0.4.0'
+version = '0.4.1'
 
 repositories { mavenCentral() }
 
@@ -136,7 +136,7 @@ tasks.register('packageDeb', Exec) {
         def extensionId = 'audio-matrix-quick-settings@ilyaandreev05'
         def extensionDirectory = new File(extracted, "opt/audiomatrix/lib/gnome-shell/extensions/${extensionId}")
         extensionDirectory.mkdirs()
-        copy { from file('gnome/audio-matrix-quick-settings'); include 'metadata.json', '*.js'; into extensionDirectory }
+        copy { from file('gnome/audio-matrix-quick-settings'); include 'metadata.json', '*.js', '*.css'; into extensionDirectory }
         def chromeExtensionDirectory = new File(extracted, 'opt/audiomatrix/lib/chrome/tab-capture')
         chromeExtensionDirectory.mkdirs()
         copy { from file('chrome/tab-capture'); into chromeExtensionDirectory }
@@ -147,6 +147,10 @@ tasks.register('packageDeb', Exec) {
         def firefoxDirectory = new File(extracted, 'opt/audiomatrix/lib/firefox/tab-control')
         firefoxDirectory.mkdirs()
         copy { from file('firefox/tab-control'); into firefoxDirectory }
+        def firefoxHostDirectory = new File(extracted, 'opt/audiomatrix/lib/firefox/native-host')
+        firefoxHostDirectory.mkdirs()
+        copy { from file('firefox/native-host'); exclude '__pycache__/**'; into firefoxHostDirectory }
+        new File(firefoxHostDirectory, 'audio-matrix-tab-control.py').setExecutable(true, false)
         def firefoxPackageDirectory = new File(extracted, 'opt/audiomatrix/lib/firefox')
         copy { from layout.buildDirectory.file('firefox/audio-matrix-tabs.xpi').get().asFile; into firefoxPackageDirectory }
         def helperDirectory = new File(extracted, 'opt/audiomatrix/bin')
@@ -156,7 +160,8 @@ tasks.register('packageDeb', Exec) {
                 'scripts/enable-audiomatrix-service.sh', 'scripts/disable-audiomatrix-service.sh',
                 'scripts/restart-audiomatrix-safe.sh',
                 'scripts/install-gnome-quick-settings.sh', 'scripts/uninstall-gnome-quick-settings.sh',
-                'scripts/install-chrome-tab-capture.sh', 'scripts/uninstall-chrome-tab-capture.sh'); into helperDirectory }
+                'scripts/install-chrome-tab-capture.sh', 'scripts/uninstall-chrome-tab-capture.sh',
+                'scripts/install-firefox-tab-control.sh', 'scripts/uninstall-firefox-tab-control.sh'); into helperDirectory }
         new File(helperDirectory, 'audiomatrix-system-sink.sh').setExecutable(true, false)
         new File(helperDirectory, 'enable-audiomatrix-events-service.sh').setExecutable(true, false)
         new File(helperDirectory, 'disable-audiomatrix-events-service.sh').setExecutable(true, false)
@@ -167,6 +172,8 @@ tasks.register('packageDeb', Exec) {
         new File(helperDirectory, 'uninstall-gnome-quick-settings.sh').setExecutable(true, false)
         new File(helperDirectory, 'install-chrome-tab-capture.sh').setExecutable(true, false)
         new File(helperDirectory, 'uninstall-chrome-tab-capture.sh').setExecutable(true, false)
+        new File(helperDirectory, 'install-firefox-tab-control.sh').setExecutable(true, false)
+        new File(helperDirectory, 'uninstall-firefox-tab-control.sh').setExecutable(true, false)
         def rebuilt = new File(dest, packageFile.name + '.rebuilt')
         runCommand(['dpkg-deb', '--build', '--root-owner-group', extracted.absolutePath, rebuilt.absolutePath])
         java.nio.file.Files.move(rebuilt.toPath(), packageFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)

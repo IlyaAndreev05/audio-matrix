@@ -29,7 +29,7 @@ class GnomeGraphGeneratedTabCommandTest {
     private static final List<String> CHANNELS = List.of("FL", "FR");
     @TempDir Path temp;
 
-    @Test void tabGainAndMutePersistAsIndependentSparseOverridesAfterRuntimeConfirmation() throws Exception {
+    @Test void tabSliderUnmutesAfterRuntimeConfirmationAndMuteRetainsConfiguredGain() throws Exception {
         Map<String, Object> config = DefaultConfig.create();
         DynamicGeneratorNode generator = generator("browser_tabs", "default-tab", "browser:*");
         AudioGraph graph = replaceGenerator(config, generator);
@@ -56,43 +56,65 @@ class GnomeGraphGeneratedTabCommandTest {
                 (GnomeGraphNodeCommandExecutor.PropertyValue) GnomeGraphNodeCommandExecutor.propertyValue(
                         config, propertyKey, registry, snapshot, List.of());
         AtomicBoolean applied = new AtomicBoolean();
+        DynamicInstanceRegistry.setInstanceOverride(config, ROUTE_ID, generator.id(), instanceKey, "gain", 0.73);
+        DynamicInstanceRegistry.setInstanceOverride(config, ROUTE_ID, generator.id(), instanceKey, "muted", true);
+        CompletableFuture<Void> runtime = new CompletableFuture<>();
 
         try (ConfigStore store = new ConfigStore(temp.resolve("browser-tab.json"))) {
             store.save(config);
-            GnomeGraphNodeCommandExecutor.execute(
+            CompletableFuture<Void> command = GnomeGraphNodeCommandExecutor.execute(
                     new GnomeNodeCommandHandler.SetVolume(
                             new GnomeNodeCommandHandler.Target(ROUTE_ID, generator.id(), instanceKey), 0.42),
                     store, null, snapshot, List.of(), registry, true, null,
                     candidate -> {
                         applied.set(true);
-                        return CompletableFuture.completedFuture(null);
+                        assertEquals(0.42, ((Number) DynamicInstanceRegistry.instanceOverride(candidate, ROUTE_ID,
+                                generator.id(), instanceKey, "gain").orElseThrow()).doubleValue(), 0.0001);
+                        assertFalse((Boolean) DynamicInstanceRegistry.instanceOverride(candidate, ROUTE_ID,
+                                generator.id(), instanceKey, "muted").orElseThrow());
+                        return runtime;
                     },
                     ignored -> CompletableFuture.completedFuture(null),
                     ignored -> CompletableFuture.failedFuture(new AssertionError("Application rules are unrelated")),
                     ignored -> CompletableFuture.failedFuture(new AssertionError("Application rollback is unrelated")),
-                    error -> fail(error), () -> {}).join();
+                    error -> fail(error), () -> {});
+            assertFalse(command.isDone());
+            assertEquals(0.73, ((Number) DynamicInstanceRegistry.instanceOverride(store.snapshot(), ROUTE_ID,
+                    generator.id(), instanceKey, "gain").orElseThrow()).doubleValue(), 0.0001);
+            assertTrue((Boolean) DynamicInstanceRegistry.instanceOverride(store.snapshot(), ROUTE_ID,
+                    generator.id(), instanceKey, "muted").orElseThrow());
+            runtime.complete(null);
+            command.join();
             assertEquals(0.42, ((Number) DynamicInstanceRegistry.instanceOverride(store.snapshot(), ROUTE_ID,
                     generator.id(), instanceKey, "gain").orElseThrow()).doubleValue(), 0.0001);
-            assertTrue(DynamicInstanceRegistry.instanceOverride(store.snapshot(), ROUTE_ID,
-                    generator.id(), instanceKey, "muted").isEmpty());
+            assertFalse((Boolean) DynamicInstanceRegistry.instanceOverride(store.snapshot(), ROUTE_ID,
+                    generator.id(), instanceKey, "muted").orElseThrow());
 
-            GnomeGraphNodeCommandExecutor.execute(
-                    new GnomeNodeCommandHandler.SetMuted(
-                            new GnomeNodeCommandHandler.Target(ROUTE_ID, generator.id(), instanceKey), true),
-                    store, null, snapshot, List.of(), registry, true, null,
-                    candidate -> CompletableFuture.completedFuture(null),
-                    ignored -> CompletableFuture.completedFuture(null),
-                    ignored -> CompletableFuture.failedFuture(new AssertionError("Application rules are unrelated")),
-                    ignored -> CompletableFuture.failedFuture(new AssertionError("Application rollback is unrelated")),
-                    error -> fail(error), () -> {}).join();
+            for (boolean muted : List.of(true, false)) {
+                GnomeGraphNodeCommandExecutor.execute(
+                        new GnomeNodeCommandHandler.SetMuted(
+                                new GnomeNodeCommandHandler.Target(ROUTE_ID, generator.id(), instanceKey), muted),
+                        store, null, snapshot, List.of(), registry, true, null,
+                        candidate -> {
+                            assertEquals(0.42, ((Number) DynamicInstanceRegistry.instanceOverride(candidate, ROUTE_ID,
+                                    generator.id(), instanceKey, "gain").orElseThrow()).doubleValue(), 0.0001);
+                            assertEquals(muted, DynamicInstanceRegistry.instanceOverride(candidate, ROUTE_ID,
+                                    generator.id(), instanceKey, "muted").orElseThrow());
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        ignored -> CompletableFuture.completedFuture(null),
+                        ignored -> CompletableFuture.failedFuture(new AssertionError("Application rules are unrelated")),
+                        ignored -> CompletableFuture.failedFuture(new AssertionError("Application rollback is unrelated")),
+                        error -> fail(error), () -> {}).join();
 
-            Map<String, Object> saved = store.snapshot();
+                Map<String, Object> saved = store.snapshot();
+                assertEquals(0.42, ((Number) DynamicInstanceRegistry.instanceOverride(saved, ROUTE_ID,
+                        generator.id(), instanceKey, "gain").orElseThrow()).doubleValue(), 0.0001);
+                assertEquals(muted, DynamicInstanceRegistry.instanceOverride(saved, ROUTE_ID,
+                        generator.id(), instanceKey, "muted").orElseThrow());
+            }
             assertEquals(1.0, ((Number) baseline.value()).doubleValue(), 0.0001);
             assertTrue(applied.get());
-            assertEquals(0.42, ((Number) DynamicInstanceRegistry.instanceOverride(saved, ROUTE_ID,
-                    generator.id(), instanceKey, "gain").orElseThrow()).doubleValue(), 0.0001);
-            assertTrue((Boolean) DynamicInstanceRegistry.instanceOverride(saved, ROUTE_ID,
-                    generator.id(), instanceKey, "muted").orElseThrow());
         }
     }
 

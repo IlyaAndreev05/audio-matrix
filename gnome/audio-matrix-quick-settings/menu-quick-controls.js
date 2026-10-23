@@ -36,6 +36,7 @@ export default class AudioMatrixMenuQuickControls {
         const options = {
             id: `graph:${control.id}`, name: control.label || control.parameterId,
             icon: controlIcon(control), value: range ? controlPosition(control) : control.value,
+            commandTarget: {quickControlId: String(control.id)},
             muted: Boolean(control.muted),
             onValue: value => {
                 const next = range ? controlValueAt(control, value) : value;

@@ -12,12 +12,17 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 /** Secure path checks and atomic file operations shared by config archives. */
 final class ArchiveFiles {
     private ArchiveFiles() {}
+    static final List<String> CALIBRATION_FILE_FIELDS =
+            List.of("measurement_file", "response_curve_file", "decay_curve_file");
 
     static Path safeRelative(String raw) throws IOException {
         if (raw == null || raw.isBlank() || raw.contains("\\") || raw.contains(":") || raw.startsWith("/"))
@@ -115,5 +120,37 @@ final class ArchiveFiles {
                 try { Files.deleteIfExists(path); } catch (IOException ignored) { }
             });
         } catch (IOException ignored) { }
+    }
+
+    static TreeMap<String, Path> measurementFiles(Map<String, Object> config, Path root) throws IOException {
+        TreeMap<String, Path> files = new TreeMap<>();
+        Object value = config.get("calibrations");
+        if (!(value instanceof List<?> calibrations)) return files;
+        for (Object item : calibrations) {
+            if (!(item instanceof Map<?, ?> calibration)) continue;
+            for (String field : CALIBRATION_FILE_FIELDS) {
+                if (!(calibration.get(field) instanceof String raw)) continue;
+                Path relative = safeRelative(raw);
+                Path file = root.resolve(relative).normalize();
+                if (!file.startsWith(root) || !regularWithoutSymlinks(root, file))
+                    throw new ConfigArchive.ArchiveException("Measurement file is missing or outside config directory: " + raw);
+                files.put(relative.toString().replace('\\', '/'), file);
+            }
+        }
+        return files;
+    }
+
+    static void verifyReferences(Map<String, Object> config, Map<String, String> hashes) throws IOException {
+        Object value = config.get("calibrations");
+        if (!(value instanceof List<?> calibrations)) return;
+        for (Object item : calibrations) {
+            if (!(item instanceof Map<?, ?> calibration)) continue;
+            for (String field : CALIBRATION_FILE_FIELDS) {
+                if (!(calibration.get(field) instanceof String raw)) continue;
+                String path = "data/" + safeRelative(raw).toString().replace('\\', '/');
+                if (!hashes.containsKey(path))
+                    throw new ConfigArchive.ArchiveException("Archive is missing calibration file: " + raw);
+            }
+        }
     }
 }

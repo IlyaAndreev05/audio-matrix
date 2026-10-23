@@ -1,8 +1,10 @@
 package io.github.ilyaandreev05.audiomatrix.gnome;
 
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.*;
@@ -25,8 +27,9 @@ class GnomeBridgeCommandChannelTest {
         }, List.of());
         bridge.start();
         try {
+            bridge.commandListenerReady().join();
             emitCommand("client:req-1", "rev-1", "set_output_volume", "{\"nodeId\":\"sink-1\",\"value\":0.5}");
-            GnomeControlBridge.Command command = received.get(20, TimeUnit.SECONDS);
+            GnomeControlBridge.Command command = received.join();
             assertEquals(GnomeControlBridge.API_VERSION, command.apiVersion());
             assertEquals("client:req-1", command.requestId());
             assertEquals("rev-1", command.revision());
@@ -37,18 +40,33 @@ class GnomeBridgeCommandChannelTest {
         }
     }
 
-    @Test void monitorArgumentLinesAreParsedFromTheSignalDump() {
-        List<String> arguments = new java.util.ArrayList<>();
-        assertTrue(GnomeControlBridge.collectMonitorArgument("   uint32 5", arguments));
-        assertTrue(GnomeControlBridge.collectMonitorArgument("   string \"client:req-2\"", arguments));
-        assertTrue(GnomeControlBridge.collectMonitorArgument("   string \"\"", arguments));
-        assertTrue(GnomeControlBridge.collectMonitorArgument("   string \"set_output_volume\"", arguments));
-        assertTrue(GnomeControlBridge.collectMonitorArgument("   string \"{\\\"value\\\":0.25}\"", arguments));
-        GnomeControlBridge.Command command = GnomeControlBridge.parseCommandArguments(arguments);
-        assertNotNull(command);
-        assertEquals("client:req-2", command.requestId());
-        assertEquals("set_output_volume", command.name());
-        assertEquals("{\"value\":0.25}", command.value());
+    @Test void publishesOnlyTheLatestStateAfterTheCommandListenerIsReady() {
+        assumeTrue(sessionBusAvailable(), "A session bus is required for the D-Bus command channel");
+
+        CompletableFuture<String> emittedState = new CompletableFuture<>();
+        AtomicReference<GnomeControlBridge> bridgeReference = new AtomicReference<>();
+        AtomicBoolean emittedWhenReady = new AtomicBoolean();
+        GnomeControlBridge bridge = new GnomeControlBridge(ignored -> CompletableFuture.completedFuture(null),
+                List.of(), ignored -> CompletableFuture.completedFuture(null), (signal, signature, arguments) -> {
+                    if ("State".equals(signal)) {
+                        emittedWhenReady.set(bridgeReference.get().commandListenerReady().isDone());
+                        emittedState.complete(arguments.getFirst());
+                    }
+                }, true);
+        bridgeReference.set(bridge);
+        try {
+            bridge.emitObservedState(Map.of("marker", "older"));
+            bridge.emitObservedState(Map.of("marker", "latest"));
+            assertFalse(emittedState.isDone());
+            bridge.start();
+            bridge.commandListenerReady().join();
+            String payload = emittedState.join();
+            assertTrue(emittedWhenReady.get());
+            assertTrue(payload.contains("\"marker\":\"latest\""));
+            assertFalse(payload.contains("older"));
+        } finally {
+            bridge.close();
+        }
     }
 
     private static boolean sessionBusAvailable() {
@@ -56,7 +74,8 @@ class GnomeBridgeCommandChannelTest {
         try {
             Process process = new ProcessBuilder("busctl", "--user", "list")
                     .redirectErrorStream(true).redirectOutput(new java.io.File("/dev/null")).start();
-            return process.waitFor(10, TimeUnit.SECONDS) && process.exitValue() == 0;
+            process.waitFor();
+            return process.exitValue() == 0;
         } catch (Exception unavailable) {
             return false;
         }
@@ -67,7 +86,7 @@ class GnomeBridgeCommandChannelTest {
                 GnomeControlBridge.INTERFACE, "Command", "ussss", Integer.toString(GnomeControlBridge.API_VERSION),
                 requestId, revision, name, payload)
                 .redirectErrorStream(true).redirectOutput(new java.io.File("/dev/null")).start();
-        assertTrue(process.waitFor(10, TimeUnit.SECONDS), "The Command signal could not be emitted");
+        process.waitFor();
         assertEquals(0, process.exitValue());
     }
 }

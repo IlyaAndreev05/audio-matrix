@@ -5,6 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -72,6 +75,138 @@ class PipeWireBackendSnapshotFilterTest {
         assertEquals(1,sources.size());
         assertEquals("Audio/Source",sources.getFirst().mediaClass());
         assertTrue(EventInputMonitor.isNode(sources.getFirst()));
+    }
+
+    @Test
+    void readsNamelessPlaybackUsingClientIdentityAndPreservesNodeOverrides() throws IOException {
+        JsonNode root = new ObjectMapper().readTree("""
+                [
+                  {"id":348,"type":"PipeWire:Interface:Client","info":{"props":{
+                    "application.name":"Client player","application.process.binary":"client-player",
+                    "application.id":"org.example.client"
+                  }}},
+                  {"id":349,"type":"PipeWire:Interface:Node","info":{"state":"running","props":{
+                    "client.id":348,"media.class":"Stream/Output/Audio"
+                  }}},
+                  {"id":350,"type":"PipeWire:Interface:Node","info":{"state":"running","props":{
+                    "client.id":348,"node.name":"","media.class":"Stream/Output/Audio",
+                    "application.name":"Node player","application.process.binary":"node-player",
+                    "application.id":"org.example.node"
+                  }}}
+                ]
+                """);
+        List<AudioNode> sinks = new ArrayList<>(), sources = new ArrayList<>(), streams = new ArrayList<>();
+
+        PipeWireSnapshotReader.readNodes(root, PipeWireSnapshotReader.clientProperties(root), Map.of(),
+                sinks, sources, streams);
+
+        assertTrue(sinks.isEmpty());
+        assertTrue(sources.isEmpty());
+        assertEquals(List.of(349, 350), streams.stream().map(AudioNode::id).toList());
+        AudioNode inherited = streams.getFirst();
+        assertEquals("", inherited.name(), "a live node id must not become a synthetic routing name");
+        assertEquals("Client player", inherited.applicationName());
+        assertEquals("client-player", inherited.processName());
+        assertEquals("org.example.client", inherited.applicationId());
+        AudioNode overridden = streams.get(1);
+        assertEquals("", overridden.name());
+        assertEquals("Node player", overridden.applicationName());
+        assertEquals("node-player", overridden.processName());
+        assertEquals("org.example.node", overridden.applicationId());
+    }
+
+    @Test
+    void admitsNamelessNodesOnlyForIdentifiedLivePlayback() throws IOException {
+        JsonNode root = new ObjectMapper().readTree("""
+                [
+                  {"id":300,"type":"PipeWire:Interface:Client","info":{"props":{
+                    "application.name":"Display name only"
+                  }}},
+                  {"id":301,"type":"PipeWire:Interface:Client","info":{"props":{
+                    "application.process.binary":"client-player"
+                  }}},
+                  {"id":100,"type":"PipeWire:Interface:Node","info":{"props":{
+                    "media.class":"Stream/Output/Audio","application.id":"org.example.player"
+                  }}},
+                  {"id":101,"type":"PipeWire:Interface:Node","info":{"props":{
+                    "node.name":"","media.class":"Stream/Output/Audio","client.id":301
+                  }}},
+                  {"id":102,"type":"PipeWire:Interface:Node","info":{"props":{
+                    "node.name":"","media.class":"Stream/Output/Audio"
+                  }}},
+                  {"id":103,"type":"PipeWire:Interface:Node","info":{"props":{
+                    "node.name":"","media.class":"Stream/Output/Audio","client.id":300
+                  }}},
+                  {"id":104,"type":"PipeWire:Interface:Node","info":{"props":{
+                    "node.name":" ","media.class":"Stream/Output/Audio",
+                    "application.id":" ","application.process.binary":" "
+                  }}},
+                  {"id":-1,"type":"PipeWire:Interface:Node","info":{"props":{
+                    "node.name":"","media.class":"Stream/Output/Audio","application.id":"org.example.player"
+                  }}},
+                  {"type":"PipeWire:Interface:Node","info":{"props":{
+                    "node.name":"","media.class":"Stream/Output/Audio","application.id":"org.example.player"
+                  }}},
+                  {"id":106,"type":"PipeWire:Interface:Node","info":{"props":{
+                    "node.name":"","media.class":"Audio/Sink","application.id":"org.example.player"
+                  }}},
+                  {"id":107,"type":"PipeWire:Interface:Node","info":{"props":{
+                    "node.name":"","media.class":"Audio/Source","application.process.binary":"player"
+                  }}},
+                  {"id":108,"type":"PipeWire:Interface:Node","info":{"props":{
+                    "node.name":"","media.class":"Stream/Input/Audio","application.id":"org.example.player"
+                  }}},
+                  {"id":109,"type":"PipeWire:Interface:Node","info":{"props":{
+                    "node.name":"","media.class":"Video/Source","application.id":"org.example.player"
+                  }}}
+                ]
+                """);
+        List<AudioNode> sinks = new ArrayList<>(), sources = new ArrayList<>(), streams = new ArrayList<>();
+
+        PipeWireSnapshotReader.readNodes(root, PipeWireSnapshotReader.clientProperties(root), Map.of(),
+                sinks, sources, streams);
+
+        assertTrue(sinks.isEmpty(), "identity must not admit a nameless physical sink");
+        assertTrue(sources.isEmpty(), "identity must not admit a nameless physical source");
+        assertEquals(List.of(100, 101), streams.stream().map(AudioNode::id).toList());
+        assertEquals("org.example.player", streams.getFirst().applicationId());
+        assertEquals("client-player", streams.get(1).processName());
+        assertTrue(streams.stream().allMatch(node -> node.name().isEmpty()));
+    }
+
+    @Test
+    void preservesNamedInternalFiltersAndNamelessOwnershipMetadata() throws IOException {
+        JsonNode root = new ObjectMapper().readTree("""
+                [
+                  {"id":201,"type":"PipeWire:Interface:Node","info":{"props":{
+                    "node.name":"audiomatrix_route","media.class":"Stream/Output/Audio"
+                  }}},
+                  {"id":202,"type":"PipeWire:Interface:Node","info":{"props":{
+                    "node.name":"audiomatrix_events_discard","media.class":"Stream/Output/Audio"
+                  }}},
+                  {"id":203,"type":"PipeWire:Interface:Node","info":{"props":{
+                    "node.name":"audiomatrix_events","media.class":"Audio/Sink"
+                  }}},
+                  {"id":204,"type":"PipeWire:Interface:Node","info":{"props":{
+                    "node.name":"audiomatrix_system","media.class":"Audio/Sink"
+                  }}},
+                  {"id":205,"type":"PipeWire:Interface:Node","info":{"props":{
+                    "node.name":"","media.class":"Stream/Output/Audio",
+                    "application.id":"io.github.ilyaandreev05.audiomatrix"
+                  }}}
+                ]
+                """);
+        List<AudioNode> sinks = new ArrayList<>(), sources = new ArrayList<>(), streams = new ArrayList<>();
+
+        PipeWireSnapshotReader.readNodes(root, Map.of(), Map.of(), sinks, sources, streams);
+
+        assertEquals(List.of(204), sinks.stream().map(AudioNode::id).toList());
+        assertEquals(List.of(203), sources.stream().map(AudioNode::id).toList());
+        assertTrue(EventInputMonitor.isNode(sources.getFirst()));
+        assertEquals(List.of(205), streams.stream().map(AudioNode::id).toList());
+        assertEquals("", streams.getFirst().name());
+        assertTrue(AudioMatrixOwnedStream.matches(streams.getFirst()),
+                "existing downstream exclusion must still recognize an owned nameless stream");
     }
 
     @Test

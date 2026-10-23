@@ -34,13 +34,14 @@ final class GnomeGraphNodeDeviceResolver {
         return output;
     }
 
+    /** Apply and rollback restore both properties, including a slider's implicit unmute. */
     static CompletableFuture<?> applyLevel(PipeWireBackend backend, int nodeId,
-            Map<String, Object> config, String bindingId, String property) {
+            Map<String, Object> config, String bindingId) {
         Map<String, Object> binding = GraphNodeCommand.deviceBinding(config, bindingId);
-        if ("volume".equals(property))
-            return backend.setVolume(nodeId, number(binding.get("volume"), 1.0));
         double savedVolume = number(binding.get("volume"), 1.0);
-        return backend.setMute(nodeId, Boolean.TRUE.equals(binding.get("mute")), savedVolume);
+        boolean muted = Boolean.TRUE.equals(binding.get("mute"));
+        return backend.setVolume(nodeId, savedVolume)
+                .thenCompose(ignored -> backend.setMute(nodeId, muted, savedVolume));
     }
 
     static String deviceId(String reference) {

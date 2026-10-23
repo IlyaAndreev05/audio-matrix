@@ -60,7 +60,8 @@ abstract class AppShellUiPart04GnomeTree extends AppShellUiPart04GnomePreview {
             String groupId=string(group.get("id"),"");
             TreeItem<GnomePanelItem> groupItem=new TreeItem<>(new GnomePanelItem("GROUP",
                     string(group.get("name"),groupId),"","","",groupId,null,null,null,null));
-            List<Map<String,Object>> groupPins=pins.stream().filter(pin->groupId.equals(pin.get("group_id")))
+            List<Map<String,Object>> groupPins=pins.stream().filter(pin->groupId.equals(pin.get("group_id"))
+                            &&!Boolean.FALSE.equals(pin.get("pinned")))
                     .sorted(Comparator.comparingInt(pin->intValue(pin.get("order"),0))).toList();
             for(Map<String,Object> pin:groupPins){
                 String routeId=string(pin.get("route_id"),""),nodeId=string(pin.get("node_id"),"");
@@ -70,11 +71,17 @@ abstract class AppShellUiPart04GnomeTree extends AppShellUiPart04GnomePreview {
                 GraphSubgraph composite=routeById.containsKey(routeId)?GraphSubgraphLibrary.forRoute(config,routeId).stream()
                         .filter(candidate->nodeId.equals(candidate.id())).findFirst().orElse(null):null;
                 DynamicInstanceRegistry.RuntimeInstance instance=findRuntimeInstance(activeRuntime,routeId,nodeId,instanceKey);
+                String childId=string(pin.get("child_id"),"");
+                if(!childId.isBlank()&&instance!=null&&activeRuntime!=null){
+                    String runtimeId=instance.nodeIds().get(childId);
+                    node=activeRuntime.effectiveGraph().nodes().stream()
+                            .filter(candidate->candidate.id().equals(runtimeId)).findFirst().orElse(null);
+                }
                 if(node==null&&instance!=null&&activeRuntime!=null)
                     node=activeRuntime.effectiveGraph().nodes().stream().filter(candidate->nodeId.equals(candidate.id())).findFirst().orElse(null);
                 String fallback=composite==null?(node==null?nodeId:node.name()):composite.name();
                 String display=string(pin.get("display_name"),fallback);
-                if(!instanceKey.isBlank())display+=" · "+instanceKey;
+                if(!childId.isBlank())display+=" · "+t("дочерний узел","child node");
                 GnomePanelItem panelItem=new GnomePanelItem("PIN",display,routeId,nodeId,instanceKey,groupId,pin,node,composite,instance);
                 groupItem.getChildren().add(new TreeItem<>(panelItem));
             }
@@ -106,7 +113,7 @@ abstract class AppShellUiPart04GnomeTree extends AppShellUiPart04GnomePreview {
             List<GraphSubgraph> savedGroups=GraphSubgraphLibrary.forRoute(config,routeId);
             Map<String,TreeItem<GnomePanelItem>> compositeItems=new LinkedHashMap<>();
             for(GraphSubgraph group:savedGroups){
-                boolean generated=!group.generatorId().isBlank();
+                boolean generated=group.generatorId()!=null;
                 String label=group.name()+" · "+group.nodeIds().size()+t(" нод"," nodes")+(generated?t(" · runtime"," · runtime"):"");
                 compositeItems.put(group.id(),new TreeItem<>(new GnomePanelItem(generated?"GENERATED_COMPOSITE":"COMPOSITE",
                         label,routeId,group.id(),"","",null,null,group,null)));
@@ -130,10 +137,13 @@ abstract class AppShellUiPart04GnomeTree extends AppShellUiPart04GnomePreview {
                 super.updateItem(item,empty);setText(empty||item==null?null:item.label());
                 setOnDragDetected(event->{
                     GnomePanelItem source=getItem();
-                    if(source==null||!"PIN".equals(source.kind())||source.pin()==null)return;
-                    String pinId=string(source.pin().get("id"),"");if(pinId.isBlank())return;
+                    if(source==null)return;
+                    String value;
+                    if("GROUP".equals(source.kind()))value="group:"+source.groupId();
+                    else if("PIN".equals(source.kind())&&source.pin()!=null)value="pin:"+string(source.pin().get("id"),"");
+                    else return;
                     Dragboard dragboard=startDragAndDrop(TransferMode.MOVE);
-                    ClipboardContent content=new ClipboardContent();content.putString(pinId);dragboard.setContent(content);event.consume();
+                    ClipboardContent content=new ClipboardContent();content.putString(value);dragboard.setContent(content);event.consume();
                 });
                 setOnDragOver(event->{
                     GnomePanelItem target=getItem();
@@ -144,9 +154,17 @@ abstract class AppShellUiPart04GnomeTree extends AppShellUiPart04GnomePreview {
                 setOnDragDropped(event->{
                     GnomePanelItem target=getItem();boolean completed=false;
                     if(target!=null&&event.getDragboard().hasString()){
-                        String targetGroup="GROUP".equals(target.kind())?target.groupId():target.groupId();
-                        int order="PIN".equals(target.kind())?intValue(target.pin().get("order"),0):Integer.MAX_VALUE;
-                        moveQuickPin(event.getDragboard().getString(),targetGroup,order);completed=true;
+                        String dragged=event.getDragboard().getString();
+                        if(dragged.startsWith("group:")&&"GROUP".equals(target.kind())){
+                            int destination=groups.stream().filter(group->target.groupId().equals(group.get("id")))
+                                    .mapToInt(group->intValue(group.get("order"),0)).findFirst().orElse(0);
+                            updateRouteConfig(t("Изменить порядок групп GNOME","Reorder GNOME groups"),
+                                    candidate->QuickSettingsConfig.moveGroup(candidate,dragged.substring(6),destination));
+                            completed=true;
+                        }else if(dragged.startsWith("pin:")){
+                            int order="PIN".equals(target.kind())?intValue(target.pin().get("order"),0):Integer.MAX_VALUE;
+                            moveQuickPin(dragged.substring(4),target.groupId(),order);completed=true;
+                        }
                     }
                     event.setDropCompleted(completed);event.consume();
                 });
@@ -162,11 +180,15 @@ abstract class AppShellUiPart04GnomeTree extends AppShellUiPart04GnomePreview {
         for(DynamicInstanceRegistry.RuntimeInstance instance:runtime.instances().values().stream()
                 .filter(candidate->generator.id().equals(candidate.generatorId())).toList()){
             String instanceKey=instance.instanceKey();
-            String state=instance.available()?t("доступен","available"):t("offline","offline");
+            GraphSubgraph generated=runtime.generatedSubgraphs().stream()
+                    .filter(group->instance.compositeId().equals(group.id())).findFirst().orElse(null);
+            String name=generated==null?instanceKey:generated.name();
+            String state=instance.available()?t("доступен","available"):t("не подключено","not connected");
             TreeItem<GnomePanelItem> instanceItem=new TreeItem<>(new GnomePanelItem("INSTANCE",
-                    instanceKey+" · "+state+" · "+instance.confidence(),routeId,generator.id(),instanceKey,"",null,generator,null,instance));
+                    name+" · "+state,routeId,generator.id(),instanceKey,"",null,generator,null,instance));
             boolean pinned=pins.stream().anyMatch(pin->routeId.equals(pin.get("route_id"))
-                    &&generator.id().equals(pin.get("node_id"))&&instanceKey.equals(pin.get("instance_key")));
+                    &&generator.id().equals(pin.get("node_id"))&&instanceKey.equals(pin.get("instance_key"))
+                    &&string(pin.get("child_id"),"").isBlank()&&!Boolean.FALSE.equals(pin.get("pinned")));
             if(pinned)instanceItem.setValue(new GnomePanelItem("INSTANCE",instanceItem.getValue().label()+" · ✓",
                     routeId,generator.id(),instanceKey,"",null,generator,null,instance));
             for(String childId:instance.nodeIds().values()){
@@ -175,10 +197,8 @@ abstract class AppShellUiPart04GnomeTree extends AppShellUiPart04GnomePreview {
                 instanceItem.getChildren().add(new TreeItem<>(new GnomePanelItem("GENERATED_NODE",
                         child.name()+" · "+GraphNodeLabels.typeName(child,this::t),routeId,generator.id(),instanceKey,"",null,child,null,instance)));
             }
-            GraphSubgraph generated=runtime.generatedSubgraphs().stream()
-                    .filter(group->instance.compositeId().equals(group.id())).findFirst().orElse(null);
             if(generated!=null)instanceItem.getChildren().add(new TreeItem<>(new GnomePanelItem("GENERATED_COMPOSITE",
-                    generated.name()+" · "+generated.nodeIds().size()+t(" нод · runtime"," nodes · runtime"),
+                    generated.name()+" · "+generated.nodeIds().size()+t(" дочерних узлов"," child nodes"),
                     routeId,generator.id(),instanceKey,"",null,generator,generated,instance)));
             generatorItem.getChildren().add(instanceItem);
         }

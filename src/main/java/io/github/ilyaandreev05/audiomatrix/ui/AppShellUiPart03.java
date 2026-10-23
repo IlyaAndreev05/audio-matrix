@@ -80,13 +80,13 @@ abstract class AppShellUiPart03 extends AppShellUiPart02 {
 
     protected Node deviceRow(AudioNode node, String status, boolean output) {
         HBox row = new HBox(12); row.setAlignment(Pos.CENTER_LEFT); row.getStyleClass().add("node-card");
-        Map<String,Object> config=store.snapshot();Map<String,Object> device=matchingDevice(config,node);String alias=device==null?"":string(device.get("name"),"");
-        String heading=alias.isBlank()?node.description():alias;String detail=alias.isBlank()?node.name():node.description()+" · "+node.name();
+        Map<String,Object> config=store.snapshot();Map<String,Object> device=matchingDevice(config,node);
+        String heading=DeviceDisplayNames.displayName(device,node.description());String detail=node.description()+" · "+node.name();
         String outputEq = output && device != null ? string(device.get("filters_ref"), "") : "";
         if (!outputEq.isBlank()) detail += " · " + t("EQ: ", "EQ: ") + outputEq.replace("dsp.route_chains.", "");
         VBox details = new VBox(4, label(heading, "card-title"), label(detail, "muted"));
-        String channels = node.channels() + " ch";
-        String rates = node.sampleRates().isEmpty() ? t("частота неизвестна", "sample rate unavailable") : node.sampleRates().stream().map(String::valueOf).distinct().reduce((a,b) -> a + " / " + b).orElse("") + " Hz";
+        String channels = node.channels() + t(" каналов"," channels");
+        String rates = node.sampleRates().isEmpty() ? t("частота неизвестна", "sample rate unavailable") : node.sampleRates().stream().map(String::valueOf).distinct().reduce((a,b) -> a + " / " + b).orElse("") + t(" Гц"," Hz");
         VBox facts = new VBox(4, label(status, "status-pill"), label(channels + " · " + rates, "muted"));
         Region spacer = new Region(); HBox.setHgrow(spacer, Priority.ALWAYS);
         row.getChildren().addAll(details, spacer, facts);
@@ -99,7 +99,7 @@ abstract class AppShellUiPart03 extends AppShellUiPart02 {
             row.getChildren().add(choose);
             row.getChildren().add(actionButton(t("EQ выхода", "Output EQ"), () -> editOutputEq(device, node)));
         } else row.getChildren().add(label(t("Уровень входа не измеряется", "Input level not measured"), "muted"));
-        row.getChildren().add(actionButton(t("Имя и selector","Name and selector"),()->editDeviceSelector(device,node)));
+        row.getChildren().add(actionButton(t("Имя и правило поиска","Name and selector"),()->editDeviceSelector(device,node)));
         return row;
     }
 

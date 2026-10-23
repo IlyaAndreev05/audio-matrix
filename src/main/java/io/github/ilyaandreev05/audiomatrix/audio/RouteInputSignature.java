@@ -38,15 +38,22 @@ public final class RouteInputSignature {
                 defaultOutput, outputs, eventInputAvailable));
     }
 
-    /** Runtime-only trigger for callers that must reconcile stream insertions/removals without rebuilding topology. */
+    /** Runtime-only trigger for routable stream bindings and stable event-monitor reconnections. */
     public static String dynamicBindings(PipeWireBackend.Snapshot current) {
         if (current == null) return digest(List.of("offline"));
+        List<String> eventInputs = current.sources().stream()
+                .filter(EventInputMonitor::isNode)
+                .map(node -> node.id() + ":" + node.name() + ":" + node.channels())
+                .sorted().toList();
+        boolean eventInputAvailable = !eventInputs.isEmpty();
         List<String> bindings = current.streams().stream()
                 .filter(node -> !AudioMatrixOwnedStream.matches(node))
+                .filter(node -> !ApplicationStreamEligibility.isTransientShellSound(node))
+                .filter(node -> !eventInputAvailable || !PipeWireRouteStaticSupport03.isEventSoundStudioStream(node))
                 .map(node -> node.id() + ":" + node.name() + ":" + node.applicationId() + ":"
                         + node.processName() + ":" + node.channels())
                 .sorted().toList();
-        return digest(bindings);
+        return digest(List.of(bindings, eventInputs));
     }
     /** Runtime-level trigger used beside the static signature; changing it never rebuilds link topology. */
     public static String dynamicLevels(Map<String, Object> config) {

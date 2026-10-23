@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {menuStructureSignature, orderedQuickGroups} from '../gnome/audio-matrix-quick-settings/menu-state.js';
+import {allQuickPins, orderedQuickGroups} from '../gnome/audio-matrix-quick-settings/menu-state.js';
 import {removeMenuItem, reorderMenuItems} from '../gnome/audio-matrix-quick-settings/menu-row-utils.js';
 
 // The GNOME 50 popup menu item declares its activation signal with a required
@@ -13,13 +13,15 @@ const CONNECT_AFTER = 1;
 const SIGNAL_ARITY = {activate: 1};
 
 class Actor {
-    constructor() { this.visible = true; this.parent = null; }
+    constructor(properties = {}) { Object.assign(this, properties); this.visible = true; this.parent = null; this.children = []; }
     get_parent() { return this.parent; }
     set_style() {}
+    add_style_class_name() {}
+    add_child(child) { this.children.push(child); }
     remove_child(child) { if (child.parent === this) child.parent = null; }
 }
 class Label {
-    constructor(text = '') { this.text = text; }
+    constructor(text = '') { this.text = typeof text === 'object' ? text.text || '' : text; }
     set_width() {}
 }
 class MenuItem {
@@ -28,12 +30,14 @@ class MenuItem {
         this.actor = new Actor();
         this.handlers = [];
         this.states = [];
+        this.children = [];
         this.options = options;
         this.reactive = options.reactive ?? true;
         this.gtypeName = 'Gjs_ui_popupMenu_PopupMenuItem';
         this._parent = null;
     }
     set_style() {}
+    add_style_class_name() {}
     add_accessible_state(state) { this.states.push(state); }
     remove_accessible_state(state) { this.states = this.states.filter(value => value !== state); }
     setIcon(icon) { this.icon_name = icon; }
@@ -107,12 +111,14 @@ const PopupMenu = {
     Ornament: {DOT: 1, NO_DOT: 0},
 };
 const Atk = {StateType: {EXPANDABLE: 1, EXPANDED: 2}, Role: {RADIO_BUTTON: 1}};
-globalThis.audioMatrixGroupFixture = {PopupMenu, Atk, orderedQuickGroups, removeMenuItem, reorderMenuItems};
+const St = {Icon: Actor, Label};
+const Clutter = {ActorAlign: {CENTER: 0}};
+globalThis.audioMatrixGroupFixture = {PopupMenu, Atk, St, Clutter, allQuickPins, orderedQuickGroups, removeMenuItem, reorderMenuItems};
 
 async function loadModule(name) {
     let source = await readFile(new URL(`../gnome/audio-matrix-quick-settings/${name}`, import.meta.url), 'utf8');
     source = source.replace(/^import .*;\n/gm, '');
-    source = `const {PopupMenu, Atk, orderedQuickGroups, removeMenuItem, reorderMenuItems} = globalThis.audioMatrixGroupFixture;\n${source}`;
+    source = `const {PopupMenu, Atk, St, Clutter, allQuickPins, orderedQuickGroups, removeMenuItem, reorderMenuItems} = globalThis.audioMatrixGroupFixture;\n${source}`;
     return (await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)).default;
 }
 const Disclosure = await loadModule('menu-disclosure.js');
@@ -133,23 +139,15 @@ const groups = new Groups({
 const column = new Section();
 const language = {unmute: 'Unmute', mute: 'Mute'};
 
-// Mirrors AudioMatrixMenuRenderer.render(): the keyed group rows are rebuilt
-// only when the menu structure changes, and every state update is reconciled
-// through the disclosure state machine.
-let structure = null;
 function render(state) {
-    const signature = menuStructureSignature({state, language: 'ru'});
-    if (signature !== structure) {
-        groups.render(column, state, state.quickPins || [], language);
-        disclosures.retain(state);
-        structure = signature;
-    }
+    groups.render(column, state, state.quickPins || [], language);
+    disclosures.retain(state);
     disclosures.sync(state);
 }
 function stateWith(collapsed, extraPin = false) {
     const quickPins = [
-        {id: 'pin-apps', name: 'Все приложения', nodeType: 'source', groupId: 'applications', order: 0,
-            view: 'COMPACT'},
+        {id: 'pin-apps', name: 'Составной блок', nodeType: 'composite', groupId: 'applications', order: 0,
+            view: 'COMPACT', children: []},
         {id: 'pin-out', name: 'Выход', nodeType: 'device_slot', groupId: 'outputs', order: 0},
         {id: 'pin-route', name: 'Маршруты', nodeType: 'switch', groupId: 'routing', order: 0},
     ];
@@ -213,10 +211,10 @@ assert.deepEqual(commands.pop(), ['set_quick_group_collapsed', 'applications\ttr
     'Collapsing a group asks the app to store collapsed=true');
 
 const pin = groups._pinEntries.get('pin-apps');
-const pinFailure = activate(pin.header);
+const pinFailure = activate(pin.composite.header);
 assert.equal(pinFailure, null,
     `Activating a pin header must not fail: ${pinFailure?.message ?? ''}`);
-assert.equal(pin.content.actor.visible, true, 'Activating a pin header expands the pinned rows');
+assert.equal(pin.composite.content.actor.visible, true, 'Activating a composite header expands its children');
 assert.deepEqual(commands.pop(), ['set_quick_pin_view', 'pin-apps\tEXPANDED'],
     'Expanding a pin asks the app to store the expanded view');
 

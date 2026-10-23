@@ -68,7 +68,7 @@ class GnomeQuickSettingsPinsTest {
         Map<String, Object> fallbackPin = pin(pins, "other-apps");
         assertEquals(List.of("chrome-stream"), ids(chromePin.get("applications")));
         assertEquals(false, chromePin.get("tabAdapterAvailable"));
-        assertEquals(false, chromePin.get("pinned"));
+        assertEquals(true, chromePin.get("pinned"));
         assertEquals(List.of("telegram-stream"), ids(fallbackPin.get("applications")));
         Map<String, Object> mixerPin = pin(pins, "mixer-1");
         @SuppressWarnings("unchecked") List<Map<String, Object>> mixerInputs = (List<Map<String, Object>>) mixerPin.get("mixerInputs");
@@ -169,7 +169,7 @@ class GnomeQuickSettingsPinsTest {
         Map<String, Object> own = application("audio-matrix", "io.github.ilyaandreev05.audiomatrix", "AudioMatrix");
         Map<String, Object> chat = application("chat", "org.telegram.desktop", "telegram-desktop");
         List<Map<String, Object>> applications = List.of(chrome, event, own, chat);
-        PipeWireBackend.Snapshot snapshot = PipeWireBackend.Snapshot.offline("disconnected");
+        PipeWireBackend.Snapshot snapshot = new PipeWireBackend.Snapshot(true,"",List.of(),List.of(),List.of(),List.of(),Map.of(),-1,0);
 
         List<Map<String, Object>> pins = GnomeQuickSettingsPins.build(config, snapshot, List.of(), applications, List.of(),
                 null, Map.of());

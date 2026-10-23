@@ -38,7 +38,7 @@ abstract class AppShellUiPart21 extends AppShellUiPart20 {
     }
 
     protected void applyConfiguredDeviceRules(PipeWireBackend.Snapshot current,Map<String,Object> config){
-        if(!current.connected())return;
+        if(gnomeCommandInFlight||!current.connected())return;
         Set<Integer> liveIds=current.sinks().stream().map(AudioNode::id).collect(java.util.stream.Collectors.toSet());appliedDeviceRules.keySet().removeIf(id->!liveIds.contains(id));
         for(AudioNode sink:current.sinks()){
             Map<String,Object> device=matchingDevice(config,sink);if(device==null){appliedDeviceRules.remove(sink.id());continue;}
@@ -50,6 +50,7 @@ abstract class AppShellUiPart21 extends AppShellUiPart20 {
     }
 
     protected void applyConfiguredStreamRules(PipeWireBackend.Snapshot current, Map<String, Object> config) {
+        if(gnomeCommandInFlight)return;
         streamRuleApplier.apply(current, maps(config.get("applications")), (stream, error) ->
                 Platform.runLater(() -> setNotice(t("Не удалось применить правило потока ", "Could not apply stream rule for ")
                         + stream.applicationName() + ": " + rootMessage(error), true)));
@@ -68,13 +69,23 @@ abstract class AppShellUiPart21 extends AppShellUiPart20 {
 
     protected AudioNode resolveDevice(Map<String,Object> config,Map<String,Object> device){List<AudioNode> resolved=matchingNodes(device);return resolved.size()==1?resolved.getFirst():null;}
 
-    protected String nodeDisplayName(AudioNode node){Map<String,Object> device=matchingDevice(store.snapshot(),node);String name=device==null?"":string(device.get("name"),"");return name.isBlank()?node.description():name;}
+    protected String nodeDisplayName(AudioNode node){return DeviceDisplayNames.displayName(matchingDevice(store.snapshot(),node),node.description());}
 
     protected void editDeviceSelector(Map<String,Object> savedDevice,AudioNode node){
         Map<String,Object> config=store.snapshot();Map<String,Object> current=savedDevice==null?null:maps(config.get("devices")).stream().filter(device->String.valueOf(savedDevice.get("id")).equals(device.get("id"))).findFirst().orElse(null);
         String id=current==null?"":String.valueOf(current.get("id"));Map<String,Object> oldSelector=current==null?DefaultConfigMap.map("kind","name_equals","value",node==null?"":node.name()):map(current.get("selector"));
-        Dialog<Map<String,Object>> dialog=new Dialog<>();if(getScene()!=null)dialog.initOwner(getScene().getWindow());dialog.setTitle(t("Имя и selector устройства","Device name and selector"));dialog.setHeaderText(current==null?node.description():string(current.get("name"),id));dialog.getDialogPane().setPrefWidth(600);styleDialog(dialog);
+        Dialog<Map<String,Object>> dialog=new Dialog<>();if(getScene()!=null)dialog.initOwner(getScene().getWindow());
+        dialog.setTitle(t("Имя и правило поиска устройства","Device name and selector"));
+        dialog.setHeaderText(DeviceDisplayNames.displayName(current,node==null?"":node.description()));
+        dialog.getDialogPane().setPrefWidth(600);styleDialog(dialog);
         TextField alias=field(current==null?"":string(current.get("name"),""),t("Понятное имя устройства","Device display name"));ComboBox<String> kind=new ComboBox<>();kind.getItems().setAll("name_equals","name_contains","description_contains");kind.setValue(string(oldSelector.get("kind"),"name_equals"));kind.setAccessibleText(t("Тип selector","Selector kind"));TextField value=field(string(oldSelector.get("value"),""),t("Значение selector","Selector value"));Label error=label("", "danger");
+        kind.setConverter(new StringConverter<>(){
+            @Override public String toString(String selected){return switch(selected==null?"":selected){
+                case "name_equals"->t("Точное системное имя","Exact system name");
+                case "name_contains"->t("Часть системного имени","System name contains");
+                case "description_contains"->t("Часть описания","Description contains");default->"";};}
+            @Override public String fromString(String selected){return selected;}
+        });
         ComboBox<String> role = new ComboBox<>();
         role.getItems().setAll("unassigned", "haptic_output", "subwoofer", "speaker", "speakers", "output", "microphone", "accelerometer", "input", "source");
         String selectedRole = string(current == null ? null : current.get("role"), "unassigned");
@@ -86,13 +97,13 @@ abstract class AppShellUiPart21 extends AppShellUiPart20 {
                 if (value == null) return "";
                 return switch (value) {
                     case "unassigned" -> t("Не назначена", "Unassigned");
-                    case "haptic_output" -> t("Вибровыход (haptic_output)", "Haptic output (haptic_output)");
-                    case "subwoofer" -> t("Сабвуфер (subwoofer)", "Subwoofer (subwoofer)");
-                    case "speaker", "speakers" -> t("Колонки (speaker)", "Speakers (speaker)");
-                    case "output" -> t("Общий выход (output)", "Generic output (output)");
-                    case "microphone" -> t("Микрофон (microphone)", "Microphone (microphone)");
-                    case "accelerometer" -> t("Акселерометр (accelerometer)", "Accelerometer (accelerometer)");
-                    case "input", "source" -> t("Общий вход (input)", "Generic input (input)");
+                    case "haptic_output" -> t("Вибровыход", "Haptic output");
+                    case "subwoofer" -> t("Сабвуфер", "Subwoofer");
+                    case "speaker", "speakers" -> t("Колонки", "Speakers");
+                    case "output" -> t("Общий выход", "Generic output");
+                    case "microphone" -> t("Микрофон", "Microphone");
+                    case "accelerometer" -> t("Акселерометр", "Accelerometer");
+                    case "input", "source" -> t("Общий вход", "Generic input");
                     default -> value;
                 };
             }

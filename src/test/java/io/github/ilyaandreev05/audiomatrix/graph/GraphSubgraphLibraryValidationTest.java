@@ -2,6 +2,7 @@ package io.github.ilyaandreev05.audiomatrix.graph;
 
 import io.github.ilyaandreev05.audiomatrix.config.ConfigValidator;
 import io.github.ilyaandreev05.audiomatrix.config.DefaultConfig;
+import io.github.ilyaandreev05.audiomatrix.config.QuickSettingsConfig;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -67,5 +68,16 @@ class GraphSubgraphLibraryValidationTest {
         Map<String,Object> unassociatedEmpty = Map.of("id", "empty", "name", "Empty", "node_ids", List.of(), "collapsed", true);
         assertTrue(ConfigValidator.validate(GraphSubgraphLibraryFixtures.configWithGroups(GraphSubgraphLibraryFixtures.graphWithGenerator(Map.of()), List.of(unassociatedEmpty)))
                 .stream().anyMatch(problem -> problem.contains("generator")));
+    }
+
+    @Test void malformedCompositeReturnsValidationDiagnostic() {
+        AudioGraph graph = GraphSubgraphLibraryFixtures.graphWithGenerator(Map.of());
+        Map<String, Object> malformed = Map.of("id", "empty", "name", "Empty", "node_ids", List.of(), "collapsed", true);
+        Map<String, Object> config = GraphSubgraphLibraryFixtures.configWithGroups(graph, List.of(malformed));
+        QuickSettingsConfig.pinNode(config, graph.id(), "empty", "applications", 0, "DEFAULT");
+
+        List<String> diagnostics = ConfigValidator.validate(config);
+        assertTrue(diagnostics.stream().anyMatch(problem ->
+                problem.contains("is invalid") && problem.contains("empty subgraph")));
     }
 }

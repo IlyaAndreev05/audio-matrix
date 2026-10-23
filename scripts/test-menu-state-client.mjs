@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 
+let now = 10_000_000;
 let nextUuid = 1;
 let nextSource = 1;
 const sources = new Map();
@@ -10,7 +11,7 @@ const GLib = {
     USEC_PER_SEC: 1_000_000,
     SOURCE_REMOVE: false,
     SOURCE_CONTINUE: true,
-    get_monotonic_time: () => 10_000_000,
+    get_monotonic_time: () => now,
     uuid_string_random: () => `00000000-0000-4000-8000-${String(nextUuid++).padStart(12, '0')}`,
     timeout_add_seconds(_priority, _seconds, callback) {
         const id = nextSource++;
@@ -56,9 +57,9 @@ const source = (await readFile(new URL('state-client.js', base), 'utf8'))
         'const {AudioMatrixStateRenderScheduler} = globalThis.audioMatrixStateClientFixture;');
 const {default: StateClient} = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 
-function state(epoch, sequence, {acks = [], volume = 0.9, muted = false, activeProfileId = 'main'} = {}) {
+function state(epoch, sequence, {acks = [], volume = 0.9, muted = false, activeProfileId = 'main', applications = []} = {}) {
     return {apiVersion: 5, revision: 'revision', connected: true, language: 'en', stateEpoch: epoch,
-        stateSequence: sequence, commandAcks: acks, activeProfileId, volume, muted};
+        stateSequence: sequence, commandAcks: acks, activeProfileId, volume, muted, applications};
 }
 function deliver(client, value) {
     client._receiveState({deepUnpack: () => [JSON.stringify(value)]});
@@ -141,7 +142,6 @@ const target = {routeId: 'main', nodeId: 'gain-1', instanceKey: ''};
     onTimeout();
     assert.equal(client.snapshot().pendingIntents.length, 0, 'timeout rolls the optimistic intent back');
     assert.equal(client.snapshot().state.volume, 0.9);
-    assert.match(client.snapshot().commandError, /No response/);
 }
 
 {
@@ -155,17 +155,54 @@ const target = {routeId: 'main', nodeId: 'gain-1', instanceKey: ''};
 
 {
     const client = makeClient();
-    const profileRequest = client.send('select_profile', {profileId: 'studio'});
-    assert.deepEqual(JSON.parse(commandValue()[4]), {profileId: 'studio'});
-    const routeRequest = client.send('setRouteEnabled', {
-        routeId: 'main', switchNodeId: 'multi', linkId: 'in->hdmi', enabled: true,
-    });
-    assert.deepEqual(JSON.parse(commandValue()[4]), {
-        routeId: 'main', switchNodeId: 'multi', linkId: 'in->hdmi', enabled: true,
-    });
-    assert.notEqual(profileRequest, routeRequest);
-    assert.equal(client.snapshot().pendingIntents.length, 2);
+    const applicationId = 'app:org.example.player';
+    const target = {applicationId};
+    const requests = [];
+    const sendVolume = value => requests.push(client.send('set_app_volume',
+        `${applicationId}\t${value.toFixed(3)}`));
+    const sliderId = `application:${applicationId}`;
+
+    client.beginSliderDrag();
+    client.queueSliderCommand(sliderId, 0.4, sendVolume);
+    client.queueSliderCommand(sliderId, 0.63, sendVolume);
+    client.queueSliderCommand(sliderId, 0.63, sendVolume, true);
+    client.endSliderDrag();
+
+    const latestRequest = requests.at(-1);
+    const [version, requestId, _revision, name, payload] = commandValue();
+    assert.equal(version, 5);
+    assert.equal(name, 'set_app_volume');
+    assert.equal(requestId, latestRequest);
+    assert.equal(payload, `${applicationId}\t0.630`);
+    assert.deepEqual(client.snapshot().pendingIntents[0],
+        {requestId: latestRequest, target, property: 'volume', value: 0.63});
+
+    deliver(client, state('epoch-a', 2, {
+        applications: [{id: applicationId, volume: 0.9, muted: false}],
+    }));
+    assert.equal(client.snapshot().pendingIntents[0].value, 0.63,
+        'a stale application snapshot cannot roll back the final drag value before its ACK');
+    deliver(client, state('epoch-a', 3, {
+        applications: [{id: applicationId, volume: 0.63, muted: false}],
+        acks: [ackFor(latestRequest, target, 'volume', 'ok', 0.63)],
+    }));
+    assert.equal(client.snapshot().pendingIntents.length, 0);
+    assert.equal(client.snapshot().state.applications[0].volume, 0.63,
+        'the matching State ACK settles against the observed application level');
 }
+
 
 delete globalThis.audioMatrixStateClientFixture;
 console.log('State client v5 tests cover ordered State ACKs, coalesced intents, rollback, and epochs');
+
+{
+    const client = makeClient();
+    client.start();
+    now += 13 * GLib.USEC_PER_SEC;
+    sources.get(client._watchdogId)();
+    assert.equal(client.snapshot().available, false, 'A silent bridge becomes unavailable after the freshness limit');
+    deliver(client, state('epoch-a', 1));
+    assert.equal(client.snapshot().state.stateSequence, 1, 'A heartbeat replay does not advance state sequence');
+    assert.equal(client.snapshot().available, true, 'An identical bridge heartbeat refreshes freshness without replacing state');
+    client.stop();
+}

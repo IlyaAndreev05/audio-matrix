@@ -1,6 +1,7 @@
 package io.github.ilyaandreev05.audiomatrix.ui;
 
 import io.github.ilyaandreev05.audiomatrix.audio.*;
+import io.github.ilyaandreev05.audiomatrix.config.DeviceDisplayNames;
 import io.github.ilyaandreev05.audiomatrix.graph.DeviceSlotNode;
 import javafx.scene.control.*;
 import javafx.scene.layout.VBox;
@@ -14,14 +15,17 @@ final class GraphDeviceSlotControl {
                        BiFunction<String, String, String> t, Consumer<String> assign) {
         VBox box = new VBox(5);
         Map<String, Object> bound = devices.stream().filter(device -> slot.deviceId().equals(device.get("id"))).findFirst().orElse(null);
-        String state = bound == null ? "UNBOUND" : DeviceDiscovery.catalog(sinks, devices).stream()
-                .filter(entry -> slot.deviceId().equals(entry.slotId())).map(entry -> entry.state() + " · " + entry.conflict())
-                .findFirst().orElse("OFFLINE");
-        box.getChildren().add(new Label(state + " · " + slot.deviceId()));
+        DeviceDiscovery.Resolution resolution=bound==null?null:DeviceDiscovery.resolve(sinks,bound);
+        String state=resolution==null?t.apply("Не привязано","Unbound"):GraphDeviceDiscovery.stateLabel(resolution.state(),t);
+        box.getChildren().add(new Label(state));
         ComboBox<Map<String, Object>> picker = new ComboBox<>();
         picker.getItems().addAll(devices.stream().filter(device -> "device_slot".equals(device.get("kind"))).toList());
         picker.setConverter(new StringConverter<>() {
-            @Override public String toString(Map<String, Object> device) { return device == null ? "" : device.getOrDefault("name", device.get("id")) + " · " + device.get("id"); }
+            @Override public String toString(Map<String, Object> device) {
+                if(device==null)return "";
+                AudioNode live=DeviceDiscovery.resolve(sinks,device).node();
+                return DeviceDisplayNames.displayName(device,live==null?"":live.description());
+            }
             @Override public Map<String, Object> fromString(String value) { return null; }
         });
         picker.setPromptText(t.apply("Выберите явную привязку", "Choose explicit binding"));

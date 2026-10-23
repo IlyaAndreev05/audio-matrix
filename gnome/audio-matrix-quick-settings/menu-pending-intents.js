@@ -38,13 +38,25 @@ export default class AudioMatrixPendingIntents {
             key: intentKey(shape.target, shape.property), requestId, target: shape.target,
             property: shape.property, value: shape.desired, baselineEpoch: epoch, baselineSequence: sequence,
         } : null;
+        if (intent) {
+            const previous = this._pending.get(intent.key);
+            if (previous) this._clearRequest(previous.requestId);
+            if (shape.property === 'volume') {
+                const muteKey = intentKey(shape.target, 'muted');
+                const mute = this._pending.get(muteKey);
+                if (mute) {
+                    this._clearRequest(mute.requestId);
+                    this._pending.delete(muteKey);
+                }
+            }
+        }
         if (intent) this._pending.set(intent.key, intent);
         const timer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 5, () => {
             this._requests.delete(requestId);
             if (intent && this._pending.get(intent.key)?.requestId !== requestId)
                 return GLib.SOURCE_REMOVE;
             if (intent) this._pending.delete(intent.key);
-            this._onError('No response from the Audio Matrix engine');
+            this._onError('Нет ответа от движка Audio Matrix');
             this._onChange();
             return GLib.SOURCE_REMOVE;
         });
@@ -56,16 +68,17 @@ export default class AudioMatrixPendingIntents {
         if (!Array.isArray(acks)) return;
         for (const ack of acks) {
             const request = this._requests.get(ack?.requestId);
-            if (request?.intent === null) {
+            if (!request) continue;
+            if (request.intent === null) {
                 this._clearRequest(ack.requestId);
-                this._onError(ack.status === 'error' ? String(ack.error || 'Command failed') : '');
+                this._onError(ack.status === 'error' ? String(ack.error || 'Команда не выполнена') : '');
                 continue;
             }
             const intent = this._pending.get(intentKey(ack?.target, ack?.property));
             if (!intent || !ackMatches(ack, intent)) continue;
             this._clearRequest(intent.requestId);
             this._pending.delete(intent.key);
-            this._onError(ack.status === 'error' ? String(ack.error || 'Command failed') : '');
+            this._onError(ack.status === 'error' ? String(ack.error || 'Команда не выполнена') : '');
         }
     }
 

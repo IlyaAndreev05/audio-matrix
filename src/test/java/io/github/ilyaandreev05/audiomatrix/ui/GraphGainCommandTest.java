@@ -1,11 +1,74 @@
 package io.github.ilyaandreev05.audiomatrix.ui;
 
 import io.github.ilyaandreev05.audiomatrix.graph.*;
+import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
+import io.github.ilyaandreev05.audiomatrix.config.ConfigStore;
+import io.github.ilyaandreev05.audiomatrix.config.DefaultConfig;
+import org.junit.jupiter.api.io.TempDir;
+import java.nio.file.Path;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class GraphGainCommandTest {
+    private static final String ROUTE_ID = "main";
+    @TempDir Path temp;
+
+    @Test void graphSliderAtomicallyUnmutesAndMuteRetainsTheConfiguredGain() throws Exception {
+        Map<String, Object> config = DefaultConfig.create();
+        String nodeId = GraphCommonVibro.VIBRO_GAIN_ID;
+        GraphNodeCommand.setMuted(config, ROUTE_ID, nodeId, true);
+        PipeWireBackend.Snapshot snapshot = PipeWireBackend.Snapshot.offline("test");
+        GnomeNodeCommandHandler.Target target = new GnomeNodeCommandHandler.Target(ROUTE_ID, nodeId, "");
+        CompletableFuture<Void> runtime = new CompletableFuture<>();
+        AtomicReference<GainNode> applied = new AtomicReference<>();
+
+        try (ConfigStore store = new ConfigStore(temp.resolve("graph-gain.json"))) {
+            store.save(config);
+            CompletableFuture<Void> command = GnomeGraphNodeCommandExecutor.execute(
+                    new GnomeNodeCommandHandler.SetVolume(target, 0.4),
+                    store, null, snapshot, List.of(), null, true, null,
+                    candidate -> {
+                        applied.set((GainNode) GraphNodeCommand.targetNode(candidate, ROUTE_ID, nodeId));
+                        return runtime;
+                    },
+                    ignored -> CompletableFuture.completedFuture(null),
+                    ignored -> CompletableFuture.failedFuture(new AssertionError("Not an application target")),
+                    ignored -> CompletableFuture.failedFuture(new AssertionError("Not an application target")),
+                    error -> fail(error), () -> {});
+            assertFalse(command.isDone());
+            assertEquals(0.4, applied.get().gain(), 0.0001);
+            assertFalse(applied.get().muted());
+            GainNode before = (GainNode) GraphNodeCommand.targetNode(store.snapshot(), ROUTE_ID, nodeId);
+            assertEquals(0.6, before.gain(), 0.0001);
+            assertTrue(before.muted());
+
+            runtime.complete(null);
+            command.join();
+            GainNode after = (GainNode) GraphNodeCommand.targetNode(store.snapshot(), ROUTE_ID, nodeId);
+            assertEquals(0.4, after.gain(), 0.0001);
+            assertFalse(after.muted());
+            for (boolean muted : List.of(true, false)) {
+                GnomeGraphNodeCommandExecutor.execute(new GnomeNodeCommandHandler.SetMuted(target, muted),
+                        store, null, snapshot, List.of(), null, true, null,
+                        candidate -> {
+                            GainNode gain = (GainNode) GraphNodeCommand.targetNode(candidate, ROUTE_ID, nodeId);
+                            assertEquals(0.4, gain.gain(), 0.0001);
+                            assertEquals(muted, gain.muted());
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        ignored -> CompletableFuture.completedFuture(null),
+                        ignored -> CompletableFuture.failedFuture(new AssertionError("Not an application target")),
+                        ignored -> CompletableFuture.failedFuture(new AssertionError("Not an application target")),
+                        error -> fail(error), () -> {}).join();
+                GainNode savedGain = (GainNode) GraphNodeCommand.targetNode(store.snapshot(), ROUTE_ID, nodeId);
+                assertEquals(0.4, savedGain.gain(), 0.0001);
+                assertEquals(muted, savedGain.muted());
+            }
+        }
+    }
     @Test void absoluteGraphGainCommandsKeepTheConfiguredLevelThroughMute() {
         Map<String, Object> config = io.github.ilyaandreev05.audiomatrix.config.DefaultConfig.create();
         String route = "main";
@@ -20,7 +83,7 @@ class GraphGainCommandTest {
         assertTrue(muted.muted());
         GraphNodeCommand.setVolume(config, route, node, 0.42);
         assertEquals(0.42, gain(config, route, node).gain(), 0.0001);
-        assertTrue(gain(config, route, node).muted(), "volume setter must not alter the mute property");
+        assertFalse(gain(config, route, node).muted(), "moving the GNOME slider must release mute");
         GraphNodeCommand.setMuted(config, route, node, false);
         GainNode restored = gain(config, route, node);
         assertEquals(0.42, restored.gain(), 0.0001);

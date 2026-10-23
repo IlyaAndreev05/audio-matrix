@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Chrome Native Messaging bridge. PCM is sent only to Audio Matrix's virtual PipeWire sink."""
+"""Native Messaging browser bridge; only explicit Chrome captures may send PCM."""
 
 import base64
 import json
@@ -27,7 +27,7 @@ START_TIMEOUT_SECONDS = 3.0
 HEALTH_CHECK_SECONDS = 0.5
 BRIDGE_RECONNECT_SECONDS = 2.0
 BRIDGE_BUFFER_LIMIT = 512
-BRIDGE_UNAVAILABLE_MESSAGE = "Audio Matrix is not connected; Chrome tab controls are unavailable."
+BRIDGE_UNAVAILABLE_MESSAGE = "Audio Matrix не подключён; управление вкладками недоступно."
 
 ENVELOPE_FIELDS = {
     "version", "type", "requestId", "browser", "instanceId", "profileId", "tabs"
@@ -102,7 +102,7 @@ def capture_identity(message):
     return ("chrome", instance_id, profile_id, session_token), capture_stream_key
 
 
-def validate_tab_entry(tab):
+def validate_tab_entry(tab, browser="chrome"):
     if not isinstance(tab, dict) or set(tab) != TAB_FIELDS:
         raise RuntimeError("A browser tab entry has unexpected fields.")
     require_token(tab.get("sessionToken"), "tab session token")
@@ -120,10 +120,12 @@ def validate_tab_entry(tab):
         raise RuntimeError("An uncaptured tab must not expose a capture stream key.")
     if tab["volumeCapability"] == "captured":
         require_token(stream_key, "capture stream key")
+    if browser == "firefox" and (tab["volumeCapability"] != "none" or stream_key):
+        raise RuntimeError("Firefox не предоставляет независимый PCM-поток вкладки.")
     return tab
 
 
-def validate_bridge_envelope(message, snapshot_seen):
+def validate_bridge_envelope(message, snapshot_seen, browser="chrome"):
     if not isinstance(message, dict):
         raise RuntimeError("A browser bridge message is not an object.")
     kind = message.get("type")
@@ -133,7 +135,7 @@ def validate_bridge_envelope(message, snapshot_seen):
     if type(message.get("version")) is not int or message["version"] != VERSION:
         raise RuntimeError("The browser bridge protocol version is unsupported.")
     require_request_id(message.get("requestId"))
-    if message.get("browser") != "chrome":
+    if browser not in ("chrome", "firefox") or message.get("browser") != browser:
         raise RuntimeError("The browser bridge identifies an unsupported browser.")
     require_uuid(message.get("instanceId"), "instance ID")
     require_uuid(message.get("profileId"), "profile ID")
@@ -159,7 +161,7 @@ def validate_bridge_envelope(message, snapshot_seen):
     seen_sessions = set()
     seen_capture_keys = set()
     for tab in tabs:
-        validate_tab_entry(tab)
+        validate_tab_entry(tab, browser)
         stream_key = tab["captureStreamKey"]
         if tab["tabId"] in seen_tabs or tab["sessionToken"] in seen_sessions or (
             tab["volumeCapability"] == "captured" and stream_key in seen_capture_keys
@@ -172,7 +174,7 @@ def validate_bridge_envelope(message, snapshot_seen):
     return message
 
 
-def validate_java_command(message):
+def validate_java_command(message, browser="chrome"):
     if not isinstance(message, dict) or message.get("type") != "command":
         raise RuntimeError("The Java browser command is invalid.")
     expected = COMMAND_FIELDS | ({"muted"} if "muted" in message else set())
@@ -181,14 +183,14 @@ def validate_java_command(message):
     if type(message.get("version")) is not int or message["version"] != VERSION:
         raise RuntimeError("The Java browser command protocol version is unsupported.")
     require_request_id(message.get("requestId"))
-    if message.get("browser") != "chrome":
+    if browser not in ("chrome", "firefox") or message.get("browser") != browser:
         raise RuntimeError("The Java browser command targets an unsupported browser.")
     require_uuid(message.get("instanceId"), "instance ID")
     require_uuid(message.get("profileId"), "profile ID")
     require_token(message.get("sessionToken"), "tab session token")
     if message.get("tabs") != []:
         raise RuntimeError("A Java browser command must not include tab entries.")
-    if message.get("command") not in ("mute", "focus", "stopCapture"):
+    if message.get("command") not in (("mute", "focus") if browser == "firefox" else ("mute", "focus", "stopCapture")):
         raise RuntimeError("The Java browser command is unsupported.")
     if message["command"] == "mute":
         if "muted" not in message or not isinstance(message["muted"], bool):
@@ -524,7 +526,11 @@ class JavaBridge:
 class Host:
     def __init__(self, popen=subprocess.Popen, pwcat=None, pw_dump=None,
                  pipewire_ready=None, bridge=None, startup_timeout=START_TIMEOUT_SECONDS,
-                 bridge_connect=None, notify=None, bridge_reconnect=BRIDGE_RECONNECT_SECONDS):
+                 bridge_connect=None, notify=None, bridge_reconnect=BRIDGE_RECONNECT_SECONDS,
+                 browser="chrome"):
+        if browser not in ("chrome", "firefox"):
+            raise ValueError("Unsupported browser.")
+        self.browser = browser
         self.capture = PipeWireCapture(
             popen,
             pwcat or shutil.which("pw-cat"),
@@ -605,7 +611,7 @@ class Host:
             }
 
     def forward_envelope(self, message):
-        validate_bridge_envelope(message, self.snapshot_seen)
+        validate_bridge_envelope(message, self.snapshot_seen, self.browser)
         for tab in message["tabs"]:
             tab["title"] = safe_bridge_title(tab["title"])
         payload = json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode("utf-8") + b"\n"
@@ -623,6 +629,8 @@ class Host:
             return None
         if not self.snapshot_seen:
             raise RuntimeError("A browser snapshot must be sent before native capture messages.")
+        if self.browser != "chrome":
+            raise RuntimeError("Firefox поддерживает только сведения о вкладках и выключение звука.")
         return self.handle_capture(message)
 
     def handle_java_line(self, line):
@@ -636,7 +644,7 @@ class Host:
             message = json.loads(line.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise RuntimeError("The Java browser message is malformed JSON.") from error
-        return validate_java_command(message)
+        return validate_java_command(message, self.browser)
 
 
 
@@ -780,8 +788,8 @@ def _read_java_commands(host, buffer):
     return commands
 
 
-def main():
-    host = Host(notify=lambda message: write_message(sys.stdout.buffer, message))
+def main(browser="chrome"):
+    host = Host(notify=lambda message: write_message(sys.stdout.buffer, message), browser=browser)
     selector = selectors.DefaultSelector()
     decoder = NativeMessageDecoder()
     bridge_buffer = bytearray()

@@ -30,6 +30,12 @@ final class GnomeBridgeCommandAck {
                     property = "setNodeVolume".equals(name) ? "volume" : "muted";
                     value = payload.get("setNodeVolume".equals(name) ? "value" : "muted");
                 }
+                case "setBrowserTabMuted" -> {
+                    Map<String, Object> payload = json.readValue(raw, OBJECT);
+                    target.putAll(object(payload.get("target")));
+                    property = "muted";
+                    value = payload.get("muted");
+                }
                 case "setRouteEnabled" -> {
                     Map<String, Object> payload = json.readValue(raw, OBJECT);
                     for (String field : List.of("routeId", "switchNodeId", "linkId"))
@@ -69,6 +75,13 @@ final class GnomeBridgeCommandAck {
                         target.put("nodeId", fields[2]);
                         target.put("instanceKey", "");
                     }
+                    property = name.endsWith("mute") ? "muted" : "volume";
+                    if (fields.length > 3) value = parseValue(fields[3]);
+                }
+                case "set_mixer_input_volume", "toggle_mixer_input_mute" -> {
+                    target.put("routeId", fields[0]);
+                    target.put("nodeId", fields[1]);
+                    target.put("inputId", fields[2]);
                     property = name.endsWith("mute") ? "muted" : "volume";
                     if (fields.length > 3) value = parseValue(fields[3]);
                 }

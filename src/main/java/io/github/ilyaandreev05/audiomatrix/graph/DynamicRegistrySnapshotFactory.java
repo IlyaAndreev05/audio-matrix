@@ -55,7 +55,7 @@ final class DynamicRegistrySnapshotFactory {
         binding.put("applicationName", DynamicRegistryValues.safe(stream.applicationName()));
         binding.put("canonicalApplicationId", canonical);
         binding.put("audioMatrixOwned", AudioMatrixOwnedStream.matches(stream));
-        binding.put("hasPcmBinding", !appId.isBlank() || !process.isBlank());
+        binding.put("hasPcmBinding", stream.id() >= 0 && DynamicRegistryValues.safe(stream.mediaClass()).startsWith("Stream/Output/Audio"));
         return new DynamicInstanceRegistry.InstanceSnapshot("applications", stableKey,
                 DynamicRegistryValues.firstNonBlank(displayName, stream.applicationName(), stream.description(),
                         stream.name(), stableKey), selector, DynamicRegistryValues.channels(stream), binding, confidence);
