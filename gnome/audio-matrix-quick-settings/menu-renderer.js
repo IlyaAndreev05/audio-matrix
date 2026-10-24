@@ -68,6 +68,7 @@ export default class AudioMatrixMenuRenderer {
                 return row;
             }, outputIcon, send});
         this._pinnedControls = new AudioMatrixPinnedControls({rows: this._rows, links: this._links, send,
+            disclosures: this._disclosures,
             registerLevelRow: (id, row) => this._levelRows.set(id, row)});
         this._groups = new AudioMatrixMenuGroups({send, disclosures: this._disclosures,
             applications: this._applications, links: this._links, output: this._output,
@@ -86,7 +87,7 @@ export default class AudioMatrixMenuRenderer {
         if (!this._column) this._createShell(snapshot);
         const {state, available, commandError, apiMismatch} = snapshot;
         const t = TEXT.ru;
-        this._rows.updateHeader(this._header, state, available);
+        this._rows.updateOpenAction(this._header, state, available);
         this._rows.updateStatus(this._errorStatus, commandError ? `${t.commandError}: ${commandError}` : '');
         this._errorStatus.actor.visible = Boolean(commandError);
         this._rows.updateStatus(this._connectionStatus, apiMismatch || (available ? '' : state ? t.unavailable : t.connecting));
@@ -151,7 +152,7 @@ export default class AudioMatrixMenuRenderer {
     _createShell(snapshot) {
         this._section.actor.add_style_class_name('audio-matrix-panel');
         this._section.actor.x_expand = true;
-        this._header = this._rows.addHeader(snapshot.state, snapshot.available);
+        this._header = this._rows.addOpenAction(snapshot.state, snapshot.available);
         this._errorStatus = this._rows.addStatus('', 'dialog-warning-symbolic');
         this._connectionStatus = this._rows.addStatus('', 'dialog-information-symbolic');
         this._column = createScrollableGroups(this._section);

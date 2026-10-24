@@ -1,20 +1,20 @@
 package io.github.ilyaandreev05.audiomatrix.gnome;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
+import static io.github.ilyaandreev05.audiomatrix.gnome.GnomeBridgeTestSupport.*;
 
 class GnomeBridgeCommandOrderingTest {
-    private static final ObjectMapper JSON = new ObjectMapper();
-    private record Signal(String name, String signature, List<String> arguments) {}
 
     @Test void acknowledgmentWaitsForRuntimePersistenceAndPublishedAuthoritativeState() throws Exception {
         LinkedBlockingQueue<Signal> signals = new LinkedBlockingQueue<>();
@@ -150,20 +150,61 @@ class GnomeBridgeCommandOrderingTest {
         assertEquals(true, ack.get("value"));
     }
 
-    private static GnomeControlBridge.Command volume(String request, double value) {
-        return new GnomeControlBridge.Command(5, request, "1", "setNodeVolume",
-                "{\"target\":{\"routeId\":\"main\",\"nodeId\":\"gain\",\"instanceKey\":\"\"},\"value\":" + value + "}");
+    @Test void aBlockedJavaFxPulseCannotDelayARealVolumeAcknowledgment() throws Exception {
+        LinkedBlockingQueue<Signal> signals = new LinkedBlockingQueue<>();
+        ExecutorService javaFx = Executors.newSingleThreadExecutor(r -> new Thread(r, "blocked-fx-test"));
+        ExecutorService audioLane = Executors.newSingleThreadExecutor(r -> new Thread(r, "audio-lane-test"));
+        ExecutorService stateLane = Executors.newSingleThreadExecutor(r -> new Thread(r, "state-lane-test"));
+        try (GnomeControlBridge bridge = new GnomeControlBridge(command -> CompletableFuture.completedFuture(null),
+                List.of(), command -> {
+                    // Mirrors the shell: rule re-apply on the audio lane, then a State publication barrier.
+                    CompletableFuture<Void> published = new CompletableFuture<>();
+                    audioLane.execute(() -> stateLane.execute(() -> published.complete(null)));
+                    return published;
+                }, (name, signature, values) -> signals.add(new Signal(name, signature, values)))) {
+            bridge.emitObservedState(Map.of("revision", "1", "volume", 0.8));
+            next(signals);
+            CompletableFuture<Void> fxPulse = new CompletableFuture<>();
+            javaFx.execute(() -> fxPulse.join());
+            CompletableFuture<Void> command = bridge.dispatch(volume("client:volume", 0.4));
+            command.get(2, TimeUnit.SECONDS);
+            JsonNode acknowledged = state(next(signals));
+            assertEquals("client:volume", acknowledged.path("commandAcks").get(0).path("requestId").asText(),
+                    "the ACK state is published while the JavaFX pulse is still blocked");
+            assertEquals("client:volume", next(signals).arguments().get(1));
+            fxPulse.complete(null);
+        } finally {
+            javaFx.shutdownNow();
+            audioLane.shutdownNow();
+            stateLane.shutdownNow();
+        }
     }
 
-    private static Signal next(LinkedBlockingQueue<Signal> signals) throws InterruptedException {
-        Signal signal = signals.poll(2, TimeUnit.SECONDS);
-        assertNotNull(signal, "the ordered bridge signal was not emitted");
-        return signal;
+    @Test void anAcceptedAckIsEmittedBeforeTheCommandMonitorReportsReady() throws Exception {
+        LinkedBlockingQueue<Signal> signals = new LinkedBlockingQueue<>();
+        try (GnomeControlBridge bridge = new GnomeControlBridge(command -> CompletableFuture.completedFuture(null),
+                List.of(), command -> CompletableFuture.completedFuture(null),
+                (name, signature, values) -> signals.add(new Signal(name, signature, values)), true)) {
+            bridge.emitObservedState(Map.of("revision", "1", "volume", 0.8));
+            assertTrue(signals.isEmpty(), "an observed State still waits for the command monitor readiness");
+            bridge.dispatch(volume("client:volume", 0.4)).get(2, TimeUnit.SECONDS);
+            JsonNode acknowledged = state(next(signals));
+            assertEquals("client:volume", acknowledged.path("commandAcks").get(0).path("requestId").asText(),
+                    "the accepted ACK does not wait for a reconnecting dbus-monitor");
+            assertEquals("client:volume", next(signals).arguments().get(1));
+        }
     }
 
-    private static JsonNode state(Signal signal) throws Exception {
-        assertEquals("State", signal.name());
-        assertEquals("s", signal.signature());
-        return JSON.readTree(signal.arguments().getFirst());
+    @Test void aClosedBridgeStopsPublishingAcksAndResults() throws Exception {
+        LinkedBlockingQueue<Signal> signals = new LinkedBlockingQueue<>();
+        GnomeControlBridge bridge = new GnomeControlBridge(command -> CompletableFuture.completedFuture(null),
+                List.of(), command -> CompletableFuture.completedFuture(null),
+                (name, signature, values) -> signals.add(new Signal(name, signature, values)));
+        bridge.emitObservedState(Map.of("revision", "1", "volume", 0.8));
+        next(signals);
+        bridge.close();
+        bridge.dispatch(volume("client:late", 0.4)).get(2, TimeUnit.SECONDS);
+        assertTrue(signals.isEmpty(), "a closed bridge emits neither an ACK nor a Result");
     }
+
 }

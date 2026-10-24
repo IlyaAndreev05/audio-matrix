@@ -37,23 +37,27 @@ abstract class AppShellUiPart21 extends AppShellUiPart20 {
         super(store, backend, themes);
     }
 
-    protected void applyConfiguredDeviceRules(PipeWireBackend.Snapshot current,Map<String,Object> config){
-        if(gnomeCommandInFlight||!current.connected())return;
+    protected CompletableFuture<Void> applyConfiguredDeviceRules(PipeWireBackend.Snapshot current,Map<String,Object> config){
+        if(gnomeCommandInFlight||!current.connected())return CompletableFuture.completedFuture(null);
         Set<Integer> liveIds=current.sinks().stream().map(AudioNode::id).collect(java.util.stream.Collectors.toSet());appliedDeviceRules.keySet().removeIf(id->!liveIds.contains(id));
+        List<CompletableFuture<Void>> pending=new ArrayList<>();
         for(AudioNode sink:current.sinks()){
             Map<String,Object> device=matchingDevice(config,sink);if(device==null){appliedDeviceRules.remove(sink.id());continue;}
             double volume=Math.max(0,Math.min(1,number(device.get("volume"),1.0)));boolean muted=Boolean.TRUE.equals(device.get("mute"));
             String signature=String.valueOf(device.get("id"))+"|"+map(device.get("selector"))+"|"+volume+"|"+muted;if(signature.equals(appliedDeviceRules.get(sink.id())))continue;appliedDeviceRules.put(sink.id(),signature);
             List<CompletableFuture<Void>> changes=new ArrayList<>();if(!Double.isFinite(sink.volume())||Math.abs(sink.volume()-volume)>.01)changes.add(backend.setVolume(sink.id(),volume));if(sink.muted()!=muted)changes.add(backend.setMute(sink.id(),muted));
-            CompletableFuture.allOf(changes.toArray(CompletableFuture<?>[]::new)).whenComplete((ignored,error)->{if(error!=null&&appliedDeviceRules.remove(sink.id(),signature))Platform.runLater(()->setNotice(t("Не удалось применить правило устройства ","Could not apply device rule for ")+nodeDisplayName(sink)+": "+rootMessage(error),true));});
+            pending.add(CompletableFuture.allOf(changes.toArray(CompletableFuture<?>[]::new)).whenComplete((ignored,error)->{if(error!=null&&appliedDeviceRules.remove(sink.id(),signature)&&!closing)Platform.runLater(()->setNotice(t("Не удалось применить правило устройства ","Could not apply device rule for ")+nodeDisplayName(sink)+": "+rootMessage(error),true));}));
         }
+        return CompletableFuture.allOf(pending.toArray(CompletableFuture<?>[]::new));
     }
 
-    protected void applyConfiguredStreamRules(PipeWireBackend.Snapshot current, Map<String, Object> config) {
-        if(gnomeCommandInFlight)return;
-        streamRuleApplier.apply(current, maps(config.get("applications")), (stream, error) ->
-                Platform.runLater(() -> setNotice(t("Не удалось применить правило потока ", "Could not apply stream rule for ")
-                        + stream.applicationName() + ": " + rootMessage(error), true)));
+    protected CompletableFuture<Void> applyConfiguredStreamRules(PipeWireBackend.Snapshot current, Map<String, Object> config) {
+        if(gnomeCommandInFlight)return CompletableFuture.completedFuture(null);
+        return streamRuleApplier.apply(current, maps(config.get("applications")), (stream, error) -> {
+            if (closing) return;
+            Platform.runLater(() -> setNotice(t("Не удалось применить правило потока ", "Could not apply stream rule for ")
+                    + stream.applicationName() + ": " + rootMessage(error), true));
+        });
     }
 
     protected Map<String, Object> ensureDevice(Map<String, Object> config, AudioNode node) {

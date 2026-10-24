@@ -145,24 +145,30 @@ public final class GnomeControlBridge implements AutoCloseable {
         catch(NumberFormatException invalid){return null;}
     }
     synchronized CompletableFuture<Void> dispatch(Command command){
+        // Opening the window is presentation-only: it never takes the serialized audio slot nor
+        // touches the in-flight audio marker, yet it still gets its own real completion and ACK.
+        if("open".equals(command.name()))return complete(command,execute(command,commands).thenCompose(result->confirmCommandState(command,result)));
         CompletableFuture<CommandResult> execution=commandTail.thenCompose(ignored->execute(command,commands))
                 .thenCompose(result->confirmCommandState(command,result));
-        commandTail=execution.handle((result,error)->{
+        commandTail=complete(command,execution);
+        return commandTail;
+    }
+    private CompletableFuture<Void> complete(Command command,CompletableFuture<CommandResult> execution){
+        return execution.handle((result,error)->{
             CommandResult confirmed=error==null&&result!=null?result:new CommandResult("error",error==null?"Command handler returned no result":safeMessage(error));
             emitAcknowledgment(command,confirmed);
             if(!closed.get())emitter.execute(()->emitResult(command,confirmed.status(),confirmed.message()));
             return null;
         });
-        return commandTail;
     }
     private CompletableFuture<CommandResult> confirmCommandState(Command command,CommandResult result){
         try{
             CompletableFuture<Void> confirmed=confirmState.apply(command);
             if(confirmed==null)throw new IllegalStateException("State publisher returned no completion result");
             return confirmed.handle((ignored,error)->error==null?result:
-                    new CommandResult("error","Could not publish confirmed state: "+safeMessage(error)));
+                    new CommandResult("error","Could not confirm command state: "+safeMessage(error)));
         }catch(RuntimeException error){
-            return CompletableFuture.completedFuture(new CommandResult("error","Could not publish confirmed state: "+safeMessage(error)));
+            return CompletableFuture.completedFuture(new CommandResult("error","Could not confirm command state: "+safeMessage(error)));
         }
     }
     synchronized void emitObservedState(Map<String,Object> state){
@@ -170,7 +176,13 @@ public final class GnomeControlBridge implements AutoCloseable {
     }
     private void emitAcknowledgment(Command command,CommandResult result){
         if(command.requestId().isBlank())return;
-        synchronized(stateSignalLock){String payload=stateSequencer.acknowledge(GnomeBridgeCommandAck.create(command,result,json));if(!payload.isBlank())emitStateWhenReady(payload);}
+        // An accepted ACK is published even while the command monitor is reconnecting: the client
+        // already reached us through the bridge, and a readiness gate here only caused timeouts.
+        synchronized(stateSignalLock){String payload=stateSequencer.acknowledge(GnomeBridgeCommandAck.create(command,result,json));if(!payload.isBlank())emitStateUnconditionally(payload);}
+    }
+    private void emitStateUnconditionally(String payload){
+        if(closed.get())return;
+        emitter.execute(()->{if(!closed.get())emit("State",payload);});
     }
     private boolean stateSignalListenerReady(){
         return (!requireCommandListener&&!started.get())||commandChannel.isReady();

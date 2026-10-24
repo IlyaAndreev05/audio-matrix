@@ -77,6 +77,15 @@ export function visibleBrowserTabs(application) {
         && typeof tab.sessionToken === 'string' && tab.sessionToken.length > 0);
 }
 
+/** Archived generator rows keep recovering saved gains but never occupy the live mixer. */
+export function visibleMixerInputs(inputs) {
+    return (inputs || []).filter(input => !(input?.generated === true && input?.available === false));
+}
+
+export function visiblePinMixerInputs(pin) {
+    return visibleMixerInputs(pin?.mixerInputs);
+}
+
 export function stableMenuRows(state) {
     const rows = [];
     for (const group of orderedQuickGroups(state)) {

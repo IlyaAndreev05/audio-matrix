@@ -161,6 +161,7 @@ abstract class AppShellContract01 extends AppShellBase {
     protected abstract AudioNode activeOutputNode();
     protected abstract void updateMeterTarget();
     protected abstract void publishGnomeState();
+    protected abstract void publishGnomeState(PipeWireBackend.Snapshot observation, VersionedConfig config);
     protected abstract void applyRoutes();
     protected abstract void clearRoutes();
     protected abstract void maybeApplyConfiguredRoutes(Map<String, Object> config, PipeWireBackend.Snapshot current);
@@ -195,8 +196,8 @@ abstract class AppShellContract01 extends AppShellBase {
     protected abstract void saveDeviceMute(AudioNode sink, boolean muted);
     protected abstract void saveAppVolume(AudioNode stream, double volume);
     protected abstract void saveAppMute(AudioNode stream, boolean muted);
-    protected abstract void applyConfiguredDeviceRules(PipeWireBackend.Snapshot current,Map<String,Object> config);
-    protected abstract void applyConfiguredStreamRules(PipeWireBackend.Snapshot current, Map<String, Object> config);
+    protected abstract CompletableFuture<Void> applyConfiguredDeviceRules(PipeWireBackend.Snapshot current,Map<String,Object> config);
+    protected abstract CompletableFuture<Void> applyConfiguredStreamRules(PipeWireBackend.Snapshot current, Map<String, Object> config);
     protected abstract Map<String, Object> ensureDevice(Map<String, Object> config, AudioNode node);
     protected abstract Map<String,Object> matchingDevice(Map<String,Object> config,AudioNode node);
     protected abstract AudioNode resolveDevice(Map<String,Object> config,Map<String,Object> device);

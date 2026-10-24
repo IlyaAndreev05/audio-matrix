@@ -1,19 +1,26 @@
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+import Atk from 'gi://Atk';
 import AudioMatrixMenuQuickControls from './menu-quick-controls.js';
 import AudioMatrixMenuMatrix from './menu-matrix.js';
 import AudioMatrixMenuMixer from './menu-mixer.js';
+import AudioMatrixMenuDisclosure from './menu-disclosure.js';
 import {controlPosition, formatControlValue} from './menu-control-scale.js';
 
 /** Explicit user pins reuse the same real graph controls, without populating the default panel. */
 export default class AudioMatrixPinnedControls {
-    constructor({rows, links, send, registerLevelRow}) {
+    constructor({rows, links, send, registerLevelRow, disclosures = null}) {
         this._rows = rows;
         this._links = links;
+        this._send = send;
         this._levels = new Map();
         this._toggles = new Map();
         this._linkRows = new Map();
         this._matrixRows = new Map();
         this._matrix = new AudioMatrixMenuMatrix(send);
+        // The renderer may inject the shared map so saved view changes reach this header too;
+        // a private map keeps the nested disclosure working in isolated fixtures.
+        this._disclosures = disclosures || new AudioMatrixMenuDisclosure();
+        this._ownsDisclosures = !disclosures;
         const register = (map, id, value) => {
             map.set(id, value);
             const actor = value.item || value.card?.actor || value;
@@ -29,14 +36,37 @@ export default class AudioMatrixPinnedControls {
     }
 
     render(pin, t, target) {
-        const heading = new PopupMenu.PopupMenuItem(pin.name || '', {reactive: false, can_focus: false});
-        heading.add_style_class_name('audio-matrix-node-title');
-        target.addMenuItem(heading);
-        this._controls.render(pin.controls || [], t, target);
-        if (pin.mixerInputs) this._mixer.render(pin.routeId, pin.nodeId, pin.id, pin.mixerInputs, t, target);
+        const controls = pin.controls || [];
+        const visibleInputs = pin.mixerInputs ? this._mixer.visible(pin.mixerInputs) : [];
+        const hasMixer = Boolean(pin.mixerInputs) && visibleInputs.length > 0;
+        // No visible row means no card at all: not a heading, not an empty placeholder.
+        if (!controls.length && !hasMixer) return;
+        const id = String(pin.id);
+        const header = new PopupMenu.PopupImageMenuItem(pin.name || '', 'pan-end-symbolic');
+        header.add_accessible_state(Atk.StateType.EXPANDABLE);
+        const content = new PopupMenu.PopupMenuSection();
+        content.actor.add_style_class_name('audio-matrix-tabs');
+        target.addMenuItem(header);
+        target.addMenuItem(content);
+        if (controls.length) this._controls.render(controls, t, content);
+        if (hasMixer) this._mixer.render(pin.routeId, pin.nodeId, pin.id, visibleInputs, t, content);
+        const open = Boolean(this._disclosures.pinOpen(pin));
+        content.actor.visible = open && pin.showChildren !== false;
+        header.setIcon(open ? 'pan-down-symbolic' : 'pan-end-symbolic');
+        if (open) header.add_accessible_state(Atk.StateType.EXPANDED);
+        this._disclosures.trackPin(id, header, content, pin.showChildren !== false);
+        header.connect('activate', () => {
+            const next = this._disclosures.togglePin(id);
+            this._send('set_quick_pin_view', `${pin.id}\t${next ? 'EXPANDED' : 'COMPACT'}`);
+            header.stop_emission_by_name('activate');
+        });
     }
 
     update(state, pendingValue, available) {
+        if (this._ownsDisclosures) {
+            this._disclosures.retain(state);
+            this._disclosures.sync(state);
+        }
         for (const control of state.quickControls || []) {
             const target = {quickControlId: String(control.id)};
             const requested = pendingValue(target, 'value');
@@ -65,5 +95,6 @@ export default class AudioMatrixPinnedControls {
     destroy() {
         this._controls.destroy();
         for (const map of [this._levels, this._toggles, this._linkRows, this._matrixRows]) map.clear();
+        if (this._ownsDisclosures) this._disclosures.destroy();
     }
 }

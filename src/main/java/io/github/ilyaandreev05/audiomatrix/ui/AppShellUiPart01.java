@@ -47,16 +47,19 @@ abstract class AppShellUiPart01 extends AppShellState {
         search.textProperty().addListener((obs, old, value) -> showPage(currentPage));
         store.addListener(event -> {
             if (suppressConfigListener) return;
-            Platform.runLater(() -> {
-                if (event.message().startsWith("Configuration rejected:")) setNotice(event.message(), true);
-                else {
-                    setNotice(event.message(), false);
-                    applyConfiguredDeviceRules(snapshot, event.config());
-                    applyConfiguredStreamRules(snapshot, event.config());
-                    maybeApplyConfiguredRoutes(event.config(), snapshot);
-                    showPage(currentPage);
-                }
-                publishGnomeState();
+            if (event.message().startsWith("Configuration rejected:")) {
+                runOnFx(() -> setNotice(event.message(), true));
+                return;
+            }
+            runOnFx(() -> setNotice(event.message(), false));
+            runRuntimeAudio(() -> {
+                VersionedConfig config = store.snapshot();
+                PipeWireBackend.Snapshot observation = snapshot;
+                applyConfiguredDeviceRules(observation, config);
+                applyConfiguredStreamRules(observation, config);
+                maybeApplyConfiguredRoutes(config, observation);
+                requestGnomeStatePublication(null);
+                requestUiRefresh();
             });
         });
 
@@ -64,29 +67,32 @@ abstract class AppShellUiPart01 extends AppShellState {
 
     public void start() {
         meterRefresh.setCycleCount(Timeline.INDEFINITE);
-        meterRefresh.play();
-        routeRefresh = new Timeline(new KeyFrame(javafx.util.Duration.seconds(1),
-                event -> maybeApplyConfiguredRoutes(store.snapshot(), backend.current())));
-        routeRefresh.setCycleCount(Timeline.INDEFINITE);
-        routeRefresh.play();
+        if (uiRefreshGate.visible()) meterRefresh.play();
+        routeRefresh = runtimeAudio.scheduleWithFixedDelay(() -> {
+            try {
+                maybeApplyConfiguredRoutes(store.snapshot(), snapshot);
+            } catch (RuntimeException failure) {
+                System.err.println("Audio Matrix route refresh failed: " + rootMessage(failure));
+            }
+        }, 1, 1, TimeUnit.SECONDS);
         gnomeBridge.start();
         publishGnomeState();
-        backend.start(next -> Platform.runLater(() -> {
-            snapshot = next;
-            syncSystemMasterFromDefaultSink(next, store.snapshot());
-            applyConfiguredDeviceRules(next,store.snapshot());
-            applyConfiguredStreamRules(next, store.snapshot());
-            maybeApplyConfiguredRoutes(store.snapshot(), next);
-            if (selectedSink != null) selectedSink = next.sinks().stream().filter(n -> n.name().equals(selectedSink.name())).findFirst().orElse(null);
-            if (selectedSink == null) selectedSink = configuredSink();
-            if (selectedSink == null) selectedSink = next.sinks().stream().filter(n -> n.id() == next.defaultSinkId()).findFirst().orElse(null);
-            updateMeterTarget();
-            connection.setText(next.connected() ? t("PipeWire подключён", "PipeWire connected") : t("PipeWire недоступен", "PipeWire unavailable"));
-            connection.getStyleClass().removeAll("accent", "danger", "warning");
-            if(currentPage==Page.GRAPH)refreshGraphPageRuntime();
-            else showPage(currentPage);
-            publishGnomeState();
-        }));
+        backend.start(next -> runRuntimeAudio(() -> handleBackendObservation(next)));
+    }
+
+    /** One audio-lane pass over a fresh observation; the config snapshot is captured once. */
+    private void handleBackendObservation(PipeWireBackend.Snapshot observed) {
+        if (closing) return;
+        if (observed.capturedAtMillis() >= snapshot.capturedAtMillis()) snapshot = observed;
+        PipeWireBackend.Snapshot observation = snapshot;
+        VersionedConfig config = store.snapshot();
+        if (!gnomeCommandInFlight && observation.capturedAtMillis() > lastMixerCommandWriteMillis)
+            syncSystemMasterFromDefaultSink(observation, config);
+        applyConfiguredDeviceRules(observation, config);
+        applyConfiguredStreamRules(observation, config);
+        maybeApplyConfiguredRoutes(config, observation);
+        requestGnomeStatePublication(null);
+        requestUiRefresh();
     }
 
     protected void buildChrome() {
@@ -129,6 +135,13 @@ abstract class AppShellUiPart01 extends AppShellState {
     }
 
     protected void showPage(Page page) {
+        if (!uiRefreshGate.visible()) {
+            currentPage = page;
+            requestUiRefresh();
+            return;
+        }
+        forcedUiRender.set(false);
+        graphRuntimeDirty.set(false);
         if(currentPage==Page.GRAPH&&body.getCenter() instanceof ScrollPane previousGraphScroll){
             graphPageScrollH=previousGraphScroll.getHvalue();graphPageScrollV=previousGraphScroll.getVvalue();
         }
@@ -161,5 +174,6 @@ abstract class AppShellUiPart01 extends AppShellState {
             if(currentPage==Page.GRAPH&&body.getCenter()==scroll){scroll.setHvalue(graphPageScrollH);scroll.setVvalue(graphPageScrollV);}
         });
         if (notice.isVisible()) body.setBottom(notice);
+        lastRenderedStructure = uiStructureSignature(store.snapshot(), snapshot);
     }
 }

@@ -120,6 +120,7 @@ abstract class AppShellUiPart04GraphPage extends AppShellUiPart03 {
     }
 
     protected void refreshGraphPageRuntime(){
+        if(!uiRefreshGate.visible()){requestUiRefresh();return;}
         if(currentPage!=Page.GRAPH||activeGraphWorkspace==null||activeGraphPage==null)return;
         Map<String,Object> config=store.snapshot();
         AudioGraph configured;

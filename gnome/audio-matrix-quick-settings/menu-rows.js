@@ -28,16 +28,12 @@ export default class AudioMatrixMenuRows {
         this._onDragEnd = onDragEnd;
     }
 
-    addHeader(_state, available) {
+    addOpenAction(_state, available) {
         const t = TEXT.ru;
         const item = new PopupMenu.PopupBaseMenuItem({reactive: false, activate: false, can_focus: false});
-        item.add_style_class_name('audio-matrix-heading');
+        item.add_style_class_name('audio-matrix-open-action');
         const row = boxLayout({spacing: 10, x_expand: true});
-        row.add_child(new St.Icon({icon_name: 'audio-x-generic-symbolic', style_class: 'audio-matrix-group-icon'}));
-        const labels = boxLayout({vertical: true, spacing: 3, x_expand: true});
-        labels.add_child(new St.Label({text: t.title, style_class: 'audio-matrix-title'}));
-        labels.add_child(new St.Label({text: t.subtitle, style_class: 'audio-matrix-subtitle'}));
-        row.add_child(labels);
+        row.add_child(new St.Bin({x_expand: true}));
         item._audioMatrixAvailable = available;
         item._audioMatrixOpenButton = iconButton('preferences-system-symbolic', t.open,
             () => this._onOpen(item._audioMatrixAvailable));
@@ -47,7 +43,7 @@ export default class AudioMatrixMenuRows {
         return item;
     }
 
-    updateHeader(item, _state, available) {
+    updateOpenAction(item, _state, available) {
         if (item) item._audioMatrixAvailable = available;
     }
 
@@ -84,6 +80,7 @@ export default class AudioMatrixMenuRows {
     createLevelRow(options) {
         const item = new PopupMenu.PopupBaseMenuItem({reactive: false, activate: false, can_focus: false});
         item.add_style_class_name(options.nested ? 'audio-matrix-tab' : 'audio-matrix-card');
+        if (!options.nested) item.add_style_class_name('quick-toggle-menu');
         const row = boxLayout({vertical: true, spacing: 9, x_expand: true});
         const heading = boxLayout({spacing: 9, x_expand: true});
         const iconActor = new St.Icon({style_class: 'audio-matrix-node-icon', y_align: Clutter.ActorAlign.CENTER});

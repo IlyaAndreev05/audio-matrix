@@ -25,7 +25,7 @@ export default class AudioMatrixMenuDisclosure {
         const collapsed = Boolean(group.collapsed);
         const previous = this._groupCollapsed.get(id);
         const open = previous !== undefined && previous !== collapsed
-            ? !collapsed : (this._groupOpen.get(id) ?? !collapsed);
+            ? !collapsed : (this._groupOpen.get(id) ?? false);
         this._groupCollapsed.set(id, collapsed);
         this._groupOpen.set(id, open);
         return open;
@@ -36,7 +36,7 @@ export default class AudioMatrixMenuDisclosure {
         const view = pinView(pin);
         const previous = this._pinView.get(id);
         const open = previous !== undefined && previous !== view
-            ? view !== 'COMPACT' : (this._pinOpen.get(id) ?? view !== 'COMPACT');
+            ? view !== 'COMPACT' : (this._pinOpen.get(id) ?? false);
         this._pinView.set(id, view);
         this._pinOpen.set(id, open);
         return open;
@@ -48,6 +48,14 @@ export default class AudioMatrixMenuDisclosure {
 
     trackPin(id, header, content, showChildren = true) {
         this._pinRows.set(id, {header, content, showChildren});
+    }
+
+    untrackGroup(id) {
+        this._groupRows.delete(String(id));
+    }
+
+    untrackPin(id) {
+        this._pinRows.delete(String(id));
     }
 
     toggleGroup(id) {

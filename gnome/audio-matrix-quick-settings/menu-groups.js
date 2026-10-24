@@ -2,7 +2,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import Atk from 'gi://Atk';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
-import {orderedQuickGroups} from './menu-state.js';
+import {orderedQuickGroups, visiblePinMixerInputs} from './menu-state.js';
 import {removeMenuItem, reorderMenuItems} from './menu-row-utils.js';
 
 function detailsSignature(pin) {
@@ -27,7 +27,11 @@ function renderable(pin) {
     if (pin.pinned === false || pin.available === false && !pin.showWhenOffline) return false;
     if (pin.registry === 'browser_tabs') return false;
     if (pin.registry === 'applications' && !pin.applications?.length && !pin.gain && !pin.sourceGain) return false;
-    return Boolean(pin.id);
+    if (!pin.id) return false;
+    if (pin.nodeType === 'composite') return true;
+    if (pin.registry === 'applications' || pin.applications?.length || pin.sourceGain || pin.routeControl
+        || pin.gain || pin.sharedGain || pin.output) return true;
+    return Boolean((pin.controls || []).length || visiblePinMixerInputs(pin).length);
 }
 
 function visiblePinRows(pin, applicationsRenderer, links, rows) {
@@ -67,6 +71,9 @@ export default class AudioMatrixMenuGroups {
         const activeGroups = new Set();
         for (const group of orderedQuickGroups(state)) {
             const id = String(group.id || group.name);
+            const renderPins = pins.filter(pin => String(pin.groupId) === id && renderable(pin))
+                .sort((left, right) => Number(left.order || 0) - Number(right.order || 0));
+            if (!renderPins.length) continue;
             activeGroups.add(id);
             const entry = this._groupEntries.get(id) || this._createGroup(id);
             entry.header.label.text = String(group.name || id);
@@ -74,9 +81,7 @@ export default class AudioMatrixMenuGroups {
             entry.content.actor.visible = this._disclosures.groupOpen(group);
             this._disclosures.trackGroup(id, entry.header, entry.content);
             const desired = [];
-            let entries = pins.filter(pin => String(pin.groupId) === id && renderable(pin))
-                .sort((left, right) => Number(left.order || 0) - Number(right.order || 0));
-            for (const pin of entries) {
+            for (const pin of renderPins) {
                 const pinId = String(pin.id);
                 activePins.add(pinId);
                 let pinEntry = this._pinEntries.get(pinId);
@@ -99,9 +104,6 @@ export default class AudioMatrixMenuGroups {
             }
             reorderMenuItems(entry.content, entry.pinOrder, desired);
             entry.pinOrder = desired;
-            entry.empty.actor.visible = desired.length === 0;
-            entry.empty.label.text = id === 'applications' || id === 'sources' ? t.noApplications
-                : id === 'outputs' ? t.noOutputs : t.noPinnedItems;
             desiredGroups.push(entry.wrapper);
         }
         for (const [id, entry] of this._pinEntries) {
@@ -112,6 +114,7 @@ export default class AudioMatrixMenuGroups {
         reorderMenuItems(column, this._groupOrder, desiredGroups);
         for (const [id, entry] of this._groupEntries) {
             if (activeGroups.has(id)) continue;
+            this._disclosures.untrackGroup?.(id);
             entry.wrapper.destroy?.();
             this._groupEntries.delete(id);
         }
@@ -122,7 +125,7 @@ export default class AudioMatrixMenuGroups {
         const wrapper = new PopupMenu.PopupMenuSection();
         wrapper.actor.add_style_class_name('audio-matrix-group');
         wrapper._audioMatrixGroupId = id;
-        const header = new PopupMenu.PopupBaseMenuItem({activate: false, can_focus: true});
+        const header = new PopupMenu.PopupBaseMenuItem({can_focus: true});
         header.add_style_class_name('audio-matrix-group-header');
         header.add_accessible_state(Atk.StateType.EXPANDABLE);
         header.add_child(new St.Icon({icon_name: groupIcon(id), style_class: 'audio-matrix-group-icon'}));
@@ -134,12 +137,9 @@ export default class AudioMatrixMenuGroups {
         header.setIcon = icon => { chevron.icon_name = icon; };
         const content = new PopupMenu.PopupMenuSection();
         content.actor.add_style_class_name('audio-matrix-group-content');
-        const empty = new PopupMenu.PopupMenuItem('', {reactive: false, can_focus: false});
-        empty.add_style_class_name('audio-matrix-empty');
-        content.addMenuItem(empty);
         wrapper.addMenuItem(header);
         wrapper.addMenuItem(content);
-        const entry = {id, wrapper, header, content, empty, pinOrder: []};
+        const entry = {id, wrapper, header, content, pinOrder: []};
         this._groupEntries.set(id, entry);
         header.connect('activate', () => {
             const open = this._disclosures.toggleGroup(id);
@@ -169,6 +169,7 @@ export default class AudioMatrixMenuGroups {
         } else if (pin.gain || pin.sharedGain || pin.output) {
             this._output.render(pin, t, entry.wrapper);
         } else {
+            this._disclosures.untrackPin?.(String(pin.id));
             this._renderExtra?.(pin, t, entry.wrapper);
         }
         entry.signature = signature;
@@ -220,6 +221,7 @@ export default class AudioMatrixMenuGroups {
 
     _forgetEntry(entry) {
         for (const child of entry.composite?.entries.values() || []) this._forgetEntry(child);
+        this._disclosures.untrackPin?.(entry.id);
         this._applications.forgetPin?.(entry.id);
         this._forgetLevelRows?.(entry.wrapper);
         entry.wrapper.destroy?.();

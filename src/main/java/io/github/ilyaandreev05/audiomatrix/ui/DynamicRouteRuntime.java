@@ -2,36 +2,69 @@ package io.github.ilyaandreev05.audiomatrix.ui;
 
 import io.github.ilyaandreev05.audiomatrix.audio.*;
 import io.github.ilyaandreev05.audiomatrix.config.ConfigStore;
+import io.github.ilyaandreev05.audiomatrix.config.VersionedConfig;
 import io.github.ilyaandreev05.audiomatrix.gnome.BrowserAdapter;
 import io.github.ilyaandreev05.audiomatrix.graph.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
+import java.util.function.LongSupplier;
+import static io.github.ilyaandreev05.audiomatrix.ui.DynamicRouteSupport.*;
 
 /** Reconciles live bindings into one effective graph and derives the runtime capture bindings. */
 final class DynamicRouteRuntime implements AutoCloseable {
     private static final long FALLBACK_MILLIS = 5_000;
     record Prepared(String routeId, DynamicInstanceRegistry.ReconcileResult reconcile, Map<String,Object> runtimeConfig, Map<String,CapturedStreamBinding> bindings, String signature, AudioGraph baseGraph, List<Map<String,Object>> newRules) {}
-    private record Cached(String input, long at, DynamicInstanceRegistry.ReconcileResult result) {}
+    /** Revision- and mutation-aware projection cache; only used for versioned configuration. */
+    private record Cached(String input, long configRevision, String sourceConfigFingerprint, long at,
+                          DynamicInstanceRegistry.ReconcileResult result) {}
+    /** One-entry prepared-graph cache; a map per route would only retain stale runtime graphs. */
+    private record PreparedCache(String input, String signature, long configRevision,
+                                 String sourceConfigFingerprint, long generation, String routeId, long at,
+                                 Prepared prepared) {}
+    /** Everything the signature and the reconciler need, computed once before any graph decode. */
+    private record DraftInput(String routeId, String input, String signature, Map<String,Object> ruleConfig,
+                              RuleDiscovery discovery) {}
     private record SnapshotSet(Map<String,List<DynamicInstanceRegistry.InstanceSnapshot>> byGenerator, Map<String,String> parents) {}
     private record Draft(String routeId, AudioGraph base, DynamicInstanceRegistry.ReconcileResult result, String signature, String input, Map<String,Object> compileBase, List<Map<String,Object>> newRules) {}
     private record RuleDiscovery(List<Map<String,Object>> newRules, Map<String,String> ruleIds) {}
     private final DynamicRegistryStore registryStore;
     private final ConcurrentMap<String,Cached> cache = new ConcurrentHashMap<>();
+    private volatile PreparedCache preparedCache;
+    private volatile LongSupplier clock = System::currentTimeMillis;
     private volatile List<BrowserAdapter> adapters = List.of();
     private volatile Runnable browserChange = () -> {};
     private volatile String diagnostic = "";
     private final Consumer<BrowserAdapter.BrowserEvent> listener = event -> browserChange.run();
     private boolean listening;
+    private volatile boolean closed;
 
     DynamicRouteRuntime(ConfigStore store) { registryStore = new DynamicRegistryStore(store); }
     String diagnostic() { return diagnostic; }
     synchronized void watch(List<BrowserAdapter> shared, Runnable changed) { browserChange = changed == null ? () -> {} : changed; if (!listening) { adapters = shared == null ? List.of() : List.copyOf(shared); adapters.forEach(a -> a.addListener(listener)); listening = true; } }
-    @Override public synchronized void close() { if (listening) adapters.forEach(a -> a.removeListener(listener)); listening = false; browserChange = () -> {}; }
+    @Override public synchronized void close() {
+        if (listening) adapters.forEach(a -> a.removeListener(listener));
+        closed = true;
+        listening = false; browserChange = () -> {}; preparedCache = null; cache.clear();
+    }
+    /** Test seam for the five-second fallback boundary; production always uses wall time. */
+    void clock(LongSupplier source) { clock = source == null ? System::currentTimeMillis : source; }
 
     Prepared prepareNow(Map<String,Object> config, PipeWireBackend.Snapshot snapshot, List<BrowserAdapter> shared, long generation) {
-        Draft d = draft(config, snapshot, shared, generation); Map<String,Object> runtime = d.result == null ? d.compileBase : GraphPipeWireCompiler.compile(d.result, d.compileBase);
-        return new Prepared(d.routeId, d.result, runtime, captureBindings(runtime), d.signature, d.base, d.newRules);
+        DraftInput input = draftInput(config, snapshot, shared, generation);
+        if (!(config instanceof VersionedConfig)) return prepare(input, snapshot, shared, generation, null);
+        CacheKey key = cacheKey(config);
+        PreparedCache cached = preparedCache;
+        long now = clock.getAsLong();
+        if (cached != null && cached.input().equals(input.input()) && cached.signature().equals(input.signature())
+                && cached.configRevision() == key.revision() && cached.sourceConfigFingerprint().equals(key.fingerprint())
+                && cached.generation() == generation && cached.routeId().equals(input.routeId())
+                && now - cached.at() < FALLBACK_MILLIS) return cached.prepared();
+        Prepared prepared = prepare(input, snapshot, shared, generation, key);
+        // A miss must not extend the fallback window of the previous entry; it is simply replaced.
+        preparedCache = new PreparedCache(input.input(), input.signature(), key.revision(), key.fingerprint(),
+                generation, input.routeId(), now, prepared);
+        return prepared;
     }
 
     /** Current discovery projection without persisting generated children or compiling runtime links. */
@@ -39,33 +72,77 @@ final class DynamicRouteRuntime implements AutoCloseable {
             PipeWireBackend.Snapshot snapshot, List<BrowserAdapter> shared, long generation) {
         return draft(config, snapshot, shared, generation).result;
     }
-    String signature(Map<String,Object> config, PipeWireBackend.Snapshot snapshot, List<BrowserAdapter> shared, long generation) { return draft(config, snapshot, shared, generation).signature; }
+    String signature(Map<String,Object> config, PipeWireBackend.Snapshot snapshot, List<BrowserAdapter> shared, long generation) { return draftInput(config, snapshot, shared, generation).signature(); }
     CompletableFuture<DynamicInstanceRegistry.ReconcileResult> reconcileOnly(Map<String,Object> config, PipeWireBackend.Snapshot snapshot, List<BrowserAdapter> shared, long generation) {
+        // The captured snapshot supplies scope and revision; a newer store revision is never substituted.
         return CompletableFuture.supplyAsync(() -> draft(config, snapshot, shared, generation)).thenCompose(d -> persist(config, d, true).thenApply(ignored -> d.result));
     }
     CompletableFuture<Void> persist(Map<String,Object> config, Prepared p, boolean enabled) {
         return persist(config, new Draft(p.routeId, p.baseGraph, p.reconcile, p.signature, "", Map.of(), p.newRules), enabled);
     }
     private CompletableFuture<Void> persist(Map<String,Object> config, Draft d, boolean enabled) {
+        if (closed) return CompletableFuture.failedFuture(new IllegalStateException("Audio Matrix runtime is closed"));
         return registryStore.persist(config, d.routeId, d.base, d.result, d.newRules, enabled);
     }
 
+    private Prepared prepare(DraftInput input, PipeWireBackend.Snapshot snapshot, List<BrowserAdapter> shared,
+                             long generation, CacheKey key) {
+        Draft d = draft(input, snapshot, shared, generation, key);
+        Map<String,Object> runtime = d.result == null ? d.compileBase : GraphPipeWireCompiler.compile(d.result, d.compileBase);
+        return new Prepared(d.routeId, d.result, runtime, captureBindings(runtime), d.signature, d.base, d.newRules);
+    }
+
     private Draft draft(Map<String,Object> config, PipeWireBackend.Snapshot snapshot, List<BrowserAdapter> shared, long generation) {
+        return draft(draftInput(config, snapshot, shared, generation), snapshot, shared, generation,
+                config instanceof VersionedConfig ? cacheKey(config) : null);
+    }
+
+    private Draft draft(DraftInput in, PipeWireBackend.Snapshot snapshot, List<BrowserAdapter> shared,
+                        long generation, CacheKey key) {
         List<BrowserAdapter> browsers = shared == null ? List.of() : shared;
-        Map<String,Object> ruleConfig = new LinkedHashMap<>(config); ruleConfig.put("applications", mutableMaps(config.get("applications")));
-        RuleDiscovery discovery = discoverRules(ruleConfig, snapshot); String input = stateSignature(config, snapshot, browsers, generation), routeId = selectedRoute(config);
-        if (routeId.isBlank()) return new Draft("", null, null, stateSignature(ruleConfig, snapshot, browsers, generation), input, ruleConfig, discovery.newRules());
-        Map<String,Object> route = maps(config.get("route_library")).stream().filter(item -> routeId.equals(item.get("id"))).findFirst().orElseThrow(() -> new IllegalArgumentException("Active graph route is missing: " + routeId));
-        AudioGraph graph = GraphCodec.fromMap(route); Cached old = cache.get(routeId); long now = System.currentTimeMillis();
-        DynamicInstanceRegistry.ReconcileResult result = old != null && old.input.equals(input) && now - old.at < FALLBACK_MILLIS ? old.result : null;
-        if (result == null) {
-            SnapshotSet observed = observations(graph, ruleConfig, snapshot, browsers, discovery.ruleIds());
-            result = DynamicInstanceRegistry.reconcile(graph, observed.byGenerator, observed.parents,
-                    (selector, instance) -> applicationGain(ruleConfig, instance), (key, observation) -> endpointGain(ruleConfig, key));
-            cache.put(routeId, new Cached(input, now, result));
+        if (in.routeId().isBlank()) return new Draft("", null, null, in.signature(), in.input(), in.ruleConfig(), in.discovery().newRules());
+        Map<String,Object> route = maps(in.ruleConfig().get("route_library")).stream().filter(item -> in.routeId().equals(item.get("id"))).findFirst().orElseThrow(() -> new IllegalArgumentException("Active graph route is missing: " + in.routeId()));
+        AudioGraph graph = GraphCodec.fromMap(route);
+        long now = clock.getAsLong();
+        DynamicInstanceRegistry.ReconcileResult result = null;
+        if (key != null) {
+            Cached old = cache.get(in.routeId());
+            if (old != null && old.input().equals(in.input()) && old.configRevision() == key.revision()
+                    && old.sourceConfigFingerprint().equals(key.fingerprint()) && now - old.at() < FALLBACK_MILLIS)
+                result = old.result();
         }
-        Map<String,Object> base = configWithGraph(ruleConfig, routeId, result.configuredGraph());
-        return new Draft(routeId, graph, result, stateSignature(ruleConfig, snapshot, browsers, generation), input, base, discovery.newRules());
+        if (result == null) {
+            SnapshotSet observed = observations(graph, in.ruleConfig(), snapshot, browsers, in.discovery().ruleIds());
+            result = DynamicInstanceRegistry.reconcile(graph, observed.byGenerator, observed.parents,
+                    (selector, instance) -> applicationGain(in.ruleConfig(), instance),
+                    (endpoint, observation) -> endpointGain(in.ruleConfig(), endpoint));
+            if (key != null)
+                cache.put(in.routeId(), new Cached(in.input(), key.revision(), key.fingerprint(), now, result));
+        }
+        Map<String,Object> base = configWithGraph(in.ruleConfig(), in.routeId(), result.configuredGraph());
+        return new Draft(in.routeId(), graph, result, in.signature(), in.input(), base, in.discovery().newRules());
+    }
+
+    private DraftInput draftInput(Map<String,Object> config, PipeWireBackend.Snapshot snapshot,
+                                  List<BrowserAdapter> shared, long generation) {
+        List<BrowserAdapter> browsers = shared == null ? List.of() : shared;
+        Map<String,Object> ruleConfig = new LinkedHashMap<>(config);
+        ruleConfig.put("applications", mutableMaps(config.get("applications")));
+        // Discovery must run before the signatures are taken: its inserted rules are part of them.
+        RuleDiscovery discovery = discoverRules(ruleConfig, snapshot);
+        String input = stateSignature(config, snapshot, browsers, generation);
+        String signature = stateSignature(ruleConfig, snapshot, browsers, generation);
+        return new DraftInput(selectedRoute(config), input, signature, ruleConfig, discovery);
+    }
+
+    private record CacheKey(long revision, String fingerprint) {}
+
+    /** Version plus a content fingerprint of the original config, which still carries instances. */
+    private static CacheKey cacheKey(Map<String,Object> config) {
+        long revision = ((VersionedConfig) config).revision();
+        String fingerprint = RouteInputSignature.create(config, null, 0) + ":"
+                + RouteInputSignature.dynamicLevels(config);
+        return new CacheKey(revision, fingerprint);
     }
 
     private static RuleDiscovery discoverRules(Map<String,Object> config, PipeWireBackend.Snapshot snapshot) {
@@ -147,69 +224,4 @@ final class DynamicRouteRuntime implements AutoCloseable {
     }
     static boolean excluded(AudioNode stream) { return !ApplicationStreamEligibility.isEligibleApplicationStream(stream); }
 
-    private static DynamicInstanceRegistry.GainState applicationGain(Map<String,Object> config, DynamicInstanceRegistry.InstanceSnapshot instance) {
-        Map<String,Object> b = instance.runtimeBinding(); String app = text(b.get("applicationId")), process = text(b.get("processName"));
-        for (Map<String,Object> rule : maps(config.get("applications"))) { Map<String,Object> m = object(rule.get("match")); Object id = m.get("app_id"), proc = m.get("process");
-            boolean exact = id instanceof String value && !value.isBlank() ? value.equals(app) && (!(proc instanceof String p) || p.isBlank() || p.equals(process)) : proc instanceof String p && !p.isBlank() && p.equals(process);
-            if (exact) return new DynamicInstanceRegistry.GainState(level(rule.get("volume"), 1), Boolean.TRUE.equals(rule.get("mute")));
-        }
-        return null;
-    }
-    private static DynamicInstanceRegistry.GainState endpointGain(Map<String,Object> config, String key) {
-        String fingerprint = key.startsWith("device:") ? key.substring(7) : key;
-        List<Map<String,Object>> found = maps(config.get("devices")).stream().filter(d -> d.get("identity") instanceof Map<?,?> raw && DeviceIdentity.fromMap(object(raw)).reliable()
-                && fingerprint.equals(DeviceIdentity.fromMap(object(raw)).fingerprint())).toList();
-        if (found.size() != 1) return null;
-        Map<String,Object> d = found.getFirst(); return new DynamicInstanceRegistry.GainState(level(d.get("volume"), 1), Boolean.TRUE.equals(d.get("mute")));
-    }
-    private static String exactRole(AudioNode sink, List<Map<String,Object>> devices) {
-        if (sink.identity() == null || !sink.identity().reliable() || devices.stream().filter(d -> "haptic_output".equals(d.get("role"))).count() != 1) return "";
-        List<Map<String,Object>> found = devices.stream().filter(d -> d.get("identity") instanceof Map<?,?> raw && DeviceIdentity.fromMap(object(raw)).reliable()
-                && sink.identity().fingerprint().equals(DeviceIdentity.fromMap(object(raw)).fingerprint())).toList();
-        return found.size() == 1 && "haptic_output".equals(found.getFirst().get("role")) ? "haptic_output" : "";
-    }
-    private static String hapticDiagnostic(List<Map<String,Object>> devices) {
-        List<Map<String,Object>> records = devices.stream().filter(d -> "haptic_output".equals(d.get("role"))).toList();
-        if (records.size() > 1) return "Haptic output unavailable: multiple device records have the haptic_output role; no device was selected.";
-        if (records.isEmpty()) return "";
-        Object value = records.getFirst().get("identity");
-        if (!(value instanceof Map<?,?> raw) || !DeviceIdentity.fromMap(object(raw)).reliable()) return "Haptic output unavailable: its saved device identity is missing or unreliable; no fallback was selected.";
-        DeviceIdentity id = DeviceIdentity.fromMap(object(raw));
-        long count = devices.stream().filter(d -> d.get("identity") instanceof Map<?,?> identity && DeviceIdentity.fromMap(object(identity)).reliable() && id.fingerprint().equals(DeviceIdentity.fromMap(object(identity)).fingerprint())).count();
-        return count == 1 ? "" : "Haptic output unavailable: its reliable device identity is ambiguous across saved devices; no fallback was selected.";
-    }
-
-    private static Map<String,CapturedStreamBinding> captureBindings(Map<String,Object> runtime) {
-        Map<String,CapturedStreamBinding> result = new LinkedHashMap<>();
-        for (Map<String,Object> item : maps(runtime.get("graph_capture_sources"))) {
-            String key = text(item.get("capture_stream_key")), name = text(item.get("node_name"));
-            if (!key.isBlank() && name.equals("audio-matrix-chrome-" + key)) result.put(name, new CapturedStreamBinding(name, text(item.get("source_id")), text(item.get("application_rule_id")),
-                    text(item.get("parent_application_id")), text(item.get("parent_process_name")), text(item.get("instance_key")), level(item.get("tab_gain"), 1), Boolean.TRUE.equals(item.get("tab_muted"))));
-        }
-        return Map.copyOf(result);
-    }
-
-    private static Map<String,Object> configWithGraph(Map<String,Object> config, String routeId, AudioGraph graph) {
-        Map<String,Object> result = new LinkedHashMap<>(config); List<Map<String,Object>> routes = mutableMaps(config.get("route_library"));
-        Map<String,Object> route = routes.stream().filter(r -> routeId.equals(r.get("id"))).findFirst().orElse(null);
-        if (route != null) { Map<String,Object> encoded = GraphCodec.toMap(graph); route.put("nodes", encoded.get("nodes")); route.put("connections", encoded.get("connections")); result.put("route_library", routes); }
-        return result;
-    }
-
-    private static String stateSignature(Map<String,Object> config, PipeWireBackend.Snapshot snapshot, List<BrowserAdapter> adapters, long generation) {
-        List<String> browser = adapters.stream().flatMap(a -> a.snapshots().stream().flatMap(b -> b.tabs().stream().map(tab ->
-                String.join("\u0000", a.id(), b.instanceId(), b.profileId(), tab.sessionToken(), tab.title(), Boolean.toString(tab.audible()), Boolean.toString(tab.muted()), tab.volumeCapability(), tab.captureStreamKey())))).sorted().toList();
-        Map<String,Object> stable = DynamicRegistryStore.stableConfig(config);
-        return RouteInputSignature.create(stable, snapshot, generation) + ":" + RouteInputSignature.dynamicLevels(stable) + ":" + RouteInputSignature.dynamicBindings(snapshot) + ":" + browser;
-    }
-    private static String selectedRoute(Map<String,Object> config) {
-        String active = text(config.get("active_route")); return active.isBlank() ? maps(config.get("profiles")).stream()
-                .filter(p -> GraphRouteLibrary.activeProfileId(config).equals(p.get("id"))).map(p -> text(p.get("selected_route_id")))
-                .filter(value -> !value.isBlank()).findFirst().orElse("") : active;
-    }
-    @SuppressWarnings("unchecked") private static List<Map<String,Object>> maps(Object value) { return value instanceof List<?> list ? (List<Map<String,Object>>)list : List.of(); }
-    private static List<Map<String,Object>> mutableMaps(Object value) { List<Map<String,Object>> result = new ArrayList<>(); for (Map<String,Object> item : maps(value)) result.add(new LinkedHashMap<>(item)); return result; }
-    @SuppressWarnings("unchecked") private static Map<String,Object> object(Object value) { return value instanceof Map<?,?> map ? (Map<String,Object>)map : Map.of(); }
-    private static String text(Object value) { return value instanceof String text ? text : ""; }
-    private static double level(Object value, double fallback) { return value instanceof Number number && Double.isFinite(number.doubleValue()) ? Math.max(0, Math.min(1, number.doubleValue())) : fallback; }
 }

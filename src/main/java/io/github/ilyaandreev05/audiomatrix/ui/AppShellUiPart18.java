@@ -99,53 +99,74 @@ abstract class AppShellUiPart18 extends AppShellUiPart17 {
     }
 
     protected void publishGnomeState() {
-        var configState = store.snapshot();
-        String activeRoute=String.valueOf(configState.getOrDefault("active_route",""));
-        gnomeBridge.publishState(snapshot, configState, configState.revision(), dynamicGraphState(activeRoute));
+        requestGnomeStatePublication(null);
+    }
+
+    /**
+     * Publishes one concrete observation. Called only on the {@code audio-matrix-gnome-state}
+     * lane, so it reads no JavaFX widget and never regresses revision or capture time.
+     */
+    @Override
+    protected void publishGnomeState(PipeWireBackend.Snapshot observation, VersionedConfig config) {
+        if (gnomeBridge == null || observation == null || config == null) return;
+        if (config.revision() < lastPublishedRevision) return;
+        if (observation.capturedAtMillis() < lastPublishedCapturedAtMillis) return;
+        lastPublishedRevision = config.revision();
+        lastPublishedCapturedAtMillis = observation.capturedAtMillis();
+        String activeRoute = String.valueOf(config.getOrDefault("active_route", ""));
+        gnomeBridge.publishState(observation, config, config.revision(), dynamicGraphState(activeRoute));
     }
 
     protected void applyRoutes() {
-        Map<String, Object> config = store.snapshot();
         autoApplySuppressedUntilRestart = false;
-        setNotice(t("Обновляю состояние PipeWire и применяю граф…", "Refreshing PipeWire and applying the graph…"), false);
-        backend.refresh().thenAccept(current -> {
-            snapshot = current;
-            updateMeterTarget();
-            CompletableFuture<PipeWireRouteManager.ApplyReport> apply = requestRouteApply(config, current, true, false);
-            if (apply == null) {
-                Platform.runLater(() -> setNotice(t("Граф уже обновляется; повторный запрос объединён с текущим.",
-                        "The graph is already updating; this request was coalesced."), false));
+        runOnFx(() -> setNotice(t("Обновляю состояние PipeWire и применяю граф…", "Refreshing PipeWire and applying the graph…"), false));
+        runRuntimeAudio(() -> backend.refresh().whenComplete((current, refreshError) -> {
+            if (refreshError != null) {
+                runOnFx(() -> setNotice(t("Не удалось обновить состояние PipeWire: ", "Could not refresh PipeWire state: ") + rootMessage(refreshError), true));
                 return;
             }
-            apply.whenComplete((report, error) -> Platform.runLater(() -> {
-                RouteApplyGate.Completion completion = finishRouteApply(error == null);
-                if (error != null) {
-                    routesRequested = true;
-                    setNotice(t("Граф PipeWire не применён: ", "PipeWire graph was not applied: ") + rootMessage(error), true);
-                } else {
-                    routesRequested = routeManager.active();
-                    autoApplySuppressedUntilRestart = false;
-                    String summary = t("Создано шин: ", "Buses: ") + report.buses()
-                            + t(", маршрутов: ", ", routes: ") + report.routes()
-                            + t(", потоков: ", ", streams: ") + report.streams();
-                    if (!report.warnings().isEmpty()) summary += " · " + String.join("; ", report.warnings());
-                    setNotice(summary, false);
+            runRuntimeAudio(() -> {
+                if (current.capturedAtMillis() >= snapshot.capturedAtMillis()) snapshot = current;
+                VersionedConfig config = store.snapshot();
+                CompletableFuture<PipeWireRouteManager.ApplyReport> apply = requestRouteApply(config, current, true, false);
+                if (apply == null) {
+                    runOnFx(() -> setNotice(t("Граф уже обновляется; повторный запрос объединён с текущим.",
+                            "The graph is already updating; this request was coalesced."), false));
+                    return;
                 }
-                retryPendingRouteApply(completion);
-                showPage(currentPage);
-            }));
-        });
+                apply.whenComplete((report, error) -> runRuntimeAudio(() -> {
+                    RouteApplyGate.Completion completion = finishRouteApply(error == null);
+                    if (error != null) {
+                        routesRequested = true;
+                        runOnFx(() -> setNotice(t("Граф PipeWire не применён: ", "PipeWire graph was not applied: ") + rootMessage(error), true));
+                    } else {
+                        routesRequested = routeManager.active();
+                        autoApplySuppressedUntilRestart = false;
+                        String summary = t("Создано шин: ", "Buses: ") + report.buses()
+                                + t(", маршрутов: ", ", routes: ") + report.routes()
+                                + t(", потоков: ", ", streams: ") + report.streams();
+                        if (!report.warnings().isEmpty()) summary += " · " + String.join("; ", report.warnings());
+                        String text = summary;
+                        runOnFx(() -> setNotice(text, false));
+                    }
+                    retryPendingRouteApply(completion);
+                    requestUiRefresh();
+                }));
+            });
+        }));
     }
 
     protected void clearRoutes() {
         routesRequested = false;
         dspReferenceMode = false;
         autoApplySuppressedUntilRestart = true;
-        routeManager.clear().whenComplete((ignored, error) -> Platform.runLater(() -> {
+        runRuntimeAudio(() -> routeManager.clear().whenComplete((ignored, error) -> runRuntimeAudio(() -> {
             routeApplyGate.reset();
-            if (error != null) setNotice(t("Не удалось сбросить граф: ", "Could not clear the graph: ") + rootMessage(error), true);
-            else setNotice(t("Маршруты сброшены; исходные связи потоков восстановлены.", "Routes cleared; original stream links restored."), false);
-            showPage(currentPage);
-        }));
+            runOnFx(() -> {
+                if (error != null) setNotice(t("Не удалось сбросить граф: ", "Could not clear the graph: ") + rootMessage(error), true);
+                else setNotice(t("Маршруты сброшены; исходные связи потоков восстановлены.", "Routes cleared; original stream links restored."), false);
+                showPage(currentPage);
+            });
+        })));
     }
 }

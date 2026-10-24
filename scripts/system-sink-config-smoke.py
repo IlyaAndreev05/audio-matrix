@@ -75,8 +75,15 @@ with tempfile.TemporaryDirectory(prefix="audio-matrix-system-sink-pw-") as direc
         system_sink = next((node for node in nodes if node.get("node.name") == "audiomatrix_system"), None)
         if system_sink is None:
             raise AssertionError("Private PipeWire daemon did not create audiomatrix_system: " + log.read_text())
+        if system_sink.get("node.name") != "audiomatrix_system":
+            raise AssertionError(f"Virtual input changed its node name: {system_sink.get('node.name')!r}")
+        if system_sink.get("factory.name") != "support.null-audio-sink":
+            raise AssertionError(f"Virtual input is not the packaged null sink: {system_sink.get('factory.name')}")
         if system_sink.get("media.class") != "Audio/Sink":
             raise AssertionError(f"Virtual input has unexpected class: {system_sink.get('media.class')}")
+        if system_sink.get("node.description") != "Общая громкость":
+            raise AssertionError("Virtual input has an unexpected description: "
+                                 f"{system_sink.get('node.description')!r}")
         if int(system_sink.get("priority.session", 0)) != 2000:
             raise AssertionError("Virtual system input did not keep its configured default priority")
         if any(node.get("media.class", "").startswith("Audio/Source") for node in nodes):

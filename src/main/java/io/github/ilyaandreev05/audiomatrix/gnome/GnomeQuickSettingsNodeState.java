@@ -96,10 +96,17 @@ final class GnomeQuickSettingsNodeState {
     private static List<Map<String,Object>> mixerInputs(AudioGraph graph,MixerNode mixer,Inputs input){
         List<Map<String,Object>> result=new ArrayList<>();
         for(Map.Entry<String,Double> entry:mixer.inputGains().entrySet()){
+            boolean generated=DynamicInstanceRegistry.isGeneratedMixerInputPort(entry.getKey());
             var presentation=GraphMixerInputPresentation.describe(graph,mixer,entry.getKey(),input.config(),
                     input.instances(),input.snapshot().connected());
-            result.add(Map.of("id",entry.getKey(),"name",presentation.name(),"available",presentation.available(),
-                    "volume",entry.getValue(),"muted",mixer.inputMuted(entry.getKey())));
+            // A retained generated input keeps its saved level for a later reconnect but must never
+            // appear as a usable current row while its owner is gone.
+            if(generated&&!presentation.available())continue;
+            Map<String,Object> row=new LinkedHashMap<>();
+            row.put("id",entry.getKey());row.put("name",presentation.name());
+            row.put("available",presentation.available());row.put("generated",generated);
+            row.put("volume",entry.getValue());row.put("muted",mixer.inputMuted(entry.getKey()));
+            result.add(row);
         }
         return List.copyOf(result);
     }

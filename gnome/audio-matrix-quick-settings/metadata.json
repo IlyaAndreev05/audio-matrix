@@ -2,6 +2,6 @@
   "uuid": "audio-matrix-quick-settings@ilyaandreev05",
   "name": "Audio Matrix — управление звуком",
   "description": "Приложения, выходные устройства, маршрутизация и звуки событий в системном меню GNOME.",
-  "version": 21,
+  "version": 22,
   "shell-version": ["50"]
 }

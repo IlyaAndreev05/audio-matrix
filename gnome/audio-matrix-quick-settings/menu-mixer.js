@@ -1,4 +1,5 @@
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+import {visibleMixerInputs} from './menu-state.js';
 
 export default class AudioMatrixMenuMixer {
     constructor({rows, send, registerLevelRow}) {
@@ -7,8 +8,13 @@ export default class AudioMatrixMenuMixer {
         this._register = registerLevelRow;
     }
 
+    visible(inputs) {
+        return visibleMixerInputs(inputs);
+    }
+
     render(routeId, nodeId, pinId, inputs, t, target) {
-        for (const input of inputs || []) {
+        let rendered = 0;
+        for (const input of visibleMixerInputs(inputs)) {
             const id = `mixer:${pinId}:${input.id}`;
             const commandTarget = {routeId: String(routeId), nodeId: String(nodeId), inputId: String(input.id)};
             const address = `${routeId}\t${nodeId}\t${input.id}`;
@@ -18,8 +24,8 @@ export default class AudioMatrixMenuMixer {
                 onValue: value => this._send('set_mixer_input_volume', `${address}\t${value.toFixed(3)}`),
                 onMute: () => this._send('toggle_mixer_input_mute', address)}, target);
             this._register(id, row);
+            rendered++;
         }
-        if (!(inputs || []).length)
-            target.addMenuItem(new PopupMenu.PopupMenuItem(t.noMixerInputs, {reactive: false, can_focus: false}));
+        return rendered;
     }
 }

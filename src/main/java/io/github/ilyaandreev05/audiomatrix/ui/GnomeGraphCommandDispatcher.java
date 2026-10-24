@@ -37,6 +37,8 @@ final class GnomeGraphCommandDispatcher {
 
     CompletableFuture<Void> handle(GnomeControlBridge.Command command,
             Function<GnomeControlBridge.Command, CompletableFuture<Void>> fallback) {
+        // The presentation command never waits behind a queued audio setter.
+        if ("open".equals(command.name())) return fallback.apply(command);
         return gnomeCommands.submit(sequence -> dispatchGnomeCommand(command, sequence, fallback));
     }
 

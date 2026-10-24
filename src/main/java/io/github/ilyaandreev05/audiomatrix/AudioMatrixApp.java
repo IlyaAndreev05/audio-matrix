@@ -169,13 +169,14 @@ public class AudioMatrixApp extends Application {
         boolean openGraph = getParameters().getRaw().contains("--open-graph")
                 || "1".equals(System.getenv("AUDIO_MATRIX_OPEN_GRAPH"));
         if (!background) stage.show();
+        stage.showingProperty().addListener((o, was, showing) -> shell.onStageVisibilityChanged(showing && !stage.isIconified()));
+        stage.iconifiedProperty().addListener((o, was, iconified) -> shell.onStageVisibilityChanged(stage.isShowing() && !iconified));
+        shell.onStageVisibilityChanged(stage.isShowing() && !stage.isIconified());
         shell.start();
         if (openGraph) shell.openGraphEditor();
         instanceControl = currentInstanceControl;
         if (instanceControl != null) instanceControl.setHandler(command -> Platform.runLater(() -> {
             if ("open".equals(command)) {
-                if (!stage.isShowing()) stage.show();
-                stage.requestFocus();
                 shell.openGraphEditor();
             } else if ("quit".equals(command)) {
                 shutdownApplication();

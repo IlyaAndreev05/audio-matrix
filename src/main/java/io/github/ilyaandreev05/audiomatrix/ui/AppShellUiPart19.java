@@ -34,6 +34,7 @@ import java.util.function.Consumer;
 
 abstract class AppShellUiPart19 extends AppShellUiPart18 {
     private final DynamicRouteRuntime dynamicRuntime;
+    private final DspReferenceWorkflow dspReference = new DspReferenceWorkflow(this);
     private final AtomicReference<CompletableFuture<Void>> activeApply =
             new AtomicReference<>(CompletableFuture.completedFuture(null));
 
@@ -56,16 +57,18 @@ abstract class AppShellUiPart19 extends AppShellUiPart18 {
     private void applyConfiguredRoutes(Map<String,Object> config, PipeWireBackend.Snapshot current, boolean reconnect, String failure) {
         CompletableFuture<PipeWireRouteManager.ApplyReport> apply = requestRouteApply(config, current, false, reconnect);
         if (apply == null) return;
-        apply.whenComplete((report, error) -> Platform.runLater(() -> {
+        apply.whenComplete((report, error) -> runRuntimeAudio(() -> {
             RouteApplyGate.Completion completion = finishRouteApply(error == null);
             if (error != null) {
                 routesRequested = true; System.err.println(failure + rootMessage(error));
-                setNotice(t("Не удалось обновить применённый граф: ", "Could not update the applied graph: ") + rootMessage(error), true);
+                runOnFx(() -> setNotice(t("Не удалось обновить применённый граф: ", "Could not update the applied graph: ") + rootMessage(error), true));
             } else {
                 routesRequested = routeManager.active();
-                if (currentPage == Page.ROUTES) setNotice(routeManager.status(), false);
+                String status = routeManager.status();
+                runOnFx(() -> { if (currentPage == Page.ROUTES) setNotice(status, false); });
             }
-            retryPendingRouteApply(completion); showPage(currentPage);
+            retryPendingRouteApply(completion);
+            requestUiRefresh();
         }));
     }
 
@@ -86,20 +89,20 @@ abstract class AppShellUiPart19 extends AppShellUiPart18 {
                 Map<String,Object> runtime = applyDspReference(prepared.runtimeConfig(), current);
                 CompletableFuture<PipeWireRouteManager.ApplyReport> graph = reconnect ? routeManager.reapplyAfterReconnect(runtime, current, prepared.bindings()) : routeManager.apply(runtime, current, prepared.bindings());
                 CompletableFuture<Void> rules = streamRuleApplier.apply(current, maps(runtime.get("applications")), prepared.bindings(), force,
-                        (stream, error) -> Platform.runLater(() -> setNotice(t("Не удалось применить правило приложения ", "Could not apply application rule for ") + stream.applicationName() + ": " + rootMessage(error), true)));
+                        (stream, error) -> runOnFx(() -> setNotice(t("Не удалось применить правило приложения ", "Could not apply application rule for ") + stream.applicationName() + ": " + rootMessage(error), true)));
                 return graph.thenCombine(rules, (report, ignoredRules) -> report);
             }).thenApply(report -> {
                 if (prepared.reconcile() != null) setDynamicGraphState(prepared.routeId(), prepared.reconcile());
                 publishGnomeState();
                 String warning = dynamicRuntime.diagnostic();
-                if (!warning.isBlank()) Platform.runLater(() -> Platform.runLater(() -> setNotice(warning, true)));
+                if (!warning.isBlank()) runOnFx(() -> setNotice(warning, true));
                 return report;
             });
         } catch (RuntimeException error) { return CompletableFuture.failedFuture(error); }
     }
 
     protected CompletableFuture<?> applyRuntimeGraph(Map<String,Object> config, PipeWireBackend.Snapshot current, boolean force, boolean reconnect, boolean persistRegistryChanges) {
-        return applyRuntimeGraphAwait(config, current, force, reconnect, persistRegistryChanges);
+        return onRuntimeAudio(() -> applyRuntimeGraphAwait(config, current, force, reconnect, persistRegistryChanges));
     }
 
     private CompletableFuture<PipeWireRouteManager.ApplyReport> applyRuntimeGraphAwait(Map<String,Object> config, PipeWireBackend.Snapshot current, boolean force, boolean reconnect, boolean persistRegistryChanges) {
@@ -109,17 +112,25 @@ abstract class AppShellUiPart19 extends AppShellUiPart18 {
         return pending.isDone() ? CompletableFuture.completedFuture(null) : pending.thenCompose(ignored -> applyRuntimeGraphAwait(config, current, force, reconnect, persistRegistryChanges));
     }
 
-    private void finishRuntimeGraphApply(Map<String,Object> config, boolean succeeded) { retryPendingRouteApply(completeRouteApply(succeeded, config, backend.current())); }
+    private void finishRuntimeGraphApply(Map<String,Object> config, boolean succeeded) {
+        RouteApplyGate.Completion completion = completeRouteApply(succeeded, config, backend.current());
+        retryPendingRouteApply(completion);
+    }
 
     private void browserStateChanged() {
-        if (!closing) Platform.runLater(() -> { if (!closing) maybeApplyConfiguredRoutes(store.snapshot(), backend.current()); });
+        runRuntimeAudio(() -> maybeApplyConfiguredRoutes(store.snapshot(), snapshot));
     }
 
     private void refreshDynamicGraph(Map<String,Object> config, PipeWireBackend.Snapshot current) {
         dynamicRuntime.reconcileOnly(config, current, browserAdapters, backend.connectionGeneration()).whenComplete((result, error) -> {
             if (error != null) { System.err.println("Audio Matrix dynamic graph reconciliation failed: " + rootMessage(error)); return; }
-            if (result != null) Platform.runLater(() -> { setDynamicGraphState(result.configuredGraph().id(), result); publishGnomeState();
-                if (!dynamicRuntime.diagnostic().isBlank()) setNotice(dynamicRuntime.diagnostic(), true); });
+            if (result == null) return;
+            runRuntimeAudio(() -> {
+                setDynamicGraphState(result.configuredGraph().id(), result);
+                publishGnomeState();
+                String diagnostic = dynamicRuntime.diagnostic();
+                if (!diagnostic.isBlank()) runOnFx(() -> setNotice(diagnostic, true));
+            });
         });
     }
 
@@ -133,61 +144,17 @@ abstract class AppShellUiPart19 extends AppShellUiPart18 {
     }
 
     protected void retryPendingRouteApply(RouteApplyGate.Completion completion) {
-        if (completion.forcePending()) Platform.runLater(this::applyRoutes);
-        else if (completion.retryPending()) Platform.runLater(() -> maybeApplyConfiguredRoutes(store.snapshot(), backend.current()));
+        if (completion.forcePending()) runRuntimeAudio(this::applyRoutes);
+        else if (completion.retryPending()) runRuntimeAudio(() -> maybeApplyConfiguredRoutes(store.snapshot(), snapshot));
     }
 
-    protected void setDspReferenceMode(boolean referenceMode) {
-        if (dspReferenceUpdateInProgress) return;
-        if (!routeManager.active()) {
-            setNotice(t("Сначала примените граф маршрутов.", "Apply the route graph first."), true);
-            showPage(currentPage);
-            return;
-        }
-        boolean previous = dspReferenceMode;
-        dspReferenceUpdateInProgress = true;
-        if (dspReferenceToggle != null) dspReferenceToggle.setDisable(true);
-        dspReferenceMode = referenceMode;
-        Map<String, Object> config = store.snapshot();
-        setNotice(t("Обновляю PipeWire для A/B…", "Updating PipeWire for A/B…"), false);
-        backend.refresh().thenAccept(current -> {
-            snapshot = current;
-            updateMeterTarget();
-            CompletableFuture<PipeWireRouteManager.ApplyReport> apply = requestRouteApply(config, current, true, false);
-            if (apply == null) {
-                Platform.runLater(() -> {
-                    dspReferenceUpdateInProgress = false;
-                    dspReferenceMode = previous;
-                    setNotice(t("Граф уже обновляется; режим A/B не изменён.", "The graph is already updating; A/B mode was not changed."), true);
-                    showPage(currentPage);
-                });
-                return;
-            }
-            apply.whenComplete((report, error) -> Platform.runLater(() -> {
-                RouteApplyGate.Completion completion = finishRouteApply(error == null);
-                dspReferenceUpdateInProgress = false;
-                if (error != null) {
-                    dspReferenceMode = previous;
-                    routesRequested = true;
-                    System.err.println("Audio Matrix A/B route apply failed: " + rootMessage(error));
-                    setNotice(t("A/B не применён: ", "A/B was not applied: ") + rootMessage(error), true);
-                } else {
-                    routesRequested = routeManager.active();
-                    setNotice(referenceMode
-                            ? t("B включён: EQ обойдён, уровень снижен по расчётной верхней оценке.", "B is on: EQ bypassed and level reduced by the conservative gain estimate.")
-                            : t("A включён: обработанная EQ-цепочка восстановлена.", "A is on: the processed EQ chain is restored."), false);
-                }
-                retryPendingRouteApply(completion);
-                showPage(currentPage);
-            }));
-        });
-    }
+    protected void setDspReferenceMode(boolean referenceMode) { dspReference.setReferenceMode(referenceMode); }
 
     protected Map<String, Object> runtimeDspConfig(Map<String, Object> config, PipeWireBackend.Snapshot current) { return applyDspReference(runtimeGraphConfig(config), current); }
 
     private Map<String,Object> applyDspReference(Map<String,Object> graphConfig, PipeWireBackend.Snapshot current) {
         if (!dspReferenceMode) return graphConfig;
-        try { return DspComparisonConfig.reference(graphConfig, Math.max(0, routeManager.maximumEqBoostDb(graphConfig, current, selectedSink))); }
+        try { return DspComparisonConfig.reference(graphConfig, Math.max(0, routeManager.maximumEqBoostDb(graphConfig, current, dspReferenceSink()))); }
         catch (Exception error) { throw new CompletionException(error); }
     }
 
@@ -206,11 +173,12 @@ abstract class AppShellUiPart19 extends AppShellUiPart18 {
         if (closeFuture != null) return closeFuture;
         closing = true;
         meterRefresh.stop();
-        if (routeRefresh != null) routeRefresh.stop();
+        if (routeRefresh != null) routeRefresh.cancel(false);
         backend.monitorOutput(null);
         backend.monitorInput(null);
         backend.cancelCalibrationCapture();
         archiveIo.shutdownNow();
+        shutdownRuntimeLanes();
         dynamicRuntime.close();
         gnomeBridge.close();
         CompletableFuture<MeasurementPreview> capture = calibrationCaptureTask;

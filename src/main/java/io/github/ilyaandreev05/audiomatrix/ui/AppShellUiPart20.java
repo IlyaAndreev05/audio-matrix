@@ -150,6 +150,8 @@ abstract class AppShellUiPart20 extends AppShellUiPart19 {
     }
 
     protected void syncSystemMasterFromDefaultSink(PipeWireBackend.Snapshot current, Map<String, Object> config) {
+        if (SystemMasterSync.shouldDefer(gnomeCommandInFlight, current.capturedAtMillis(), lastMixerCommandWriteMillis))
+            return;
         AudioNode mixerSink = current.sinks().stream()
                 .filter(node -> PipeWireBackend.SYSTEM_MIXER_SINK_NAME.equals(node.name()))
                 .filter(node -> node.id() == current.defaultSinkId()).findFirst().orElse(null);
@@ -158,29 +160,33 @@ abstract class AppShellUiPart20 extends AppShellUiPart19 {
             return;
         }
         Map<String, Object> mixer = map(config.get("mixer"));
+        final double configuredVolume = number(mixer.get("global_volume"), 1.0);
+        final boolean configuredMuted = Boolean.TRUE.equals(mixer.get("global_mute"));
         if (initializedSystemMixerSinkId != mixerSink.id()) {
             initializedSystemMixerSinkId = mixerSink.id();
-            double volume = number(mixer.get("global_volume"), 1.0);
-            boolean muted = Boolean.TRUE.equals(mixer.get("global_mute"));
-            if (Double.isFinite(volume)) backend.setVolume(mixerSink.id(), volume);
-            backend.setMute(mixerSink.id(), muted);
+            if (Double.isFinite(configuredVolume)) backend.setVolume(mixerSink.id(), SystemMasterSync.clamp(configuredVolume));
+            backend.setMute(mixerSink.id(), configuredMuted);
             return;
         }
-        if (!Double.isFinite(mixerSink.volume())) return;
-        double volume = Math.max(0, Math.min(1, mixerSink.volume()));
-        double configured = number(mixer.get("global_volume"), 1.0);
-        boolean muted = Boolean.TRUE.equals(mixer.get("global_mute"));
-        if (Math.abs(volume - configured) <= 0.005 && muted == mixerSink.muted()) return;
+        // The observed mute is authoritative; the saved value is only a target, never an observation.
+        boolean observedMuted = mixerSink.muted();
+        SystemMasterSync.Decision decision = SystemMasterSync.compare(mixerSink.volume(), observedMuted,
+                configuredVolume, configuredMuted);
+        if (decision == null) return;
         updateConfig(candidate -> {
             Map<String, Object> nextMixer = map(candidate.get("mixer"));
-            if (Math.abs(volume - number(nextMixer.get("global_volume"), 1.0)) > 0.005)
-                nextMixer.put("global_volume", Math.round(volume * 100.0) / 100.0);
-            if (muted != Boolean.TRUE.equals(nextMixer.get("global_mute"))) nextMixer.put("global_mute", muted);
+            // A newer edit that landed after this observation was captured keeps priority.
+            if (Math.abs(number(nextMixer.get("global_volume"), 1.0) - configuredVolume) > 0.0001
+                    || Boolean.TRUE.equals(nextMixer.get("global_mute")) != configuredMuted) return;
+            if (decision.writeVolume())
+                nextMixer.put("global_volume", Math.round(decision.volume() * 100.0) / 100.0);
+            if (decision.writeMute()) nextMixer.put("global_mute", decision.muted());
         });
     }
 
     protected void setGlobalMasterVolume(double value) {
         double level = Math.max(0, Math.min(1, value));
+        markMixerCommandWritten();
         updateConfig(candidate -> map(candidate.get("mixer")).put("global_volume", level));
         AudioNode mixerSink = snapshot.sinks().stream()
                 .filter(node -> PipeWireBackend.SYSTEM_MIXER_SINK_NAME.equals(node.name()))
@@ -189,6 +195,7 @@ abstract class AppShellUiPart20 extends AppShellUiPart19 {
     }
 
     protected void setGlobalMasterMute(boolean muted) {
+        markMixerCommandWritten();
         updateConfig(candidate -> map(candidate.get("mixer")).put("global_mute", muted));
         AudioNode mixerSink = snapshot.sinks().stream()
                 .filter(node -> PipeWireBackend.SYSTEM_MIXER_SINK_NAME.equals(node.name()))
@@ -196,7 +203,25 @@ abstract class AppShellUiPart20 extends AppShellUiPart19 {
         if (mixerSink != null) backend.setMute(mixerSink.id(), muted).thenRun(this::refreshBackend);
     }
 
-    protected void refreshBackend() { backend.refresh().thenAccept(next -> Platform.runLater(() -> { snapshot = next;syncSystemMasterFromDefaultSink(next,store.snapshot());updateMeterTarget();applyConfiguredDeviceRules(next,store.snapshot());applyConfiguredStreamRules(next,store.snapshot());maybeApplyConfiguredRoutes(store.snapshot(),next);if(currentPage==Page.GRAPH)refreshGraphPageRuntime();else showPage(currentPage); })); }
+    protected void refreshBackend() {
+        runRuntimeAudio(() -> backend.refresh().whenComplete((next, error) -> {
+            if (error != null) {
+                runOnFx(() -> setNotice(t("Не удалось обновить состояние PipeWire: ", "Could not refresh PipeWire state: ") + rootMessage(error), true));
+                return;
+            }
+            runRuntimeAudio(() -> {
+                if (closing) return;
+                if (next.capturedAtMillis() >= snapshot.capturedAtMillis()) snapshot = next;
+                VersionedConfig config = store.snapshot();
+                syncSystemMasterFromDefaultSink(next, config);
+                applyConfiguredDeviceRules(next, config);
+                applyConfiguredStreamRules(next, config);
+                maybeApplyConfiguredRoutes(config, next);
+                requestGnomeStatePublication(null);
+                requestUiRefresh();
+            });
+        }));
+    }
 
     protected void saveDefaultOutput(AudioNode sink) {
         updateConfig(config -> {Map<String,Object> device=ensureDevice(config,sink);activeProfile(config).put("default_output",device.get("id"));});

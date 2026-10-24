@@ -9,7 +9,8 @@ built application through its real D-Bus command channel:
 * ``set_mixer_input_volume`` sets it to 0.35, the kept state and the saved JSON both stay 0.35,
   no later published state bounces back, and the measured PCM in the virtual sink scales by 0.35;
 * ``toggle_mixer_input_mute`` mutes it, the gain survives, and the virtual sink goes silent;
-* stopping the source makes the input non-interactive but keeps name, level and mute;
+* stopping the source removes the input from the GNOME mixer while the saved JSON keeps its
+  level and mute;
 * the reconnected source keeps the same stable port id and published 0.35 / muted state, and
   unmuting restores the measured PCM.
 
@@ -330,18 +331,20 @@ def exercise(app, root):
 
         pw.stop(player)
         pw.wait_for_application_stream(environment, APP_ID, present=False)
-        offline = channel.wait(lambda state: (input_state(state, input_id) is not None
-                                              and input_state(state, input_id)["available"] is False),
-                               "the non-interactive offline input", application)
-        offline_input = input_state(offline, input_id)
-        assert math.isclose(offline_input["volume"], TARGET_VOLUME, abs_tol=1e-6), offline_input
-        assert offline_input["muted"] is True, offline_input
-        name = str(offline_input.get("name") or "")
-        assert name, offline_input
-        assert not any(name.startswith(prefix) for prefix in
-                       ("app:", "process:", "stream:", "device:", "generated-")), offline_input
-        assert input_id not in name, "the offline label must never be the technical port id"
-        print(f"offline input kept a human label {name!r} at 0.35 muted and became non-interactive", flush=True)
+        offline = channel.wait(lambda state: input_state(state, input_id) is None,
+                               "the offline input to leave the GNOME mixer", application)
+        assert input_state(offline, input_id) is None, offline
+        assert all(item.get("id") != input_id for item in mixer_inputs(offline)), offline
+        deadline = time.monotonic() + 10.0
+        while True:
+            try:
+                saved_level(config_path, input_id, TARGET_VOLUME, True)
+                break
+            except (AssertionError, KeyError, StopIteration, json.JSONDecodeError):
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.2)
+        print("offline input left the GNOME mixer; the saved JSON kept 0.35 muted", flush=True)
 
         player = playback("player-after")
         second_stream = pw.wait_for_application_stream(environment, APP_ID)

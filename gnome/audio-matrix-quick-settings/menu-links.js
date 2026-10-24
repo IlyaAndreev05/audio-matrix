@@ -15,6 +15,7 @@ export default class AudioMatrixMenuLinks {
     render(control, target) {
         const card = new PopupMenu.PopupMenuSection();
         card.actor.add_style_class_name('audio-matrix-route-card');
+        card.actor.add_style_class_name('quick-toggle-menu');
         const heading = new PopupMenu.PopupBaseMenuItem({reactive: false, activate: false, can_focus: false});
         heading.add_style_class_name('audio-matrix-route-heading');
         heading.add_child(new St.Icon({icon_name: 'network-transmit-receive-symbolic',
@@ -33,7 +34,7 @@ export default class AudioMatrixMenuLinks {
     }
 
     _createOption(control, option, selected, card) {
-        const item = new PopupMenu.PopupBaseMenuItem({activate: false, can_focus: true});
+        const item = new PopupMenu.PopupBaseMenuItem({can_focus: true});
         item.add_style_class_name('audio-matrix-route-row');
         item.accessible_role = Atk.Role.CHECK_BOX;
         item.accessible_name = option.label || '';
@@ -54,9 +55,9 @@ export default class AudioMatrixMenuLinks {
         item.add_child(check);
         const row = {id: String(option.id), item, mark, status, option, control, selected: selected.has(String(option.id))};
         item.connect('activate', () => {
+            item.stop_emission_by_name('activate');
             if (row.option.available === false || row.option.enabled === false) return;
             this._choose(row.control, row.id, !row.selected);
-            item.stop_emission_by_name('activate');
         });
         card.addMenuItem(item);
         this._updateOption(row, option, row.selected);

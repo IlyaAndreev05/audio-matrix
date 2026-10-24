@@ -201,6 +201,8 @@ export default class AudioMatrixStateClient {
             this._stateSequence = state.stateSequence;
             this._state = state;
             this._intentTracker.acceptAcks(state.commandAcks);
+            // Acknowledgment is not proof of the new level: settle only on this ordered State.
+            this._intentTracker.observe(state, this._stateEpoch);
             this._changed();
         } catch (error) {
             console.debug(`Audio Matrix state parse failed: ${error}`);

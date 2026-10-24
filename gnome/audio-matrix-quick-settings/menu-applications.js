@@ -19,10 +19,20 @@ export default class AudioMatrixMenuApplications {
         this._registerLevelRow = registerLevelRow;
         this._unregisterLevelRow = unregisterLevelRow;
         this._rendered = new Map();
+        this._views = new Map();
     }
 
     render(pin, applications, t, target) {
         const pinId = String(pin.id);
+        const saved = pin.expanded ?? pin.view !== 'COMPACT';
+        let view = this._views.get(pinId);
+        if (!view) {
+            view = {open: false, saved};
+            this._views.set(pinId, view);
+        } else if (view.saved !== saved) {
+            view.saved = saved;
+            view.open = saved;
+        }
         const existing = this._rendered.get(pinId) || new Map();
         const descriptors = this._descriptors(pin, applications, t);
         const next = new Map();
@@ -30,16 +40,13 @@ export default class AudioMatrixMenuApplications {
         for (const descriptor of descriptors) {
             let entry = existing.get(descriptor.id);
             if (!entry) entry = {item: this._rows.createLevelRow(descriptor.options), children: new Map()};
-            const expanded = pin.expanded ?? pin.view !== 'COMPACT';
-            if (entry.view !== expanded) {
-                entry.expanded = expanded;
-                entry.view = expanded;
-            }
+            entry.expanded = view.open;
             const options = {...descriptor.options, hasChildren: descriptor.tabs.length > 0 && pin.showChildren !== false,
-                expanded: entry.expanded, onExpand: () => {
-                    entry.expanded = !entry.expanded;
-                    this._rows.updateLevelRow(entry.item, {expanded: entry.expanded});
-                    this._send('set_quick_pin_view', `${pin.id}\t${entry.expanded ? 'EXPANDED' : 'COMPACT'}`);
+                expanded: view.open, onExpand: () => {
+                    view.open = !view.open;
+                    entry.expanded = view.open;
+                    this._rows.updateLevelRow(entry.item, {expanded: view.open});
+                    this._send('set_quick_pin_view', `${pinId}\t${view.open ? 'EXPANDED' : 'COMPACT'}`);
                 }};
             this._rows.updateLevelRow(entry.item, options);
             this._register(descriptor.id, entry.item);
@@ -159,10 +166,12 @@ export default class AudioMatrixMenuApplications {
             for (const childId of row.children.keys()) this._unregisterLevelRow?.(childId);
         }
         this._rendered.delete(String(pinId));
+        this._views.delete(String(pinId));
     }
 
     destroy() {
         for (const id of this._rendered.keys()) this.forgetPin(id);
+        this._views.clear();
         this._rows = null;
         this._send = null;
     }

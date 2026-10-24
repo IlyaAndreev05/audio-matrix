@@ -4,7 +4,8 @@
 The harness never touches the host audio graph: it starts its own PipeWire core,
 WirePlumber policy, virtual sinks, Xvfb display and D-Bus session. Audio Matrix and
 Event Sound Studio start from *copies* of the live configurations inside a private
-HOME; the physical output slots of the copy are remapped to the virtual sinks.
+HOME; the physical output slots of the copy are remapped to the virtual sinks, and
+the private copy's master and rear gains are capped with their mutes released.
 The trigger is the application's own "API event: test" button, and the bound sound
 is identified in every PCM tap by correlating with its configured WAV asset.
 
@@ -40,6 +41,12 @@ EVENT_SOUND_STUDIO_APP = pathlib.Path(os.environ.get("EVENT_SOUND_STUDIO_APP", "
 EVENT_LOOPBACK = pathlib.Path(__file__).resolve().parent.parent / "src/main/systemd/user/audiomatrix-events-loopback.sh"
 # The API test button of the 1320x850 Event Sound Studio home page, as fractions.
 API_BUTTON = (1208 / 1320, 568 / 850)
+# Highest linear master/rear gain this proof allows in its own private graph.
+PRIVATE_VOLUME_CAP = 0.042875
+# Peak-ratio measurement tolerance: taps are independent capture streams, so the
+# correlated burst peak may differ by a sample phase, not because the gain differs.
+RATIO_RELATIVE_TOLERANCE = 0.25
+REAR_DEVICE_ID = "family17h-rear-lineout"
 
 
 class ProofError(RuntimeError):
@@ -212,11 +219,34 @@ def output_port(environment, node, channel):
     raise ProofError(f"No output port {node} {channel} in the private graph")
 
 
+def cap_private_volume(container, key):
+    before = float(container.get(key, 0.0))
+    after = min(before, PRIVATE_VOLUME_CAP)
+    container[key] = after
+    return {"before": before, "after": after}
+
+
 def copy_audio_matrix_config(root):
     destination = root / "config/audio-matrix/config.json"
     destination.parent.mkdir(parents=True)
     config = json.loads(LIVE_AUDIO_MATRIX.read_text())
-    remap = {"family17h-rear-lineout": REAR_SINK, "benq-hdmi": MONITOR_SINK}
+    caps = {}
+    mixer = config.get("mixer")
+    if not isinstance(mixer, dict):
+        raise ProofError("The live Audio Matrix config has no mixer section")
+    caps["mixer.global_volume"] = cap_private_volume(mixer, "global_volume")
+    before_mute = mixer.get("global_mute")
+    mixer["global_mute"] = False
+    caps["mixer.global_mute"] = {"before": before_mute, "after": False}
+    rear = next((device for device in config.get("devices", [])
+                 if device.get("id") == REAR_DEVICE_ID), None)
+    if rear is None:
+        raise ProofError(f"The live Audio Matrix config has no {REAR_DEVICE_ID} device slot")
+    caps[f"devices.{REAR_DEVICE_ID}.volume"] = cap_private_volume(rear, "volume")
+    before_rear_mute = rear.get("mute")
+    rear["mute"] = False
+    caps[f"devices.{REAR_DEVICE_ID}.mute"] = {"before": before_rear_mute, "after": False}
+    remap = {REAR_DEVICE_ID: REAR_SINK, "benq-hdmi": MONITOR_SINK}
     remapped = []
     for device in config.get("devices", []):
         target = remap.get(device.get("id"))
@@ -227,7 +257,7 @@ def copy_audio_matrix_config(root):
         device["selector"] = {"kind": "name_equals", "value": target}
         remapped.append(device["id"])
     destination.write_text(json.dumps(config, ensure_ascii=False, indent=1))
-    return remapped
+    return {"devices": remapped, "caps": caps}
 
 
 def copy_event_sound_studio_config(root):
@@ -487,6 +517,21 @@ def node_linear_volume(environment, name):
     return None
 
 
+def verify_volume_ratios(analysis, route_volume, rear_volume):
+    """Compares the measured tap gains with the linear gains the private graph actually runs."""
+    measured = analysis.get("taps", {})
+    checks = {}
+    for name, expected in (("tap_route_output", route_volume),
+                           ("tap_rear_post_volume", route_volume * rear_volume)):
+        actual = float(measured.get(name, {}).get("ratio_to_event_sink", 0.0))
+        tolerance = expected * RATIO_RELATIVE_TOLERANCE
+        checks[name] = {"expected": round(expected, 8), "measured": round(actual, 8),
+                        "relative_error": round(abs(actual - expected) / expected, 5) if expected else None,
+                        "tolerance": round(tolerance, 8),
+                        "matched": abs(actual - expected) <= tolerance}
+    return checks
+
+
 def host_environment():
     """The caller may itself run inside a private PipeWire environment; host probes must not inherit it."""
     environment = {key: value for key, value in os.environ.items() if not key.startswith("PIPEWIRE_")}
@@ -549,9 +594,8 @@ def main():
         processes.extend([pipewire, wireplumber, *sinks, loopback])
         private_graph_has_no_hardware(environment)
 
-        remapped = copy_audio_matrix_config(root)
+        private_config = copy_audio_matrix_config(root)
         studio = copy_event_sound_studio_config(root)
-
         am, chain = start_audio_matrix(root, environment, logs)
         processes.append(am)
         ess = start("ess", [str(EVENT_SOUND_STUDIO_APP)], environment, root, logs)
@@ -591,6 +635,8 @@ def main():
             time.sleep(1.5)
         route_volume = node_linear_volume(environment, chain["route"])
         sink_volume = node_linear_volume(environment, REAR_SINK)
+        ratio_checks = verify_volume_ratios(analysis, route_volume, sink_volume) \
+            if route_volume is not None and sink_volume is not None else {}
         host_after = host_state()
         host_unchanged = host_before["sinks"] == host_after["sinks"] and host_before["files"] == host_after["files"]
         summary = {
@@ -600,9 +646,12 @@ def main():
             "click": click,
             "trigger_attempts": attempts,
             "private_chain": chain,
-            "remapped_devices": remapped,
+            "remapped_devices": private_config["devices"],
+            "private_volume_caps": private_config["caps"],
+            "private_volume_cap": PRIVATE_VOLUME_CAP,
             "route_linear_volume": route_volume,
             "rear_linear_volume": sink_volume,
+            "ratio_checks": ratio_checks,
             "analysis": analysis,
             "host_unchanged": host_unchanged,
             "host_rear_volume_before": host_before["sinks"].get(HOST_REAR_DEVICE),
@@ -617,8 +666,15 @@ def main():
         for name in tap_sources:
             if measured.get(name, {}).get("peak", 0.0) <= 0.0:
                 raise ProofError(f"PCM is zero at {name}: {measured.get(name)}")
-        if measured["tap_rear_post_volume"]["ratio_to_event_sink"] <= 0.0:
-            raise ProofError("The routed output tap carries no signal")
+        if route_volume is None or sink_volume is None:
+            raise ProofError("The private graph did not expose the route/rear linear volume")
+        if route_volume > PRIVATE_VOLUME_CAP + 1e-6 or sink_volume > PRIVATE_VOLUME_CAP + 1e-6:
+            raise ProofError(f"The private volume cap did not hold: route={route_volume}, rear={sink_volume}, "
+                             f"cap={PRIVATE_VOLUME_CAP}")
+        for name, check in ratio_checks.items():
+            if not check["matched"]:
+                raise ProofError(f"{name} ratio {check['measured']} does not match the private graph gain "
+                                 f"{check['expected']} (tolerance {check['tolerance']})")
         if not host_unchanged:
             raise ProofError("The private proof changed the host audio state")
         succeeded = True
