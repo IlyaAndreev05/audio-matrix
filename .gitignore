@@ -8,3 +8,4 @@ work/
 /todo.md
 graphify-out/
 __pycache__/
+.codegraph/
