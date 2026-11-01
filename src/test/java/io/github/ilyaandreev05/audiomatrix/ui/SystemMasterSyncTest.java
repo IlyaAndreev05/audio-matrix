@@ -52,9 +52,24 @@ class SystemMasterSyncTest {
         assertEquals(0.8, decision.volume(), 1e-9);
     }
 
-    @Test void unusableObservationIsIgnored() {
-        assertNull(SystemMasterSync.compare(Double.NaN, true, 0.8, false));
+    @Test void unusableVolumePreservesTargetButStillSyncsMute() {
+        SystemMasterSync.Decision muted = SystemMasterSync.compare(Double.NaN, true, 0.8, false);
+        assertNotNull(muted);
+        assertFalse(muted.writeVolume());
+        assertEquals(0.8, muted.volume(), 1e-9, "An unusable muted readback must preserve the saved target");
+        assertTrue(muted.writeMute());
+        assertTrue(muted.muted());
+        assertNull(SystemMasterSync.compare(Double.NaN, true, 0.8, true),
+                "when the mute already matches, an unavailable target makes no config change");
         assertFalse(SystemMasterSync.usableVolume(Double.POSITIVE_INFINITY));
+    }
+
+    @Test void mutedStoredZeroIsAValidVolumeTarget() {
+        SystemMasterSync.Decision decision = SystemMasterSync.compare(0.0, true, 0.8, true);
+        assertNotNull(decision);
+        assertTrue(decision.writeVolume());
+        assertEquals(0.0, decision.volume(), 1e-9);
+        assertFalse(decision.writeMute());
     }
 
     @Test void stalePreCommandObservationIsDeferred() {

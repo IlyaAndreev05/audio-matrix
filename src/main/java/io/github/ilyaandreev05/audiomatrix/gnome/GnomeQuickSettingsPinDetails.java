@@ -1,7 +1,10 @@
 package io.github.ilyaandreev05.audiomatrix.gnome;
 
 import io.github.ilyaandreev05.audiomatrix.audio.AudioMatrixOwnedStream;
+import io.github.ilyaandreev05.audiomatrix.audio.GeneratedOutputBinding;
+import io.github.ilyaandreev05.audiomatrix.graph.DynamicInstanceRegistry;
 import io.github.ilyaandreev05.audiomatrix.audio.AudioNode;
+import io.github.ilyaandreev05.audiomatrix.audio.DeviceDiscovery;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
 import io.github.ilyaandreev05.audiomatrix.graph.DynamicGeneratorNode;
@@ -60,15 +63,42 @@ final class GnomeQuickSettingsPinDetails {
                 String.valueOf(app.getOrDefault("application_id", "")), 2, List.of(), 1.0, false, null);
     }
 
+    static Map<String, Object> generatedOutput(OutputNode output, AudioGraph graph,
+            PipeWireBackend.Snapshot snapshot, Map<String, Object> config,
+            DynamicInstanceRegistry.RuntimeInstance instance) {
+        String reference = snapshot == null ? null : GeneratedOutputBinding.resolve(config,
+                instance.runtimeBinding(), snapshot, snapshot.sinks()).orElse(null);
+        Map<String, Object> saved = reference == null ? null : maps(config.get("devices")).stream()
+                .filter(device -> reference.equals(device.get("id"))).findFirst().orElse(null);
+        if (saved == null) return outputForReference(output, graph, snapshot, config, null);
+        AudioNode live = DeviceDiscovery.resolve(snapshot.sinks(), saved).node();
+        Map<String, Object> state = outputState(output, graph, snapshot, config, live,
+                "device:" + reference);
+        if (live != null) state.put("id", "device:" + reference);
+        return state;
+    }
+
     static Map<String, Object> outputFor(OutputNode output, AudioGraph graph,
                                          PipeWireBackend.Snapshot snapshot, Map<String, Object> config) {
+        return outputForReference(output, graph, snapshot, config, output.deviceId());
+    }
+
+    static Map<String, Object> outputForReference(OutputNode output, AudioGraph graph,
+            PipeWireBackend.Snapshot snapshot, Map<String, Object> config, String reference) {
         List<Map<String, Object>> devices = maps(config.get("devices"));
-        AudioNode resolved = output.deviceId().equals("system_default")
+        AudioNode resolved = reference == null ? null : reference.equals("system_default")
                 ? snapshot.sinks().stream().filter(node -> node.id() == snapshot.defaultSinkId()).findFirst().orElse(null)
-                : GnomeOutputState.resolve(snapshot.sinks(), output.deviceId(), devices);
+                : GnomeOutputState.resolve(snapshot.sinks(), reference, devices);
+        return outputState(output, graph, snapshot, config, resolved, output.deviceId());
+    }
+
+    private static Map<String, Object> outputState(OutputNode output, AudioGraph graph,
+            PipeWireBackend.Snapshot snapshot, Map<String, Object> config, AudioNode resolved,
+            String unavailableId) {
+        List<Map<String, Object>> devices = maps(config.get("devices"));
         Map<String, Object> state = resolved == null
-                ? new LinkedHashMap<>(Map.of("available", false, "id", output.deviceId(), "name",
-                    io.github.ilyaandreev05.audiomatrix.config.DeviceDisplayNames.displayName(config, output.deviceId(), output.name())))
+                ? new LinkedHashMap<>(Map.of("available", false, "id", unavailableId, "name",
+                    io.github.ilyaandreev05.audiomatrix.config.DeviceDisplayNames.displayName(config, unavailableId, output.name())))
                 : GnomeOutputState.device(resolved, devices, snapshot.defaultSinkId());
         GainNode gain = GnomeGraphOutputGain.forOutput(graph, output);
         if (gain == null) {

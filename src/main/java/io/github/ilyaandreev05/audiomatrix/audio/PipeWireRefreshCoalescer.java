@@ -7,16 +7,15 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
-/** Runs at most one snapshot refresh at a time, immediate for level edits and debounced for topology churn. */
+/** Runs at most one snapshot refresh and one trailing refresh, debounced for level/topology bursts. */
 final class PipeWireRefreshCoalescer implements AutoCloseable {
-    static final long LEVEL_DELAY_MS = 5;
+    static final long LEVEL_DELAY_MS = 80;
     static final long TOPOLOGY_DELAY_MS = 250;
 
     private final ScheduledExecutorService scheduler;
     private final Supplier<CompletableFuture<PipeWireBackend.Snapshot>> refresh;
     private final Consumer<PipeWireBackend.Snapshot> listener;
     private long pendingDelay = Long.MAX_VALUE;
-    private long scheduledDelay = Long.MAX_VALUE;
     private ScheduledFuture<?> scheduled;
     private boolean inFlight;
     private boolean closed;
@@ -38,21 +37,19 @@ final class PipeWireRefreshCoalescer implements AutoCloseable {
         pendingDelay = Math.min(pendingDelay, delayMs);
         if (inFlight) return;
         if (scheduled != null) {
-            if (pendingDelay >= scheduledDelay) return;
+            if (scheduled.getDelay(TimeUnit.NANOSECONDS) <= TimeUnit.MILLISECONDS.toNanos(pendingDelay)) return;
             if (!scheduled.cancel(false)) return;
         }
         schedule(pendingDelay);
     }
 
     private void schedule(long delayMs) {
-        scheduledDelay = delayMs;
         scheduled = scheduler.schedule(this::run, delayMs, TimeUnit.MILLISECONDS);
     }
 
     private void run() {
         synchronized (this) {
             scheduled = null;
-            scheduledDelay = Long.MAX_VALUE;
             if (closed) return;
             inFlight = true;
             pendingDelay = Long.MAX_VALUE;
@@ -91,6 +88,5 @@ final class PipeWireRefreshCoalescer implements AutoCloseable {
             scheduled.cancel(false);
             scheduled = null;
         }
-        scheduledDelay = Long.MAX_VALUE;
     }
 }

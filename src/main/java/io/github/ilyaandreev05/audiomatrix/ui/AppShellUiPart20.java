@@ -240,8 +240,12 @@ abstract class AppShellUiPart20 extends AppShellUiPart19 {
         updateConfig(config -> { Map<String, Object> device = ensureDevice(config, sink); device.put("mute", muted); });
     }
 
-    protected void saveAppVolume(AudioNode stream, double volume) {
-        updateConfig(config -> { Map<String, Object> app = ensureApplication(config, stream); app.put("volume", volume); });
+    protected CompletableFuture<Void> saveAppVolume(AudioNode stream, double volume, String intentId) {
+        return store.updateAsync(config -> {
+            Map<String, Object> app = ensureApplication(config, stream);
+            app.put("volume", volume);
+            app.put("mute", false);
+        });
     }
 
     protected void saveAppMute(AudioNode stream, boolean muted) {

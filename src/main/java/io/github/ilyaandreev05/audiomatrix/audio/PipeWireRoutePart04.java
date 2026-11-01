@@ -47,6 +47,7 @@ abstract class PipeWireRoutePart04 extends PipeWireRoutePart03 {
         Map<String, Map<String, Object>> busConfig = new LinkedHashMap<>();
         for (Map<String, Object> bus : maps(config.get("buses"))) busConfig.put(text(bus.get("id")), bus);
         List<AudioNode> physicalSinks = snapshot.sinks().stream()
+                .filter(AudioNode::outputAvailable)
                 .filter(node -> !node.name().startsWith("audiomatrix_")).toList();
         List<Map<String, Object>> devices = maps(config.get("devices"));
         List<String> warnings = new ArrayList<>();

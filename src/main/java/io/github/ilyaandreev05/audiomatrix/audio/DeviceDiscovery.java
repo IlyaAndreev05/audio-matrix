@@ -23,11 +23,14 @@ public final class DeviceDiscovery {
         }
         DeviceIdentity identity = DeviceIdentity.fromMap(object(device.get("identity")));
         if (!identity.reliable()) return new Resolution(State.AMBIGUOUS, null, "Low confidence identity; explicit hardware identification required");
-        List<AudioNode> matches = nodes.stream().filter(node -> node.identity() != null
+        List<AudioNode> identityMatches = nodes.stream().filter(node -> node.identity() != null
                 && node.identity().reliable() && node.identity().equals(identity)).toList();
-        if (matches.isEmpty()) return new Resolution(State.OFFLINE, null, "Device offline or profile/channels changed");
-        if (matches.size() > 1) return new Resolution(State.AMBIGUOUS, null, "Physical identity collision");
-        return new Resolution(State.ONLINE, matches.getFirst(), "");
+        if (identityMatches.isEmpty()) return new Resolution(State.OFFLINE, null, "Device offline or profile/channels changed");
+        if (identityMatches.size() > 1) return new Resolution(State.AMBIGUOUS, null, "Physical identity collision");
+        AudioNode match = identityMatches.getFirst();
+        if ("output".equals(match.kind()) && !match.outputAvailable())
+            return new Resolution(State.OFFLINE, null, "Output unavailable");
+        return new Resolution(State.ONLINE, match, "");
     }
 
     public static List<Entry> catalog(List<AudioNode> nodes, List<Map<String, Object>> devices) {
@@ -42,6 +45,7 @@ public final class DeviceDiscovery {
                     String.valueOf(device.getOrDefault("id", "")), conflict.isEmpty() ? resolution.message() : conflict));
         }
         for (AudioNode node : nodes) {
+            if ("output".equals(node.kind()) && !node.outputAvailable()) continue;
             boolean known = devices.stream().anyMatch(device -> resolve(nodes, device).node() == node
                     || device.get("identity") instanceof Map<?, ?> && node.identity() != null
                     && node.identity().equals(DeviceIdentity.fromMap(object(device.get("identity")))));
@@ -69,6 +73,7 @@ public final class DeviceDiscovery {
     public static void bind(Map<String, Object> config, String slotId, AudioNode node) {
         if (slotId == null || slotId.isBlank() || node == null || !"output".equals(node.kind()) || node.name().startsWith("audiomatrix_"))
             throw new IllegalArgumentException("Binding needs a slot id and physical output");
+        if (!node.outputAvailable()) throw new IllegalArgumentException("Output unavailable");
         if (node.identity() == null || !node.identity().reliable())
             throw new IllegalArgumentException("Device identity confidence is too low for safe reconnect");
         List<Map<String, Object>> devices = devices(config);

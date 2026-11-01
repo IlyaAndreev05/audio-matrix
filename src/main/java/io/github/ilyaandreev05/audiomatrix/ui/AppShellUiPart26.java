@@ -202,6 +202,7 @@ abstract class AppShellUiPart26 extends AppShellUiPart25 {
 
     protected List<AudioNode> physicalSinks() {
         return snapshot.sinks().stream()
+                .filter(AudioNode::outputAvailable)
                 .filter(node -> !node.name().startsWith("audiomatrix_"))
                 .toList();
     }

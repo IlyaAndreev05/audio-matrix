@@ -243,6 +243,54 @@ function gainState(volume, {muted = false, ...rest} = {}) {
     assert.equal(pending(client).length, 0);
 }
 
+// A late superseded error cannot reject or roll back the newer pending volume.
+{
+    const client = makeClient();
+    const target = {routeId: 'main', nodeId: 'gain-1', instanceKey: ''};
+    const oldRequest = client.send('setNodeVolume', {target, value: 0.5});
+    const oldTimer = request(client, oldRequest).timer;
+    const currentRequest = client.send('setNodeVolume', {target, value: 0.3});
+    const currentTimer = request(client, currentRequest).timer;
+    const currentIntent = pending(client);
+    const superseded = ackFor(oldRequest, target, 'volume', 'error', null,
+        'superseded by newer volume for this target', 2);
+
+    deliver(client, state('epoch-a', 2, gainState(0.5, {acks: [superseded]})));
+    assert.deepEqual(pending(client), currentIntent,
+        'the old error cannot replace, acknowledge, or roll back the newer intent');
+    assert.equal(client.snapshot().commandError, '', 'superseding an old volume is not a new command error');
+    assert.equal(request(client, oldRequest), undefined, 'the error cannot resurrect the retired request');
+    assert.equal(sources.has(oldTimer), false, 'the superseded request leaves no timeout behind');
+    assert.equal(request(client, currentRequest).timer, currentTimer,
+        'the newer request keeps its original engine deadline');
+    assert.equal(sources.has(currentTimer), true);
+
+    deliver(client, state('epoch-a', 3, gainState(0.5, {
+        acks: [ackFor(currentRequest, target, 'volume', 'ok', 0.3, undefined, 3), superseded]})));
+    const acknowledgedIntent = pending(client);
+    assert.equal(acknowledgedIntent.length, 1, 'the newer ACK still waits for its observed volume');
+    assert.equal(acknowledgedIntent[0].requestId, currentRequest);
+    assert.equal(acknowledgedIntent[0].value, 0.3);
+    assert.equal(acknowledgedIntent[0].acknowledged, true);
+    assert.equal(acknowledgedIntent[0].ackSequence, 3);
+    const observationTimer = request(client, currentRequest).observationTimer;
+    assert.ok(observationTimer, 'the newer ACK arms its own observation deadline');
+    assert.equal(client.snapshot().commandError, '',
+        'a cumulative old error after the newer ACK cannot report a failure');
+
+    deliver(client, state('epoch-a', 4, gainState(0.5, {acks: [superseded]})));
+    assert.deepEqual(pending(client), acknowledgedIntent,
+        'a repeated old error cannot roll back an acknowledged newer intent');
+    assert.deepEqual(liveTimers(client), [observationTimer],
+        'a repeated old error cannot cancel or restart the newer observation deadline');
+    assert.equal(client.snapshot().commandError, '');
+
+    deliver(client, state('epoch-a', 5, gainState(0.3, {acks: [superseded]})));
+    assert.equal(pending(client).length, 0, 'only the matching newer volume settles the intent');
+    assert.deepEqual(liveTimers(client), [], 'settling the newer intent cancels its remaining deadline');
+    assert.equal(client.snapshot().commandError, '');
+}
+
 // A new bridge epoch, an explicit stop, and a vanished target all cancel intents and timers.
 {
     const client = makeClient();

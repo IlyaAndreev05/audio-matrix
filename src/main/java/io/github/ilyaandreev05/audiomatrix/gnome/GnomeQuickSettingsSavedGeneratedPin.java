@@ -1,5 +1,6 @@
 package io.github.ilyaandreev05.audiomatrix.gnome;
 
+import io.github.ilyaandreev05.audiomatrix.audio.GeneratedOutputBinding;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
 import io.github.ilyaandreev05.audiomatrix.graph.DynamicGeneratorNode;
@@ -49,7 +50,8 @@ final class GnomeQuickSettingsSavedGeneratedPin {
         Map<String,Object> result=state(renderPin,generator,instance,routeId,graph,snapshot,config,applications,outputs);
         if(result==null)return null;
         result.put("showWhenOffline",showOffline);
-        result.put("available",snapshot.connected()&&instance.available());
+        if (!"outputs".equals(generator.registry()))
+            result.put("available",snapshot.connected()&&instance.available());
         if(!instance.gainControlAvailable())result.remove("gain");
         return result;
     }
@@ -61,14 +63,20 @@ final class GnomeQuickSettingsSavedGeneratedPin {
         if(child==null)return null;
         Map<String,Object> result=GnomeQuickSettingsNodeState.describe(pin,child,graph,
                 new GnomeQuickSettingsNodeState.Inputs(config,snapshot,List.of(),applications),List.of());
+        if ("outputs".equals(generator.registry()) && child instanceof io.github.ilyaandreev05.audiomatrix.graph.OutputNode output)
+            result.put("output", GnomeQuickSettingsPinDetails.generatedOutput(output, graph, snapshot, config, instance));
         result.put("nodeId",generator.id());result.put("runtimeNodeId",child.id());
         result.put("instanceKey",instance.instanceKey());result.put("childId",childId);result.put("registry",generator.registry());
         result.put("showWhenOffline",showOffline);result.put("available",snapshot.connected()&&instance.available());
+        boolean outputBindingAvailable = !"outputs".equals(generator.registry())
+                || GeneratedOutputBinding.resolve(config, instance.runtimeBinding(), snapshot,
+                        snapshot == null ? List.of() : snapshot.sinks()).isPresent();
+        if (!outputBindingAvailable) result.put("available", false);
         result.remove("sourceGain");result.remove("gain");
         result.remove("routeControl");result.remove("mixerInputs");result.put("controls",List.of());
         if(result.get("output") instanceof Map<?,?> endpoint)endpoint.remove("graphGainNodeId");
         GainNode gain=generatedGain(graph,instance);
-        if(gain!=null&&instance.gainControlAvailable()&&List.of("source","gain","output").contains(childId))
+        if(gain!=null&&instance.gainControlAvailable()&&outputBindingAvailable&&List.of("source","gain","output").contains(childId))
             result.put("gain",Map.of("routeId",routeId,"nodeId",generator.id(),"instanceKey",instance.instanceKey(),
                     "volume",gain.gain(),"muted",gain.muted()));
         Map<String,Object> tab=browserTab(instance,applications);

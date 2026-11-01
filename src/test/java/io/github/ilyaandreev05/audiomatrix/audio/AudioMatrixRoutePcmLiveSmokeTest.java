@@ -37,7 +37,7 @@ class AudioMatrixRoutePcmLiveSmokeTest extends PipeWireChannelMatrixRouteLiveSmo
         Map<String, Object> runtime = GraphPipeWireCompiler.compile(graph, config);
 
         List<Process> clients = new ArrayList<>();
-        List<RouteSmokePcmSupport.ToneWriter> tones = new ArrayList<>();
+        List<RouteSmokeToneWriter> tones = new ArrayList<>();
         PipeWireBackend backend = new PipeWireBackend();
         PipeWireRouteManager manager = new PipeWireRouteManager();
         Path primaryCapture = tempDir.resolve("primary.f32");
@@ -67,12 +67,21 @@ class AudioMatrixRoutePcmLiveSmokeTest extends PipeWireChannelMatrixRouteLiveSmo
             assertRoutedThroughAudioMatrix(runtime);
 
             Map<String, Integer> appOwned = appBranchNodes(runtime);
+            long eventCaptureBytesBeforeStop = Files.size(eventCapture);
+            RouteSmokeToneWriter eventToneWriter = tones.get(1);
             tones.getFirst().stop();
             applyUntilBranchGone(backend, manager, runtime, RouteSmokePcmSupport.APP_STREAM);
             Thread.sleep(1200);
-            assertTrue(RouteSmokePcmSupport.amplitude(eventCapture, RouteSmokePcmSupport.EVENT_FREQUENCY,
-                            MEASURE_WINDOW_SECONDS) > 0.02,
-                    "The event branch must keep its signal while the application stream disappears");
+            double eventAmplitude = RouteSmokePcmSupport.amplitude(eventCapture,
+                    RouteSmokePcmSupport.EVENT_FREQUENCY, MEASURE_WINDOW_SECONDS);
+            String eventDiagnostics = !(eventAmplitude > 0.02)
+                    ? PrivatePipeWireSmokeDiagnostics.eventRouteFailure(eventAmplitude,
+                            eventCaptureBytesBeforeStop, measured, appOwned, eventToneWriter,
+                            eventRecorder, eventCapture, backend, manager)
+                    : "";
+            assertTrue(eventAmplitude > 0.02,
+                    "The event branch must keep its signal while the application stream disappears; measured amplitude="
+                            + eventAmplitude + eventDiagnostics);
             assertEquals(appOwned, appBranchNodes(runtime), "The surviving branch must keep its owned node ids");
             startTone(RouteSmokePcmSupport.APP_STREAM, RouteSmokePcmSupport.SYSTEM_SINK,
                     RouteSmokePcmSupport.APP_ID, RouteSmokePcmSupport.APP_FREQUENCY, clients, tones);
@@ -99,7 +108,7 @@ class AudioMatrixRoutePcmLiveSmokeTest extends PipeWireChannelMatrixRouteLiveSmo
                             MEASURE_WINDOW_SECONDS) > 0.02, "The event output must return with its signal");
             writeResult(measured, appOwned);
         } finally {
-            for (RouteSmokePcmSupport.ToneWriter tone : tones) tone.stop();
+            for (RouteSmokeToneWriter tone : tones) tone.stop();
             for (Process client : clients) stop(client);
             try {
                 manager.closeAsync().get(10, TimeUnit.SECONDS);
@@ -214,11 +223,11 @@ class AudioMatrixRoutePcmLiveSmokeTest extends PipeWireChannelMatrixRouteLiveSmo
     }
 
     private void startTone(String name, String target, String applicationId, double frequency,
-                           List<Process> clients, List<RouteSmokePcmSupport.ToneWriter> tones) throws Exception {
+                           List<Process> clients, List<RouteSmokeToneWriter> tones) throws Exception {
         Process process = RouteSmokePcmSupport.startToneProcess(name, target, applicationId);
         clients.add(process);
         awaitNodeState(name, true);
-        tones.add(RouteSmokePcmSupport.ToneWriter.start(process, frequency));
+        tones.add(RouteSmokeToneWriter.start(process, frequency));
     }
 
     private void writeResult(Map<String, Object> measured, Map<String, Integer> appOwned) throws Exception {
@@ -231,4 +240,5 @@ class AudioMatrixRoutePcmLiveSmokeTest extends PipeWireChannelMatrixRouteLiveSmo
         result.put("node_levels", RouteSmokePcmSupport.nodeLevels(run("pw-dump", "-N")));
         Files.writeString(Path.of(path), new ObjectMapper().writeValueAsString(result));
     }
+
 }

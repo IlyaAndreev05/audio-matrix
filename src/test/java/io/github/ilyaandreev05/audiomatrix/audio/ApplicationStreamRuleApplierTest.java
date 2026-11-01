@@ -71,19 +71,19 @@ class ApplicationStreamRuleApplierTest extends ApplicationStreamRuleFixture {
         assertSucceeded(changed);
 
         CompletableFuture<Void> rollback = applier.apply(original, rules(1.0, false), Map.of(), true, null);
-        assertVolume(2, 1.0);
+        assertMute(2, false, 1.0);
         assertFalse(rollback.isDone());
         complete(2);
-        assertMute(3, false, 1.0);
+        assertVolume(3, 1.0);
         assertFalse(rollback.isDone());
         complete(3);
         assertSucceeded(rollback);
         assertEquals(4, writes.size());
 
         CompletableFuture<Void> repeated = applier.apply(original, rules(1.0, false), Map.of(), true, null);
-        assertVolume(4, 1.0);
+        assertMute(4, false, 1.0);
         complete(4);
-        assertMute(5, false, 1.0);
+        assertVolume(5, 1.0);
         assertFalse(repeated.isDone());
         complete(5);
         assertSucceeded(repeated);
@@ -113,10 +113,10 @@ class ApplicationStreamRuleApplierTest extends ApplicationStreamRuleFixture {
         assertFalse(third.isDone());
         complete(2);
         assertSucceeded(second);
-        assertVolume(3, 0.8);
+        assertMute(3, false, 0.8);
         assertFalse(third.isDone());
         complete(3);
-        assertMute(4, false, 0.8);
+        assertVolume(4, 0.8);
         assertFalse(third.isDone());
         complete(4);
         assertSucceeded(third);
@@ -138,9 +138,9 @@ class ApplicationStreamRuleApplierTest extends ApplicationStreamRuleFixture {
         assertEquals(List.of(failure), failures);
 
         CompletableFuture<Void> retry = apply(original, 1.0, false);
-        assertVolume(1, 1.0);
+        assertMute(1, false, 1.0);
         complete(1);
-        assertMute(2, false, 1.0);
+        assertVolume(2, 1.0);
         assertFalse(retry.isDone());
         complete(2);
         assertSucceeded(retry);

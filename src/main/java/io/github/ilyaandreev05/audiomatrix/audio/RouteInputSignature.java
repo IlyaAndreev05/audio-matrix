@@ -29,10 +29,11 @@ public final class RouteInputSignature {
         if (current == null) return digest(Arrays.asList(topologyConfig(config), connectionGeneration, false));
         List<String> outputs = current.sinks().stream()
                 .filter(node -> !AudioMatrixOwnedStream.matches(node))
-                .map(node -> node.name() + ":" + node.identity().fingerprint())
+                .map(node -> node.name() + ":" + node.identity().fingerprint() + ":" + node.portAvailability())
                 .sorted().toList();
         String defaultOutput = current.sinks().stream().filter(node -> node.id() == current.defaultSinkId())
-                .map(node -> node.name() + ":" + node.identity().fingerprint()).findFirst().orElse("");
+                .map(node -> node.name() + ":" + node.identity().fingerprint() + ":" + node.portAvailability())
+                .findFirst().orElse("");
         boolean eventInputAvailable = current.sources().stream().anyMatch(EventInputMonitor::isNode);
         return digest(Arrays.asList(topologyConfig(config), connectionGeneration, current.connected(),
                 defaultOutput, outputs, eventInputAvailable));

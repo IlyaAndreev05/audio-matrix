@@ -147,6 +147,12 @@ class GnomeQuickSettingsPinsTest {
         assertEquals(false, monitorOutput.get("muted"));
         assertEquals(DynamicInstanceRegistry.generatedGainNodeId(reconciled, UnifiedGraphConfig.MONITOR_OUTPUT_ID,
                 "device:" + monitor.identity().fingerprint()), monitorOutput.get("graphGainNodeId"));
+        config.put("devices", List.of());
+        List<Map<String, Object>> withoutBinding = GnomeQuickSettingsPins.build(config, snapshot,
+                GnomeControlBridge.quickControls(config), List.of(), outputs, reconciled.effectiveGraph(),
+                reconciled.instances());
+        assertFalse(withoutBinding.stream().anyMatch(item -> UnifiedGraphConfig.MONITOR_OUTPUT_ID.equals(item.get("nodeId"))
+                && Boolean.TRUE.equals(item.get("available"))));
         // The haptic device keeps its own saved level and is shown through the single shared haptic card.
         Map<String, Object> vibroBinding = DynamicInstanceRegistry.requireInstance(reconciled,
                 GraphCommonVibro.VIBRO_OUTPUT_ID, "device:" + vibro.identity().fingerprint(), true)

@@ -25,6 +25,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static io.github.ilyaandreev05.audiomatrix.ui.GeneratedOutputTestSupport.*;
 
 class GnomeGraphGeneratedOutputCommandTest {
     private static final String ROUTE_ID = "main";
@@ -45,11 +46,13 @@ class GnomeGraphGeneratedOutputCommandTest {
         String instanceKey = "device:" + identity.fingerprint();
         DynamicInstanceRegistry.RuntimeInstance instance = DynamicInstanceRegistry.requireInstance(
                 registry, generator.id(), instanceKey, true);
-        String bindingId = String.valueOf(instance.runtimeBinding().get("deviceId"));
+        String bindingId = "saved-command-output";
         @SuppressWarnings("unchecked") List<Map<String, Object>> devices =
                 (List<Map<String, Object>>) config.get("devices");
         devices.add(DefaultConfig.map("id", bindingId, "kind", "device_slot", "role", "output",
                 "identity", identity.toMap(), "volume", 0.62, "mute", true));
+        devices.add(DefaultConfig.map("id", output.name(), "role", "output",
+                "selector", DefaultConfig.map("kind", "name_equals", "value", "another-sink"), "volume", 0.73, "mute", true));
         PipeWireBackend.Snapshot snapshot = new PipeWireBackend.Snapshot(true, "", List.of(output), List.of(),
                 List.of(), List.of(), Map.of(), output.id(), System.currentTimeMillis());
         AtomicReference<Integer> runtimeNode = new AtomicReference<>();
@@ -109,6 +112,8 @@ class GnomeGraphGeneratedOutputCommandTest {
             assertEquals(0.4, runtimeVolume.get(), 0.0001);
             assertEquals(0.4, ((Number) savedEndpoint.get("volume")).doubleValue(), 0.0001);
             assertFalse((Boolean) savedEndpoint.get("mute"));
+            assertEquals(0.73, ((Number) GraphNodeCommand.deviceBinding(store.snapshot(), output.name())
+                    .get("volume")).doubleValue(), 0.0001);
             assertTrue(DynamicInstanceRegistry.instanceOverride(store.snapshot(), ROUTE_ID,
                     generator.id(), instanceKey, "gain").isEmpty());
             assertTrue(DynamicInstanceRegistry.instanceOverride(store.snapshot(), ROUTE_ID,
@@ -175,34 +180,4 @@ class GnomeGraphGeneratedOutputCommandTest {
         }
     }
 
-    private static DynamicGeneratorNode generator() {
-        Map<String, Object> parameters = new LinkedHashMap<>();
-        parameters.put("registry", "outputs");
-        parameters.put("template", "default-output");
-        parameters.put("selector", "device:*");
-        parameters.put("instances", new LinkedHashMap<>());
-        parameters.put("connect_to", Map.of("node_id", UnifiedGraphConfig.SWITCH_ID, "port_id", "in"));
-        parameters.put("excluded_selectors", List.of("device:role:haptic_output"));
-        return new DynamicGeneratorNode(UnifiedGraphConfig.MONITOR_OUTPUT_ID, "Generated output", "device:*",
-                CHANNELS, parameters);
-    }
-
-    private static AudioGraph replaceGenerator(Map<String, Object> config, DynamicGeneratorNode generator) {
-        Map<String, Object> savedRoute = routes(config).stream()
-                .filter(route -> ROUTE_ID.equals(route.get("id"))).findFirst().orElseThrow();
-        AudioGraph original = GraphCodec.fromMap(savedRoute);
-        List<GraphNode> nodes = new ArrayList<>(original.nodes());
-        int index = nodes.stream().map(GraphNode::id).toList().indexOf(generator.id());
-        if (index >= 0) nodes.set(index, generator);
-        else nodes.add(generator);
-        AudioGraph changed = new AudioGraph(original.id(), original.name(), nodes, original.connections());
-        GraphRouteLibrary.saveRoute(config, changed, String.valueOf(savedRoute.getOrDefault("group_id", "")));
-        return GraphCodec.fromMap(routes(config).stream()
-                .filter(route -> ROUTE_ID.equals(route.get("id"))).findFirst().orElseThrow());
-    }
-
-    @SuppressWarnings("unchecked")
-    private static List<Map<String, Object>> routes(Map<String, Object> config) {
-        return (List<Map<String, Object>>) config.get("route_library");
-    }
 }

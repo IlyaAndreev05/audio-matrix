@@ -8,9 +8,11 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -74,7 +76,9 @@ final class RouteSmokePcmSupport {
                 "--properties", properties(Map.of("node.name", name)),
                 "--raw", "--format", "f32", "--rate", String.valueOf(SAMPLE_RATE),
                 "--channels", String.valueOf(CHANNELS), "--channel-map", "FL,FR", "-");
-        return new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(file.toFile()).start();
+        // Never mix diagnostics into binary PCM: full-band RMS must measure audio only.
+        return new ProcessBuilder(command).redirectOutput(file.toFile())
+                .redirectError(file.resolveSibling(file.getFileName() + ".log").toFile()).start();
     }
 
     static Process startToneProcess(String name, String target, String applicationId) throws IOException {
@@ -99,59 +103,6 @@ final class RouteSmokePcmSupport {
         }
     }
 
-    /** Keeps a tone running for as long as the smoke test needs the stream to exist. */
-    static final class ToneWriter {
-        private static final int CHUNK_FRAMES = 480;
-        private final Process process;
-        private final double frequency;
-        private final Thread thread;
-        private volatile boolean running = true;
-
-        private ToneWriter(Process process, double frequency) {
-            this.process = process;
-            this.frequency = frequency;
-            this.thread = Thread.ofVirtual().name("route-smoke-tone").start(this::write);
-        }
-
-        static ToneWriter start(Process process, double frequency) {
-            return new ToneWriter(process, frequency);
-        }
-
-        private void write() {
-            ByteBuffer buffer = ByteBuffer.allocate(CHUNK_FRAMES * CHANNELS * 4).order(ByteOrder.LITTLE_ENDIAN);
-            long cursor = 0;
-            try {
-                OutputStream stream = process.getOutputStream();
-                while (running) {
-                    buffer.clear();
-                    for (int frame = 0; frame < CHUNK_FRAMES; frame++) {
-                        double value = TONE_AMPLITUDE * Math.sin(2 * Math.PI * frequency * (cursor + frame) / SAMPLE_RATE);
-                        buffer.putFloat((float) value);
-                        buffer.putFloat((float) value);
-                    }
-                    // The pipe back-pressure paces the writer; sleeping here would starve the stream.
-                    stream.write(buffer.array());
-                    cursor += CHUNK_FRAMES;
-                }
-            } catch (IOException stopped) {
-                // The stream is gone; the smoke test notices the missing signal.
-            }
-        }
-
-        void stop() {
-            running = false;
-            try {
-                process.getOutputStream().close();
-            } catch (IOException ignored) {
-                // The process may already be gone; the tone thread exits on the next write.
-            }
-            try {
-                thread.join(2000);
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-            }
-        }
-    }
 
     /** Measures the tone amplitude of the last window of a captured f32 stream. */
     static double amplitude(Path file, double frequency, double windowSeconds) throws IOException {
@@ -171,6 +122,29 @@ final class RouteSmokePcmSupport {
             count++;
         }
         return count == 0 ? 0.0 : 2 * Math.hypot(sin, cos) / count;
+    }
+
+    /** Full stereo RMS of a complete recent f32 window; unlike amplitude, silence includes all frequencies. */
+    static double rms(Path file, double windowSeconds) throws IOException {
+        int frames = (int) (windowSeconds * SAMPLE_RATE);
+        if (frames <= 0) throw new IllegalArgumentException("A positive PCM measurement window is required");
+        int bytes = Math.multiplyExact(frames, CHANNELS * Float.BYTES);
+        ByteBuffer buffer = ByteBuffer.allocate(bytes).order(ByteOrder.LITTLE_ENDIAN);
+        try (FileChannel channel = FileChannel.open(file, StandardOpenOption.READ)) {
+            long completeBytes = channel.size() / (CHANNELS * Float.BYTES) * (CHANNELS * Float.BYTES);
+            if (completeBytes < bytes) throw new IOException("Incomplete PCM window in " + file);
+            channel.position(completeBytes - bytes);
+            while (buffer.hasRemaining())
+                if (channel.read(buffer) < 0) throw new IOException("PCM capture ended during measurement: " + file);
+        }
+        buffer.flip();
+        double squares = 0;
+        while (buffer.hasRemaining()) {
+            float sample = buffer.getFloat();
+            if (!Float.isFinite(sample)) throw new IOException("Non-finite PCM sample in " + file);
+            squares += (double) sample * sample;
+        }
+        return Math.sqrt(squares / (frames * CHANNELS));
     }
 
     /** Measures the routed gains and the cross-leak between the application and event tones. */

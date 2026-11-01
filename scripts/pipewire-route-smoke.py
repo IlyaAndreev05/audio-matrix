@@ -34,7 +34,7 @@ REGRESSION_TESTS = [
 ]
 
 
-def private_environment(root):
+def private_environment(root, include_system_sink=False):
     home = root / "home"
     home.mkdir()
     for name in ("config", "data", "state"):
@@ -52,6 +52,18 @@ def private_environment(root):
     )
     for name in ("PIPEWIRE_CONFIG_DIR", "PIPEWIRE_CONFIG_PREFIX", "PIPEWIRE_CONFIG_NAME"):
         environment.pop(name, None)
+    pipewire_config = root / "pipewire-config"
+    pipewire_config.mkdir()
+    for source in pathlib.Path("/usr/share/pipewire").iterdir():
+        if source.is_file():
+            shutil.copy(source, pipewire_config / source.name)
+    drop_ins = pipewire_config / "pipewire.conf.d"
+    drop_ins.mkdir()
+    if include_system_sink:
+        source_drop_in = (pathlib.Path(__file__).resolve().parents[1]
+                          / "src/main/pipewire/pipewire.conf.d/90-audiomatrix-system-sink.conf")
+        shutil.copy(source_drop_in, drop_ins / source_drop_in.name)
+    environment["PIPEWIRE_CONFIG_DIR"] = str(pipewire_config)
     return environment
 
 
@@ -413,11 +425,47 @@ def run_live_tests(root, environment, logs, processes, xrun_peak, period_peak, t
     return sorted(observed), xrun_peak, period_peak
 
 
+def run_system_master_smoke():
+    # Other PCM fixtures create their own audiomatrix_system. Use a separate private
+    # core so this proof exercises the actual source drop-in without same-name nodes.
+    with tempfile.TemporaryDirectory(prefix="audio-matrix-private-route-", dir="/tmp") as temporary:
+        root = pathlib.Path(temporary)
+        environment = private_environment(root, include_system_sink=True)
+        server_environment = environment.copy()
+        server_environment.pop("PIPEWIRE_REMOTE", None)
+        logs, processes = [], []
+        try:
+            server = start("pipewire", ["pipewire"], server_environment, logs, processes)
+            wait_for_core(server, environment, root / "pipewire.log")
+            wireplumber = start("wireplumber", ["wireplumber", "--profile", "policy"],
+                                environment, logs, processes)
+            wait_for_node(environment, "audiomatrix_system", process=server)
+            time.sleep(0.5)
+            if wireplumber.poll() is not None:
+                raise RuntimeError(f"Private WirePlumber exited: {(root / 'wireplumber.log').read_text()[-3000:]}")
+            run_live_tests(root, environment, logs, processes, 0, 0.0,
+                           ["io.github.ilyaandreev05.audiomatrix.audio.PipeWireSystemMasterSemanticsLiveSmokeTest"],
+                           "gradle-system-master-smoke")
+            result_path = root / "system-master-result.json"
+            if not result_path.is_file():
+                raise RuntimeError("The master smoke published no PCM proof (it may have been skipped)")
+            print("Private system/event master PCM semantics: "
+                  + json.dumps(json.loads(result_path.read_text()), sort_keys=True))
+            print("Private system/event master PCM semantics smoke passed.")
+        finally:
+            for process in reversed(processes):
+                stop(process)
+            for log in logs:
+                log.close()
+
+
 def main():
-    required = ("pipewire", "wireplumber", "pw-cli", "pw-dump", "pw-link", "pw-play", "pw-cat", "pw-top", "wpctl")
+    required = ("pipewire", "wireplumber", "pw-cli", "pw-dump", "pw-link", "pw-play", "pw-cat", "pw-loopback",
+                "pw-top", "wpctl")
     missing = [command for command in required if shutil.which(command) is None]
     if missing:
         raise SystemExit("Missing required PipeWire tools: " + ", ".join(missing))
+    run_system_master_smoke()
 
     with tempfile.TemporaryDirectory(prefix="audio-matrix-private-route-", dir="/tmp") as temporary:
         root = pathlib.Path(temporary)

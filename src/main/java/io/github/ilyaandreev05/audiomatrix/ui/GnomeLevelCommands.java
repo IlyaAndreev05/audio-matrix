@@ -13,6 +13,14 @@ import java.util.concurrent.CompletableFuture;
 final class GnomeLevelCommands {
     private GnomeLevelCommands() {}
 
+    interface ApplicationControls {
+        List<AudioNode> streams();
+        CompletableFuture<Void> save(java.util.function.Consumer<Map<String, Object>> change);
+        Map<String, Object> ensureRule(Map<String, Object> config, String key);
+        CompletableFuture<Void> volume(AudioNode stream, double level);
+        CompletableFuture<Void> mute(AudioNode stream, boolean muted);
+    }
+
     static CompletableFuture<Void> setOutputLevel(AppShellUiPart29 shell, String value, boolean toggleMute) {
         String[] fields = value.split("\\t", 2);
         if (fields[0].isBlank()) return CompletableFuture.failedFuture(new IllegalArgumentException("Output name is missing"));
@@ -63,10 +71,32 @@ final class GnomeLevelCommands {
     }
 
     static CompletableFuture<Void> setApplicationLevel(AppShellUiPart29 shell, String value, boolean toggleMute) {
+        long generation = shell.backend.connectionGeneration();
+        List<AudioNode> selectedSnapshot = shell.snapshot.streams();
+        if (value.split("\\t", 2)[0].startsWith("stream:")) {
+            String key = value.split("\\t", 2)[0];
+            shell.gnomeStreamReadback = RuntimeStreamReadback.capture(
+                    selectedSnapshot.stream().filter(stream -> matchesApplication(key, stream)).toList(), value, toggleMute,
+                    generation == shell.backend.connectionGeneration() ? generation : -2);
+        }
+        return setApplicationLevel(new ApplicationControls() {
+            public List<AudioNode> streams() { return selectedSnapshot; }
+            public CompletableFuture<Void> save(java.util.function.Consumer<Map<String, Object>> change) {
+                return shell.store.updateAsync(change);
+            }
+            public Map<String, Object> ensureRule(Map<String, Object> config, String key) {
+                return shell.ensureGnomeApplicationRule(config, key);
+            }
+            public CompletableFuture<Void> volume(AudioNode stream, double level) { return setUnmutedVolume(shell, stream, level); }
+            public CompletableFuture<Void> mute(AudioNode stream, boolean muted) { return shell.backend.setStreamMute(stream.id(), muted); }
+        }, value, toggleMute);
+    }
+
+    static CompletableFuture<Void> setApplicationLevel(ApplicationControls controls, String value, boolean toggleMute) {
         String[] fields = value.split("\\t", 2);
         if (fields[0].isBlank()) return CompletableFuture.failedFuture(new IllegalArgumentException("Application id is missing"));
         String key = fields[0];
-        List<AudioNode> streams = shell.snapshot.streams().stream().filter(stream -> matchesApplication(key, stream)).toList();
+        List<AudioNode> streams = controls.streams().stream().filter(stream -> matchesApplication(key, stream)).toList();
         if (streams.isEmpty()) return CompletableFuture.failedFuture(new IllegalArgumentException("Application stream is unavailable"));
         boolean muteTarget = toggleMute && streams.stream().anyMatch(stream -> !stream.muted());
         double targetLevel = 0;
@@ -78,13 +108,14 @@ final class GnomeLevelCommands {
             targetLevel = Math.max(0, Math.min(1, targetLevel));
         }
         final double requestedLevel = targetLevel;
-        List<CompletableFuture<Void>> work = new ArrayList<>();
-        for (AudioNode stream : streams)
-            work.add(toggleMute ? shell.backend.setMute(stream.id(), muteTarget) : setUnmutedVolume(shell, stream, requestedLevel));
-        return CompletableFuture.allOf(work.toArray(CompletableFuture[]::new))
-                .thenCompose(ignored -> key.startsWith("stream:") ? CompletableFuture.completedFuture(null)
-                        : shell.store.updateAsync(config -> saveApplicationLevel(shell, config, key, toggleMute, muteTarget, requestedLevel)))
-                .thenRun(shell::refreshBackend);
+        if (key.startsWith("stream:")) {
+            List<CompletableFuture<Void>> work = new ArrayList<>();
+            for (AudioNode stream : streams)
+                work.add(toggleMute ? controls.mute(stream, muteTarget) : controls.volume(stream, requestedLevel));
+            return CompletableFuture.allOf(work.toArray(CompletableFuture[]::new));
+        }
+        return controls.save(config ->
+                saveApplicationLevel(controls, config, key, toggleMute, muteTarget, requestedLevel));
     }
 
     private static boolean matchesApplication(String key, AudioNode stream) {
@@ -94,12 +125,12 @@ final class GnomeLevelCommands {
     }
 
     private static CompletableFuture<Void> setUnmutedVolume(AppShellUiPart29 shell, AudioNode stream, double level) {
-        CompletableFuture<Void> unmute = stream.muted() ? shell.backend.setMute(stream.id(), false) : CompletableFuture.completedFuture(null);
-        return unmute.thenCompose(ignored -> shell.backend.setVolume(stream.id(), level));
+        return shell.backend.setStreamMute(stream.id(), false)
+                .thenCompose(ignored -> shell.backend.setStreamVolume(stream.id(), level));
     }
 
-    private static void saveApplicationLevel(AppShellUiPart29 shell, Map<String, Object> config, String key, boolean mute, boolean muteTarget, double level) {
-        Map<String, Object> rule = shell.ensureGnomeApplicationRule(config, key);
+    private static void saveApplicationLevel(ApplicationControls controls, Map<String, Object> config, String key, boolean mute, boolean muteTarget, double level) {
+        Map<String, Object> rule = controls.ensureRule(config, key);
         if (mute) rule.put("mute", muteTarget);
         else {
             rule.put("volume", level);
@@ -109,18 +140,21 @@ final class GnomeLevelCommands {
 
     static CompletableFuture<Void> setStreamLevel(AppShellUiPart29 shell, String value, boolean toggleMute) {
         String[] fields = value.split("\\t", 2);
-        if (fields.length < 1) return CompletableFuture.failedFuture(new IllegalArgumentException("Stream id is missing"));
+        if (fields.length == 0 || fields[0].isBlank()) return CompletableFuture.failedFuture(new IllegalArgumentException("Stream id is missing"));
         int id;
         try { id = Integer.parseInt(fields[0]); }
         catch (NumberFormatException error) { return CompletableFuture.failedFuture(new IllegalArgumentException("Stream id is invalid")); }
+        long generation = shell.backend.connectionGeneration();
         AudioNode stream = shell.snapshot.streams().stream().filter(node -> node.id() == id).findFirst().orElse(null);
         if (stream == null) return CompletableFuture.failedFuture(new IllegalArgumentException("Stream is unavailable"));
-        if (toggleMute) return shell.backend.setMute(id, !stream.muted()).thenRun(shell::refreshBackend);
+        shell.gnomeStreamReadback = RuntimeStreamReadback.capture(List.of(stream), value, toggleMute,
+                generation == shell.backend.connectionGeneration() ? generation : -2);
+        if (toggleMute) return shell.backend.setStreamMute(id, !stream.muted());
         if (fields.length < 2) return CompletableFuture.failedFuture(new IllegalArgumentException("Stream volume is missing"));
         double level;
         try { level = Double.parseDouble(fields[1]); }
         catch (NumberFormatException error) { return CompletableFuture.failedFuture(new IllegalArgumentException("Stream volume is invalid")); }
         if (!Double.isFinite(level)) return CompletableFuture.failedFuture(new IllegalArgumentException("Stream volume is invalid"));
-        return setUnmutedVolume(shell, stream, Math.max(0, Math.min(1, level))).thenRun(shell::refreshBackend);
+        return setUnmutedVolume(shell, stream, Math.max(0, Math.min(1, level)));
     }
 }

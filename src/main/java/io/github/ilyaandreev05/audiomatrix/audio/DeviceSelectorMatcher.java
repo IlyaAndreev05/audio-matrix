@@ -9,6 +9,7 @@ public final class DeviceSelectorMatcher {
 
     public static boolean matches(AudioNode node, Map<String, Object> selector) {
         if (node == null || selector == null) return false;
+        if ("output".equals(node.kind()) && !node.outputAvailable()) return false;
         String value = selector.get("value") instanceof String text ? text : "";
         if (value.isBlank()) return false;
         return switch (String.valueOf(selector.get("kind"))) {
@@ -39,9 +40,12 @@ public final class DeviceSelectorMatcher {
             return node != null && DeviceDiscovery.conflict(nodes, devices, device, node).isEmpty() ? node : null;
         }
         // Legacy raw names remain explicit references; never use a default sink or first fuzzy match.
-        List<AudioNode> direct = nodes.stream().filter(node -> node.name().equals(reference)).toList();
-        if (!direct.isEmpty()) return direct.size() == 1 ? direct.getFirst() : null;
+        List<AudioNode> direct = nodes.stream()
+                .filter(node -> !"output".equals(node.kind()) || node.outputAvailable())
+                .filter(node -> node.name().equals(reference)).toList();
+        if (direct.size() > 1) return null;
         java.util.LinkedHashSet<AudioNode> resolved = new java.util.LinkedHashSet<>();
+        if (!direct.isEmpty()) resolved.add(direct.getFirst());
         for (Map<String, Object> device : devices) {
             Map<String, Object> selector = object(device.get("selector"));
             if (reference.equals(selector.get("value"))) {

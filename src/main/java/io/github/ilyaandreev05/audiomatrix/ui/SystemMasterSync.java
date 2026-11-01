@@ -33,11 +33,12 @@ final class SystemMasterSync {
     /** Returns {@code null} when the saved configuration already matches the observation. */
     static Decision compare(double observedVolume, boolean observedMuted,
                             double configuredVolume, boolean configuredMuted) {
-        if (!usableVolume(observedVolume)) return null;
+        boolean writeMute = observedMuted != configuredMuted;
+        if (!usableVolume(observedVolume))
+            return writeMute ? new Decision(false, configuredVolume, true, observedMuted) : null;
         double volume = clamp(observedVolume);
         boolean writeVolume = !Double.isFinite(configuredVolume)
                 || Math.abs(volume - clamp(configuredVolume)) > VOLUME_TOLERANCE;
-        boolean writeMute = observedMuted != configuredMuted;
         if (!writeVolume && !writeMute) return null;
         return new Decision(writeVolume, volume, writeMute, observedMuted);
     }

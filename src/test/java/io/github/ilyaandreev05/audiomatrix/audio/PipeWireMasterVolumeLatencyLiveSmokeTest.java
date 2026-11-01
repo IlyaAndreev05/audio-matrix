@@ -39,7 +39,7 @@ class PipeWireMasterVolumeLatencyLiveSmokeTest extends PipeWireChannelMatrixRout
             Assumptions.assumeTrue(commandExists(command), "Requires " + command);
         Path resultPath = Path.of(System.getenv("AUDIO_MATRIX_MASTER_LATENCY_RESULT"));
         List<Process> clients = new ArrayList<>();
-        List<RouteSmokePcmSupport.ToneWriter> tones = new ArrayList<>();
+        List<RouteSmokeToneWriter> tones = new ArrayList<>();
         PipeWireBackend backend = new PipeWireBackend();
         PipeWireRouteManager manager = new PipeWireRouteManager();
         ConfigStore store = new ConfigStore(tempDir.resolve("config.json"));
@@ -79,7 +79,7 @@ class PipeWireMasterVolumeLatencyLiveSmokeTest extends PipeWireChannelMatrixRout
             }
             assertTopologyChangesBypassFastPath(manager, store, backend, systemSinkId);
         } finally {
-            for (RouteSmokePcmSupport.ToneWriter tone : tones) tone.stop();
+            for (RouteSmokeToneWriter tone : tones) tone.stop();
             for (Process client : clients) stop(client);
             try { manager.closeAsync().get(10, TimeUnit.SECONDS); }
             finally { backend.close(); store.close(); }
@@ -127,13 +127,13 @@ class PipeWireMasterVolumeLatencyLiveSmokeTest extends PipeWireChannelMatrixRout
 
     private Map<String, Object> measurePcmScaling(PipeWireRouteManager manager, ConfigStore store,
                                                   PipeWireBackend backend, List<Process> clients,
-                                                  List<RouteSmokePcmSupport.ToneWriter> tones) throws Exception {
+                                                  List<RouteSmokeToneWriter> tones) throws Exception {
         Path capture = tempDir.resolve("master-volume-pcm.f32");
         Process recorder = RouteSmokePcmSupport.startRecorder("am_master_latency_capture", OUTPUT_MONITOR, capture);
         clients.add(recorder);
         Process tone = RouteSmokePcmSupport.startToneProcess(PLAYBACK_STREAM, BUS_NODE,
                 "org.example.MasterVolumeLatency");
-        RouteSmokePcmSupport.ToneWriter writer = RouteSmokePcmSupport.ToneWriter.start(tone, TONE_FREQUENCY);
+        RouteSmokeToneWriter writer = RouteSmokeToneWriter.start(tone, TONE_FREQUENCY);
         tones.add(writer);
         Thread.sleep(1000);
         setMaster(manager, store, backend, 0.35);

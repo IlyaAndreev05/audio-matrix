@@ -194,7 +194,7 @@ abstract class AppShellContract01 extends AppShellBase {
     protected abstract void saveDefaultOutput(AudioNode sink);
     protected abstract void saveDeviceVolume(AudioNode sink, double volume);
     protected abstract void saveDeviceMute(AudioNode sink, boolean muted);
-    protected abstract void saveAppVolume(AudioNode stream, double volume);
+    protected abstract CompletableFuture<Void> saveAppVolume(AudioNode stream, double volume, String intentId);
     protected abstract void saveAppMute(AudioNode stream, boolean muted);
     protected abstract CompletableFuture<Void> applyConfiguredDeviceRules(PipeWireBackend.Snapshot current,Map<String,Object> config);
     protected abstract CompletableFuture<Void> applyConfiguredStreamRules(PipeWireBackend.Snapshot current, Map<String, Object> config);

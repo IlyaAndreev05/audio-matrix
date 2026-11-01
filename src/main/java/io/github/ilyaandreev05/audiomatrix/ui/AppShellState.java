@@ -66,6 +66,7 @@ abstract class AppShellState extends AppShellContract02 {
     protected final ApplicationStreamRuleApplier streamRuleApplier;
     protected final ConcurrentMap<Integer, String> appliedDeviceRules = new ConcurrentHashMap<>();
     protected volatile PipeWireBackend.Snapshot snapshot = PipeWireBackend.Snapshot.offline("Waiting for PipeWire");
+    protected PipeWireBackend.Snapshot gnomePublishedObservation;
     protected Page currentPage = Page.HOME;
     protected AudioNode selectedSink;
     protected MeasurementPreview calibrationPreview;
@@ -83,6 +84,8 @@ abstract class AppShellState extends AppShellContract02 {
     protected boolean suppressConfigListener;
     protected volatile boolean gnomeCommandInFlight;
     private final AtomicReference<GnomeControlBridge.Command> gnomeAudioCommand = new AtomicReference<>();
+    protected volatile RuntimeStreamReadback gnomeStreamReadback;
+    protected final ManualStreamRuleRestoreGate manualStreamRuleRestoreGate = new ManualStreamRuleRestoreGate();
     protected volatile long lastMixerCommandWriteMillis;
     /** Coalesced State publication lane; barriers complete only after the real publication. */
     private final GnomePublicationLane gnomePublications;
@@ -114,7 +117,7 @@ abstract class AppShellState extends AppShellContract02 {
         this.themes = themes;
         this.streamRuleApplier = new ApplicationStreamRuleApplier(backend);
         this.gnomePublications = new GnomePublicationLane(
-                () -> publishGnomeState(snapshot, store.snapshot()), () -> closing);
+                () -> { gnomePublishedObservation = null; publishGnomeState(snapshot, store.snapshot()); }, () -> closing);
         this.uiRefreshGate = new UiRefreshGate(Platform::runLater, this::applyPendingUiRefresh,
                 this::pauseUiMeters, this::resumeUiMeters, () -> closing);
     }
@@ -130,15 +133,19 @@ abstract class AppShellState extends AppShellContract02 {
         if(runtimeInitialized)throw new IllegalStateException("Audio Matrix runtime was already initialized");
         browserSocketServer=server;
         browserAdapters=List.copyOf(BrowserAdapterRegistry.createAdapters(server));
-        gnomeBridge=new GnomeControlBridge(this::executeGnomeCommand,browserAdapters,this::confirmGnomeCommandState);
+        gnomeBridge=new GnomeControlBridge(this::executeGnomeCommand,browserAdapters,
+                this::confirmGnomeCommandState,this::releaseGnomeCommandAfterFailure);
         runtimeInitialized=true;
     }
 
     private CompletableFuture<Void> executeGnomeCommand(GnomeControlBridge.Command command) {
         if ("open".equals(command.name())) return handleGnomeCommand(command);
-        gnomeCommandInFlight = true;
-        lastMixerCommandWriteMillis = Math.max(lastMixerCommandWriteMillis, System.currentTimeMillis());
-        gnomeAudioCommand.set(command);
+        synchronized (manualStreamRuleRestoreGate) {
+            gnomeCommandInFlight = true;
+            lastMixerCommandWriteMillis = Math.max(lastMixerCommandWriteMillis, System.currentTimeMillis());
+            gnomeAudioCommand.set(command);
+            gnomeStreamReadback = null;
+        }
         return handleGnomeCommand(command);
     }
 
@@ -151,20 +158,34 @@ abstract class AppShellState extends AppShellContract02 {
      * a JavaFX hop, so a blocked render pulse cannot turn a real command into a timeout.</p>
      */
     private CompletableFuture<Void> confirmGnomeCommandState(GnomeControlBridge.Command command) {
-        if ("open".equals(command.name())) return requestGnomeStatePublication(new CompletableFuture<>());
-        return onRuntimeAudio(() -> {
-            releaseGnomeAudioCommand(command);
-            VersionedConfig config = store.snapshot();
-            PipeWireBackend.Snapshot observation = snapshot;
-            return applyConfiguredDeviceRules(observation, config)
-                    .thenCompose(ignored -> applyConfiguredStreamRules(observation, config));
-        }).thenCompose(ignored -> requestGnomeStatePublication(new CompletableFuture<>()))
-          .whenComplete((ignored, failure) ->
-                  lastMixerCommandWriteMillis = Math.max(lastMixerCommandWriteMillis, System.currentTimeMillis()));
+        return GnomeCommandConfirmation.confirm(this, command);
     }
 
-    private void releaseGnomeAudioCommand(GnomeControlBridge.Command command) {
-        if (gnomeAudioCommand.compareAndSet(command, null)) gnomeCommandInFlight = false;
+    ManualStreamRuleRestoreGate.DrainResult releaseGnomeAudioCommand(GnomeControlBridge.Command command) {
+        return manualStreamRuleRestoreGate.releaseAndDrain(() -> {
+            if (gnomeAudioCommand.compareAndSet(command, null)) gnomeCommandInFlight = false;
+        }, () -> applyConfiguredStreamRules(backend.current(), store.snapshot()));
+    }
+
+    /**
+     * Releases a command whose persistence failed without applying normal saved rules. Any restore
+     * that was already deferred by a manual-save failure is still drained, then the barrier is sealed
+     * so the next command and periodic reconciliation are not blocked.
+     */
+    CompletableFuture<Void> releaseGnomeCommandAfterFailure(GnomeControlBridge.Command command) {
+        return manualStreamRuleRestoreGate.releaseAfterFailure(() -> {
+            if (gnomeAudioCommand.compareAndSet(command, null)) gnomeCommandInFlight = false;
+        }, () -> applyConfiguredStreamRules(backend.current(), store.snapshot()));
+    }
+
+    protected CompletableFuture<Void> restoreStreamRulesAfterManualSaveFailure() {
+        return manualStreamRuleRestoreGate.restoreOrDefer(gnomeCommandInFlight,
+                () -> applyConfiguredStreamRules(backend.current(), store.snapshot()));
+    }
+
+    protected ManualStreamRuleRestoreGate.DrainResult drainDeferredManualStreamRuleRestore() {
+        return manualStreamRuleRestoreGate.drainOrSeal(
+                () -> applyConfiguredStreamRules(backend.current(), store.snapshot()));
     }
 
     /** Runs audio work on the dedicated lane; a rejected lane simply drops the callback. */
@@ -193,6 +214,10 @@ abstract class AppShellState extends AppShellContract02 {
     protected CompletableFuture<Void> requestGnomeStatePublication(CompletableFuture<Void> barrier) {
         return gnomePublications.request(barrier);
     }
+    CompletableFuture<Void> requestValidatedGnomeStatePublication(Runnable validate) {
+        return gnomePublications.requestValidated(validate);
+    }
+
 
     /** Stops the command, audio, and publication lanes without leaving a barrier hanging. */
     protected void shutdownRuntimeLanes() {

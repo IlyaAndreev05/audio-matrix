@@ -35,18 +35,19 @@ abstract class PipeWireRoutePart07 extends PipeWireRoutePart06 {
                 .sorted().toList();
         List<String> routePlans = plan.routes().stream()
                 .map(route -> route.id() + ":" + route.fromBusId() + ":" + route.targetBusId() + ":"
-                        + (route.sink() == null ? "" : route.sink().name() + ":" + route.sink().identity().fingerprint())
+                        + (route.sink() == null ? "" : route.sink().name() + ":" + route.sink().identity().fingerprint()
+                        + ":" + route.sink().portAvailability())
                         + ":" + route.channelMap() + ":" + route.positions() + ":" + route.channelMatrix()
                         + ":" + route.delayMs() + ":" + route.filters().hashCode())
                 .sorted().toList();
         List<String> outputPlans = plan.outputs().values().stream()
                 .map(output -> output.sink().name() + ":" + output.sink().identity().fingerprint() + ":"
-                        + output.positions() + ":" + output.filters().hashCode() + ":"
+                        + output.sink().portAvailability() + ":" + output.positions() + ":" + output.filters().hashCode() + ":"
                         + output.limiterFilters().hashCode())
                 .sorted().toList();
         List<String> availableOutputs = snapshot.sinks().stream()
                 .filter(sink -> !AudioMatrixOwnedStream.matches(sink))
-                .map(sink -> sink.name() + ":" + sink.identity().fingerprint()).sorted().toList();
+                .map(sink -> sink.name() + ":" + sink.identity().fingerprint() + ":" + sink.portAvailability()).sorted().toList();
         return busPlans + ":" + routePlans + ":" + outputPlans + ":" + availableOutputs;
     }
 

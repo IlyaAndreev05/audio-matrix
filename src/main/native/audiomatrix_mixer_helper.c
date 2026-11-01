@@ -136,14 +136,14 @@ static int synchronize(void) {
 }
 
 static void remember_level(unsigned int id, double volume);
+static int read_level(unsigned int id, double *volume, int *muted);
+static int set_volume_and_mute(unsigned int id, double volume, int muted, int sync);
 
 static int set_volume(unsigned int id, double volume) {
     if (!isfinite(volume) || volume < 0.0 || volume > 1.0) return 0;
-    GVariant *value = g_variant_ref_sink(g_variant_new_double(volume));
-    gboolean accepted = 0;
-    g_signal_emit_by_name(mixer, "set-volume", id, value, &accepted);
-    g_variant_unref(value);
-    if (!accepted || !synchronize()) return 0;
+    double current = 0.0;
+    int muted = 0;
+    if (!read_level(id, &current, &muted) || !set_volume_and_mute(id, volume, muted, 1)) return 0;
     remember_level(id, volume);
     return 1;
 }
@@ -208,12 +208,16 @@ static int set_mute(unsigned int id, int muted, double saved_level) {
         return 1;
     }
 
+    int failed = 0;
     for (int step = 1; step <= 5; step++) {
         short_pause();
         double level = current * (5 - step) / 5.0;
-        if (!set_volume_and_mute(id, level, step == 5, step == 5)) return 0;
+        if (!set_volume_and_mute(id, level, step == 5, step == 5)) { failed = 1; break; }
     }
-    return 1;
+    // Mute must not erase the stored target: restore it silently while the mute flag stays set.
+    // Attempt this even after a failed fade step so a helper error cannot lose the level.
+    if (!set_volume_and_mute(id, current, 1, 1)) return 0;
+    return failed ? 0 : 1;
 }
 
 int main(void) {

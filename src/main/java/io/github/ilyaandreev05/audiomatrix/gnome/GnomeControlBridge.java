@@ -31,20 +31,18 @@ public final class GnomeControlBridge implements AutoCloseable {
     public static final String OBJECT_PATH="/org/ilya/AudioMatrix";
     public static final String INTERFACE="org.ilya.AudioMatrix";
     public static final int API_VERSION=5;
-    private static final java.util.Set<String> SUPPORTED_COMMANDS=java.util.Set.of("open",
-            "set_output_volume","toggle_output_mute","set_source_volume","toggle_source_mute","set_app_volume","toggle_app_mute","set_stream_volume",
-            "set_graph_output_volume","toggle_graph_output_mute","set_graph_gain","toggle_graph_gain_mute","toggle_stream_mute","set_mixer_input_volume","toggle_mixer_input_mute","set_quick_control","toggle_quick_control","set_quick_control_choice",
-            "set_quick_group_collapsed","reorder_quick_group","set_quick_pin_view","set_quick_matrix_view","select_route","select_profile","set_channel_map",
-            "setNodeVolume","setNodeMuted","setRouteEnabled","setBrowserTabMuted");
     private final Function<Command,CompletableFuture<Void>> commands;
     private final Function<Command,CompletableFuture<Void>> confirmState;
+    private final Function<Command,CompletableFuture<Void>> releaseState;
     private final SignalEmitter signalEmitter;
     private final ObjectMapper json=new ObjectMapper();
     private final List<BrowserAdapter> browserAdapters;
     private final AtomicBoolean closed=new AtomicBoolean();
     private final AtomicBoolean started=new AtomicBoolean();
     private final GnomeBridgeStateSequencer stateSequencer=new GnomeBridgeStateSequencer(json);
-    private CompletableFuture<Void> commandTail=CompletableFuture.completedFuture(null);
+    private final GnomeAudioCommandQueue audioCommands=new GnomeAudioCommandQueue(
+            this::executeConfirmed,
+            (command,message)->complete(command,CompletableFuture.completedFuture(new CommandResult("error",message))));
     private final ScheduledExecutorService emitter=Executors.newSingleThreadScheduledExecutor(r->{Thread t=new Thread(r,"audio-matrix-dbus-status");t.setDaemon(true);return t;});
     private final Object stateSignalLock=new Object();
     private final GnomeBridgeCommandChannel commandChannel;
@@ -65,24 +63,43 @@ public final class GnomeControlBridge implements AutoCloseable {
     public GnomeControlBridge(Function<Command,CompletableFuture<Void>> commands,
                               List<BrowserAdapter> browserAdapters,
                               Function<Command,CompletableFuture<Void>> confirmState){
-        this(commands,browserAdapters,confirmState,GnomeControlBridge::emitOnBus,true);
+        this(commands,browserAdapters,confirmState,GnomeControlBridge::emitOnBus,true,
+                ignored->CompletableFuture.completedFuture(null));
+    }
+    public GnomeControlBridge(Function<Command,CompletableFuture<Void>> commands,
+                              List<BrowserAdapter> browserAdapters,
+                              Function<Command,CompletableFuture<Void>> confirmState,
+                              Function<Command,CompletableFuture<Void>> releaseState){
+        this(commands,browserAdapters,confirmState,GnomeControlBridge::emitOnBus,true,releaseState);
     }
     // The injected sink is ungated until start, keeping command-order unit tests bus-independent.
     GnomeControlBridge(Function<Command,CompletableFuture<Void>> commands,
                        List<BrowserAdapter> browserAdapters,
                        Function<Command,CompletableFuture<Void>> confirmState,SignalEmitter signalEmitter){
-        this(commands,browserAdapters,confirmState,signalEmitter,false);
+        this(commands,browserAdapters,confirmState,signalEmitter,false,
+                ignored->CompletableFuture.completedFuture(null));
+    }
+    GnomeControlBridge(Function<Command,CompletableFuture<Void>> commands,
+                       List<BrowserAdapter> browserAdapters,
+                       Function<Command,CompletableFuture<Void>> confirmState,SignalEmitter signalEmitter,
+                       Function<Command,CompletableFuture<Void>> releaseState){
+        this(commands,browserAdapters,confirmState,signalEmitter,false,releaseState);
     }
     GnomeControlBridge(Function<Command,CompletableFuture<Void>> commands,
                        List<BrowserAdapter> browserAdapters,
                        Function<Command,CompletableFuture<Void>> confirmState,SignalEmitter signalEmitter,
                        boolean requireCommandListener){
+        this(commands,browserAdapters,confirmState,signalEmitter,requireCommandListener,
+                ignored->CompletableFuture.completedFuture(null));
+    }
+    GnomeControlBridge(Function<Command,CompletableFuture<Void>> commands,
+                       List<BrowserAdapter> browserAdapters,
+                       Function<Command,CompletableFuture<Void>> confirmState,SignalEmitter signalEmitter,
+                       boolean requireCommandListener,
+                       Function<Command,CompletableFuture<Void>> releaseState){
         this.commands=commands==null?ignored->CompletableFuture.completedFuture(null):commands;
-        this.confirmState=java.util.Objects.requireNonNull(confirmState);
-        this.signalEmitter=java.util.Objects.requireNonNull(signalEmitter);
-        this.browserAdapters=List.copyOf(browserAdapters==null?List.of():browserAdapters);
-        this.requireCommandListener=requireCommandListener;
-        this.commandChannel=new GnomeBridgeCommandChannel(this::dispatch,this::reemitLatestState);
+        this.confirmState=java.util.Objects.requireNonNull(confirmState);this.releaseState=java.util.Objects.requireNonNull(releaseState);this.signalEmitter=java.util.Objects.requireNonNull(signalEmitter);
+        this.browserAdapters=List.copyOf(browserAdapters==null?List.of():browserAdapters);this.requireCommandListener=requireCommandListener;this.commandChannel=new GnomeBridgeCommandChannel(this::dispatch,this::reemitLatestState);
     }
     @FunctionalInterface
     interface SignalEmitter {
@@ -144,14 +161,11 @@ public final class GnomeControlBridge implements AutoCloseable {
         }
         catch(NumberFormatException invalid){return null;}
     }
-    synchronized CompletableFuture<Void> dispatch(Command command){
-        // Opening the window is presentation-only: it never takes the serialized audio slot nor
-        // touches the in-flight audio marker, yet it still gets its own real completion and ACK.
-        if("open".equals(command.name()))return complete(command,execute(command,commands).thenCompose(result->confirmCommandState(command,result)));
-        CompletableFuture<CommandResult> execution=commandTail.thenCompose(ignored->execute(command,commands))
-                .thenCompose(result->confirmCommandState(command,result));
-        commandTail=complete(command,execution);
-        return commandTail;
+    CompletableFuture<Void> dispatch(Command command){
+        return audioCommands.dispatch(command);
+    }
+    private CompletableFuture<Void> executeConfirmed(Command command){
+        return complete(command,execute(command,commands).thenCompose(result->confirmCommandState(command,result)));
     }
     private CompletableFuture<Void> complete(Command command,CompletableFuture<CommandResult> execution){
         return execution.handle((result,error)->{
@@ -162,14 +176,7 @@ public final class GnomeControlBridge implements AutoCloseable {
         });
     }
     private CompletableFuture<CommandResult> confirmCommandState(Command command,CommandResult result){
-        try{
-            CompletableFuture<Void> confirmed=confirmState.apply(command);
-            if(confirmed==null)throw new IllegalStateException("State publisher returned no completion result");
-            return confirmed.handle((ignored,error)->error==null?result:
-                    new CommandResult("error","Could not confirm command state: "+safeMessage(error)));
-        }catch(RuntimeException error){
-            return CompletableFuture.completedFuture(new CommandResult("error","Could not confirm command state: "+safeMessage(error)));
-        }
+        return GnomeCommandStateConfirmation.confirm(command,result,confirmState,releaseState);
     }
     synchronized void emitObservedState(Map<String,Object> state){
         synchronized(stateSignalLock){String payload=stateSequencer.observe(state);if(!payload.isBlank())emitStateWhenReady(payload);}
@@ -192,13 +199,7 @@ public final class GnomeControlBridge implements AutoCloseable {
         emitter.execute(()->{if(!closed.get()&&stateSignalListenerReady())emit("State",payload);});
     }
     static CompletableFuture<CommandResult> execute(Command command,Function<Command,CompletableFuture<Void>> handler){
-        if(command.apiVersion()!=API_VERSION)return CompletableFuture.completedFuture(new CommandResult("error","Unsupported Audio Matrix D-Bus API version "+command.apiVersion()));
-        if(!SUPPORTED_COMMANDS.contains(command.name()))return CompletableFuture.completedFuture(new CommandResult("error","Unsupported command: "+command.name()));
-        try{
-            CompletableFuture<Void> action=handler.apply(command);
-            if(action==null)return CompletableFuture.completedFuture(new CommandResult("error","Command handler returned no completion result"));
-            return action.handle((ignored,error)->error==null?new CommandResult("ok","Applied"):new CommandResult("error",safeMessage(error)));
-        }catch(RuntimeException error){return CompletableFuture.completedFuture(new CommandResult("error",safeMessage(error)));}
+        return GnomeBridgeCommandExecutor.execute(command, handler);
     }
     static Command parseCommandLine(String line){
         java.util.regex.Matcher versioned=java.util.regex.Pattern.compile("\\((?:uint32\\s+)?(\\d+),\\s*'((?:\\\\.|[^'])*)',\\s*'((?:\\\\.|[^'])*)',\\s*'((?:\\\\.|[^'])*)',\\s*'((?:\\\\.|[^'])*)'\\)").matcher(line.trim());
@@ -220,9 +221,9 @@ public final class GnomeControlBridge implements AutoCloseable {
         command.addAll(arguments);
         try{run(command,Duration.ofSeconds(2));}catch(Exception ignored){}
     }
-    private static String safeMessage(Throwable error){Throwable cause=error;while(cause instanceof CompletionException&&cause.getCause()!=null)cause=cause.getCause();String message=cause.getMessage();return message==null||message.isBlank()?cause.getClass().getSimpleName():message;}
+    static String safeMessage(Throwable error){Throwable cause=error;while(cause instanceof CompletionException&&cause.getCause()!=null)cause=cause.getCause();String message=cause.getMessage();return message==null||message.isBlank()?cause.getClass().getSimpleName():message;}
     private static String run(List<String>command,Duration timeout)throws Exception{Path out=Files.createTempFile("audio-matrix-dbus-",".out");try{Process p=new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(out.toFile()).start();if(!p.waitFor(timeout.toMillis(),java.util.concurrent.TimeUnit.MILLISECONDS)){p.destroyForcibly();throw new IOException("gdbus timed out");}if(p.exitValue()!=0)throw new IOException(Files.readString(out));return Files.readString(out);}finally{Files.deleteIfExists(out);}}
-    @Override public void close(){closed.set(true);commandChannel.close();emitter.shutdownNow();}
+    @Override public void close(){closed.set(true);audioCommands.close();commandChannel.close();emitter.shutdownNow();}
     public record Command(int apiVersion,String requestId,String revision,String name,String value){
         public Command(int apiVersion,String requestId,String name,String value){this(apiVersion,requestId,"",name,value);}
         public Command(String name,String value){this(API_VERSION,"","",name,value);}

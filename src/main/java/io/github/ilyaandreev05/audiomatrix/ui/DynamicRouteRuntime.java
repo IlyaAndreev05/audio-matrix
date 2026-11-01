@@ -185,7 +185,7 @@ final class DynamicRouteRuntime implements AutoCloseable {
                 if (systemInputPresent(snapshot)) items.add(DynamicInstanceRegistry.systemInput());
             }
             else if ("outputs".equals(generator.registry())) for (AudioNode sink : snapshot.sinks()) {
-                if (AudioMatrixOwnedStream.matches(sink)) continue;
+                if (!sink.outputAvailable() || AudioMatrixOwnedStream.matches(sink)) continue;
                 String role = exactRole(sink, devices), fingerprint = sink.identity() == null ? "" : sink.identity().fingerprint();
                 // A new physical endpoint is never selected by discovery. Saved instance choices
                 // are restored by the registry's stable identity policy, not by a hardware name.

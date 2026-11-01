@@ -49,7 +49,8 @@ abstract class AppShellUiPart04GraphCanvasSupport extends AppShellUiPart04GraphI
         updateRouteConfig(t("Упорядочить граф","Arrange graph"),config->{
             Map<String,Object> all=map(config.get("graph_ui_layout"));config.put("graph_ui_layout",all);
             Map<String,Object> route=map(all.get(graph.id()));all.put(graph.id(),route);
-            layout.positions().forEach((nodeId,point)->route.put(nodeId,Map.of("x",point.x(),"y",point.y())));
+            Set<String> allowed=GraphLayoutNodes.ids(config,graph.id());
+            layout.positions().forEach((nodeId,point)->{if(allowed.contains(nodeId))route.put(nodeId,Map.of("x",point.x(),"y",point.y()));});
         });
     }
 
@@ -63,15 +64,7 @@ abstract class AppShellUiPart04GraphCanvasSupport extends AppShellUiPart04GraphI
             if(!hasX||!hasY)missing.put(node.id(),layout.positions().get(node.id()));
         }
         if(missing.isEmpty())return;
-        store.updateAsync(config->{
-            Map<String,Object> all=map(config.get("graph_ui_layout"));config.put("graph_ui_layout",all);
-            Map<String,Object> route=map(all.get(routeId));all.put(routeId,route);
-            missing.forEach((nodeId,position)->{
-                Map<String,Object> current=map(route.get(nodeId));
-                double x=coordinate(current.get("x"),position.x()),y=coordinate(current.get("y"),position.y());
-                route.put(nodeId,Map.of("x",x,"y",y));
-            });
-        }).whenComplete((ignored,error)->Platform.runLater(()->{
+        store.updateAsync(config->GraphInitialLayout.apply(config,routeId,missing)).whenComplete((ignored,error)->Platform.runLater(()->{
             if(error!=null)setNotice(t("Начальная раскладка графа не сохранена: ","Initial graph layout could not be saved: ")+rootMessage(error),true);
         }));
     }
@@ -135,8 +128,9 @@ abstract class AppShellUiPart04GraphCanvasSupport extends AppShellUiPart04GraphI
         updateRouteConfig(t("Переместить Composite","Move Composite"),config->{
             Map<String,Object> all=map(config.get("graph_ui_layout"));config.put("graph_ui_layout",all);
             Map<String,Object> route=map(all.get(routeId));all.put(routeId,route);
+            Set<String> allowed=GraphLayoutNodes.ids(config,routeId);
             for(String nodeId:memberIds){
-                double[] point=initial.get(nodeId);if(point==null)continue;
+                double[] point=initial.get(nodeId);if(point==null||!allowed.contains(nodeId))continue;
                 route.put(nodeId,Map.of("x",Math.rint(point[0]+deltaX),"y",Math.rint(point[1]+deltaY)));
             }
         });

@@ -1,6 +1,7 @@
 package io.github.ilyaandreev05.audiomatrix.gnome;
 
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
+import io.github.ilyaandreev05.audiomatrix.audio.GeneratedOutputBinding;
 import io.github.ilyaandreev05.audiomatrix.config.QuickSettingsConfig;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
 import io.github.ilyaandreev05.audiomatrix.graph.DynamicGeneratorNode;
@@ -71,10 +72,13 @@ final class GnomeQuickSettingsGeneratedPins {
                 && "haptic_output".equals(instance.runtimeBinding().get("role"));
         boolean controllable = hapticOutput ? instance.available() && instance.bindingAvailable()
                 : instance.gainControlAvailable();
+        if ("outputs".equals(generator.registry()) && !hapticOutput)
+            controllable = controllable && GeneratedOutputBinding.resolve(config, instance.runtimeBinding(),
+                    snapshot, snapshot == null ? List.of() : snapshot.sinks()).isPresent();
         if (!controllable && !showOffline) return null;
         GainNode gain = generatedGain(graph, instance);
         if (gain == null) return null;
-        String displayName = displayName(pin, instance, applications);
+        String displayName = GnomeQuickSettingsPinNames.displayName(pin, instance, applications);
         String groupId = String.valueOf(pin.getOrDefault("group_id", defaultGroup(generator.registry())));
         final String requestedGroup = groupId;
         if (QuickSettingsConfig.groups(config).stream().noneMatch(group -> requestedGroup.equals(group.get("id"))))
@@ -117,8 +121,8 @@ final class GnomeQuickSettingsGeneratedPins {
             GraphNode output = graph.nodes().stream().filter(node -> node.id().equals(instance.nodeIds().get("output")))
                     .findFirst().orElse(null);
             if (output instanceof OutputNode outputNode) {
-                Map<String, Object> device = GnomeQuickSettingsPinDetails.outputFor(outputNode, graph,
-                        snapshot, config);
+                Map<String, Object> device = GnomeQuickSettingsPinDetails.generatedOutput(outputNode, graph,
+                        snapshot, config, instance);
                 state.put("output", device);
                 if (!GnomeQuickSettingsPinNames.hasDisplayName(pin.get("display_name"))
                         && !GnomeQuickSettingsPinNames.hasDisplayName(instance.overrides().get("display_name")))
@@ -128,25 +132,6 @@ final class GnomeQuickSettingsGeneratedPins {
         return state;
     }
 
-    private static String displayName(Map<String, Object> pin,
-                                      DynamicInstanceRegistry.RuntimeInstance instance,
-                                      List<Map<String, Object>> applications) {
-        String value = GnomeQuickSettingsPinNames.displayLabel(pin.get("display_name"));
-        if (!value.isBlank()) return value;
-        value = GnomeQuickSettingsPinNames.displayLabel(instance.overrides().get("display_name"));
-        if (!value.isBlank()) return value;
-        Map<String, Object> app = applicationGroupFor(instance, applications);
-        if (app != null) {
-            value = GnomeQuickSettingsPinNames.displayLabel(app.get("name"));
-            if (!value.isBlank()) return value;
-        }
-        Map<String, Object> tab = browserTab(instance, applications);
-        if (tab != null) {
-            value = GnomeQuickSettingsPinNames.displayLabel(tab.get("title"));
-            if (!value.isBlank()) return value;
-        }
-        return GnomeQuickSettingsPinNames.generatedFallback(instance);
-    }
 
 
     private static List<Map<String, Object>> applicationGroup(DynamicGeneratorNode generator,
@@ -160,7 +145,7 @@ final class GnomeQuickSettingsGeneratedPins {
         return List.of();
     }
 
-    private static Map<String, Object> applicationGroupFor(DynamicInstanceRegistry.RuntimeInstance instance,
+    static Map<String, Object> applicationGroupFor(DynamicInstanceRegistry.RuntimeInstance instance,
                                                            List<Map<String, Object>> applications) {
         Map<String, Object> binding = instance.runtimeBinding();
         String applicationId = text(binding.get("applicationId"));

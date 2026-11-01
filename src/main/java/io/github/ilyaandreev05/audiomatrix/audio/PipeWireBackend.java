@@ -41,12 +41,26 @@ public final class PipeWireBackend implements AutoCloseable {
     private final AtomicLong connectionGeneration = new AtomicLong();
     private final PipeWireLevelMonitor outputLevelMonitor = new PipeWireLevelMonitor();
     private final PipeWireLevelMonitor inputLevelMonitor = new PipeWireLevelMonitor();
+    private final PipeWireStreamControls streamControls;
     private volatile Process monitor;
     private volatile Consumer<Snapshot> listener = ignored -> {};
     private volatile Snapshot last = Snapshot.offline("Not connected to PipeWire yet");
     private volatile String backendMessage = "PipeWire not checked";
 
     private static Thread daemon(Runnable runnable, String name) { Thread t = new Thread(runnable, name); t.setDaemon(true); return t; }
+
+    public PipeWireBackend() {
+        this(WirePlumberMixerControl::setStreamVolume, WirePlumberMixerControl::setStreamMuted,
+                Snapshot.offline("Not connected to PipeWire yet"));
+    }
+
+    PipeWireBackend(PipeWireStreamControls.VolumeWriter streamVolumeWriter,
+                    PipeWireStreamControls.MuteWriter streamMuteWriter, Snapshot initial) {
+        this.streamControls = new PipeWireStreamControls(streamVolumeWriter, streamMuteWriter);
+        this.last = initial == null ? Snapshot.offline("Not connected to PipeWire yet") : initial;
+    }
+
+
 
     public void start(Consumer<Snapshot> listener) {
         this.listener = listener == null ? ignored -> {} : listener;
@@ -94,6 +108,15 @@ public final class PipeWireBackend implements AutoCloseable {
             return null;
         });
     }
+
+    public CompletableFuture<Void> setStreamVolume(int nodeId, double volume) {
+        return control(() -> { streamControls.volume(last, nodeId, volume); return null; });
+    }
+
+    public CompletableFuture<Void> setStreamMute(int nodeId, boolean muted) {
+        return control(() -> { streamControls.mute(last, nodeId, muted); return null; });
+    }
+
     public CompletableFuture<Void> setDefaultOutput(int nodeId) {
         return execute("wpctl", "set-default", Integer.toString(nodeId));
     }

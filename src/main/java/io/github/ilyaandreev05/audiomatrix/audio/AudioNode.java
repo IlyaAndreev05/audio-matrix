@@ -4,12 +4,22 @@ import java.util.List;
 
 public record AudioNode(int id, String name, String description, String mediaClass, String state,
                         String applicationName, String processName, String applicationId, int channels, List<Integer> sampleRates,
-                        double volume, boolean muted, Integer pulseId, DeviceIdentity identity) {
+                        double volume, boolean muted, Integer pulseId, DeviceIdentity identity,
+                        PortAvailability portAvailability) {
     public AudioNode(int id, String name, String description, String mediaClass, String state,
                      String applicationName, String processName, String applicationId, int channels,
                      List<Integer> sampleRates, double volume, boolean muted, Integer pulseId) {
         this(id, name, description, mediaClass, state, applicationName, processName, applicationId, channels,
-                sampleRates, volume, muted, pulseId, DeviceIdentity.from(java.util.Map.of(), channels));
+                sampleRates, volume, muted, pulseId, DeviceIdentity.from(java.util.Map.of(), channels), PortAvailability.UNKNOWN);
+    }
+    public AudioNode(int id, String name, String description, String mediaClass, String state,
+                     String applicationName, String processName, String applicationId, int channels,
+                     List<Integer> sampleRates, double volume, boolean muted, Integer pulseId, DeviceIdentity identity) {
+        this(id, name, description, mediaClass, state, applicationName, processName, applicationId, channels,
+                sampleRates, volume, muted, pulseId, identity, PortAvailability.UNKNOWN);
+    }
+    public AudioNode {
+        portAvailability = portAvailability == null ? PortAvailability.UNKNOWN : portAvailability;
     }
     public String kind() {
         if (mediaClass.startsWith("Stream/")) return "stream";
@@ -18,4 +28,5 @@ public record AudioNode(int id, String name, String description, String mediaCla
         return "other";
     }
     public boolean active() { return !"suspended".equalsIgnoreCase(state); }
+    public boolean outputAvailable() { return portAvailability != PortAvailability.UNAVAILABLE; }
 }

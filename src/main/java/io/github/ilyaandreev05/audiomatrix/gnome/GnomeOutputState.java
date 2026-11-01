@@ -18,7 +18,7 @@ public final class GnomeOutputState {
         List<Map<String, Object>> outputs = new ArrayList<>();
         int defaultId = snapshot.defaultSinkId();
         for (AudioNode sink : snapshot.sinks()) {
-            if (sink.name().startsWith("audiomatrix_")) continue;
+            if (!sink.outputAvailable() || sink.name().startsWith("audiomatrix_")) continue;
             outputs.add(device(sink, configured, defaultId));
         }
         return List.copyOf(outputs);
@@ -45,7 +45,8 @@ public final class GnomeOutputState {
             return DeviceSelectorMatcher.resolve(available, reference.substring("device:".length()), configured);
         if (reference.startsWith("name:")) {
             String name = reference.substring("name:".length());
-            return available.stream().filter(node -> node.name().equals(name)).findFirst().orElse(null);
+            return available.stream().filter(node -> !"output".equals(node.kind()) || node.outputAvailable())
+                    .filter(node -> node.name().equals(name)).findFirst().orElse(null);
         }
         return DeviceSelectorMatcher.resolve(available, reference, configured);
     }

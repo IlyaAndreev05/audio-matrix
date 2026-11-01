@@ -26,11 +26,13 @@ final class DynamicRegistryStore {
                 });
     }
 
-    private static void mergeRegistryChanges(Map<String,Object> latest, String routeId, AudioGraph baseGraph,
+    static void mergeRegistryChanges(Map<String,Object> latest, String routeId, AudioGraph baseGraph,
             DynamicInstanceRegistry.ReconcileResult result) {
         List<Map<String,Object>> routes = mutableMaps(latest.get("route_library"));
         Map<String,Object> route = routes.stream().filter(r -> routeId.equals(r.get("id"))).findFirst().orElseThrow(
                 () -> new IllegalStateException("Route disappeared before dynamic registry state could be saved"));
+        AudioGraph previousGraph = GraphCodec.fromMap(route);
+        Set<String> previousLayoutNodes = GraphLayoutNodes.ids(previousGraph);
         List<Map<String,Object>> nodes = mutableMaps(route.get("nodes")); Map<String,Map<String,Object>> raw = new LinkedHashMap<>();
         nodes.forEach(n -> raw.put(text(n.get("id")), n)); Map<String,GraphNode> generated = index(result.configuredGraph());
         for (GraphNode old : baseGraph.nodes()) {
@@ -43,8 +45,56 @@ final class DynamicRegistryStore {
             } else if (old instanceof SwitchNode a && next instanceof SwitchNode b && item != null) mergeSwitch(item, a, b);
         }
         route.put("nodes", nodes); latest.put("route_library", routes);
+        removeDisappearedComposites(latest, routeId, previousGraph, GraphCodec.fromMap(route));
+        Set<String> removedLayoutNodes = new LinkedHashSet<>(previousLayoutNodes);
+        removedLayoutNodes.removeAll(GraphLayoutNodes.ids(GraphCodec.fromMap(route)));
+        Map<String,Object> layouts = mutableObject(latest.get("graph_ui_layout"));
+        if (layouts.get(routeId) instanceof Map<?,?>) {
+            Map<String,Object> layout = mutableObject(layouts.get(routeId));
+            removedLayoutNodes.forEach(layout::remove);
+            layouts.put(routeId, layout);
+            latest.put("graph_ui_layout", layouts);
+        }
         // A discovered instance keeps its own canvas container, so the saved configuration stays valid.
         GraphSubgraphLibrary.ensureGeneratorComposites(latest, GraphCodec.fromMap(route));
+    }
+
+    private static void removeDisappearedComposites(Map<String,Object> config, String routeId,
+            AudioGraph before, AudioGraph after) {
+        Map<String,String> removed = compositeOwners(before);
+        compositeOwners(after).keySet().forEach(removed::remove);
+        if (removed.isEmpty()) return;
+        Map<String,Object> all = mutableObject(config.get("graph_ui_subgraphs"));
+        Object raw = all.get(routeId);
+        if (!(raw instanceof List<?>)) return;
+        List<Map<String,Object>> groups = mutableMaps(raw);
+        Map<String,String> removedParents = new LinkedHashMap<>();
+        for (Map<String,Object> group : groups) {
+            String id = text(group.get("id"));
+            if (removed.containsKey(id) && removed.get(id).equals(text(group.get("generator_id"))))
+                removedParents.put(id, text(group.get("parent_id")));
+        }
+        if (removedParents.isEmpty()) return;
+        for (Map<String,Object> group : groups) {
+            String parent = text(group.get("parent_id"));
+            Set<String> visited = new HashSet<>();
+            while (removedParents.containsKey(parent) && visited.add(parent)) parent = removedParents.get(parent);
+            if (parent.isBlank()) group.remove("parent_id"); else group.put("parent_id", parent);
+        }
+        groups.removeIf(group -> removedParents.containsKey(text(group.get("id"))));
+        if (groups.isEmpty()) all.remove(routeId); else all.put(routeId, groups);
+        config.put("graph_ui_subgraphs", all);
+    }
+
+    private static Map<String,String> compositeOwners(AudioGraph graph) {
+        Map<String,String> result = new LinkedHashMap<>();
+        for (GraphNode node : graph.nodes())
+            if (node instanceof DynamicGeneratorNode generator)
+                for (Object value : generator.instances().values()) {
+                    String id = text(object(value).get("composite_id"));
+                    if (!id.isBlank()) result.put(id, generator.id());
+                }
+        return result;
     }
 
     private static void mergeInstances(Map<String,Object> saved, Map<String,Object> before, Map<String,Object> after, boolean retain) {

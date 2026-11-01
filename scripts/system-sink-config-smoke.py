@@ -84,6 +84,9 @@ with tempfile.TemporaryDirectory(prefix="audio-matrix-system-sink-pw-") as direc
         if system_sink.get("node.description") != "Общая громкость":
             raise AssertionError("Virtual input has an unexpected description: "
                                  f"{system_sink.get('node.description')!r}")
+        if system_sink.get("monitor.channel-volumes") is not False:
+            raise AssertionError("Virtual system input monitor must keep raw PCM: "
+                                 f"{system_sink.get('monitor.channel-volumes')!r}")
         if int(system_sink.get("priority.session", 0)) != 2000:
             raise AssertionError("Virtual system input did not keep its configured default priority")
         if any(node.get("media.class", "").startswith("Audio/Source") for node in nodes):

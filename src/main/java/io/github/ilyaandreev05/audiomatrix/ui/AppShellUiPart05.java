@@ -78,7 +78,7 @@ abstract class AppShellUiPart05 extends AppShellUiPart04 {
     }
 
     protected void saveSubgraphPosition(String routeId,GraphSubgraph group,double deltaX,double deltaY,Map<String,double[]> initial){
-        updateRouteConfig(t("Переместить подграф","Move subgraph"),config->{Map<String,Object>layouts=map(config.get("graph_ui_layout"));config.put("graph_ui_layout",layouts);Map<String,Object>route=map(layouts.get(routeId));layouts.put(routeId,route);for(String nodeId:group.nodeIds()){double[] point=initial.get(nodeId);route.put(nodeId,Map.of("x",Math.rint(point[0]+deltaX),"y",Math.rint(point[1]+deltaY)));}});
+        updateRouteConfig(t("Переместить подграф","Move subgraph"),config->{Set<String>allowed=GraphLayoutNodes.ids(config,routeId);Map<String,Object>layouts=map(config.get("graph_ui_layout"));config.put("graph_ui_layout",layouts);Map<String,Object>route=map(layouts.get(routeId));layouts.put(routeId,route);for(String nodeId:group.nodeIds()){double[] point=initial.get(nodeId);if(point!=null&&allowed.contains(nodeId))route.put(nodeId,Map.of("x",Math.rint(point[0]+deltaX),"y",Math.rint(point[1]+deltaY)));}});
     }
 
     protected Button graphPortButton(String text){Button button=new Button(text);button.setFocusTraversable(true);button.setStyle("-fx-font-size: 10px; -fx-padding: 2 5 2 5; -fx-background-color: #20242b; -fx-border-color: #37b5a5; -fx-border-radius: 8; -fx-background-radius: 8;");return button;}
@@ -95,7 +95,7 @@ abstract class AppShellUiPart05 extends AppShellUiPart04 {
     }
 
     protected void saveGraphNodePosition(String routeId,String nodeId,double x,double y){
-        updateRouteConfig(t("Переместить ноду","Move graph node"),config->{Map<String,Object> layouts=map(config.get("graph_ui_layout"));config.put("graph_ui_layout",layouts);Map<String,Object> route=map(layouts.get(routeId));layouts.put(routeId,route);route.put(nodeId,Map.of("x",Math.rint(x),"y",Math.rint(y)));});
+        updateRouteConfig(t("Переместить ноду","Move graph node"),config->{if(!GraphLayoutNodes.ids(config,routeId).contains(nodeId))return;Map<String,Object> layouts=map(config.get("graph_ui_layout"));config.put("graph_ui_layout",layouts);Map<String,Object> route=map(layouts.get(routeId));layouts.put(routeId,route);route.put(nodeId,Map.of("x",Math.rint(x),"y",Math.rint(y)));});
     }
 
     protected VBox graphMatrixCard(AudioGraph graph){

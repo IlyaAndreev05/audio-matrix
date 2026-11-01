@@ -115,6 +115,7 @@ abstract class AppShellUiPart18 extends AppShellUiPart17 {
         lastPublishedCapturedAtMillis = observation.capturedAtMillis();
         String activeRoute = String.valueOf(config.getOrDefault("active_route", ""));
         gnomeBridge.publishState(observation, config, config.revision(), dynamicGraphState(activeRoute));
+        gnomePublishedObservation = observation;
     }
 
     protected void applyRoutes() {

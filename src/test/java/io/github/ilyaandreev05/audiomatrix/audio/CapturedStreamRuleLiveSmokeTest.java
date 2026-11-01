@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static io.github.ilyaandreev05.audiomatrix.audio.PrivateRuleDiagnostics.diagnostic;
 
 /** Opt-in private-PipeWire check for exact captured-node binding, gain product and mute OR semantics. */
 class CapturedStreamRuleLiveSmokeTest {
@@ -36,6 +37,9 @@ class CapturedStreamRuleLiveSmokeTest {
         Assumptions.assumeTrue(commandExists("pw-play") && commandExists("pw-link"), "Requires PipeWire playback tools");
         PipeWireBackend backend = new PipeWireBackend();
         List<Process> streams = new ArrayList<>();
+        List<AudioNode> diagnosticNodes = new ArrayList<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        boolean completed = false;
         try {
             String suffix = UUID.randomUUID().toString().replace("-", "");
             String appIdA = "org.example.CaptureParentA." + suffix;
@@ -53,11 +57,12 @@ class CapturedStreamRuleLiveSmokeTest {
             streams.add(startStream(silence, "io.github.ilyaandreev05.audiomatrix.chrome-tab-capture", "capture-host", captureA));
             streams.add(startStream(silence, "io.github.ilyaandreev05.audiomatrix.chrome-tab-capture", "capture-host", captureB));
             streams.add(startStream(silence, "io.github.ilyaandreev05.audiomatrix.chrome-tab-capture", "capture-host", unmatchedCapture));
-            waitForNode(backend, parentNameA);
-            waitForNode(backend, parentNameB);
-            waitForNode(backend, captureA);
-            waitForNode(backend, captureB);
-            waitForNode(backend, unmatchedCapture);
+            diagnosticNodes.add(waitForNode(backend, parentNameA));
+            diagnosticNodes.add(waitForNode(backend, parentNameB));
+            diagnosticNodes.add(waitForNode(backend, captureA));
+            diagnosticNodes.add(waitForNode(backend, captureB));
+            diagnosticNodes.add(waitForNode(backend, unmatchedCapture));
+            diagnostic("before-apply", diagnosticNodes, failure);
 
             List<Map<String, Object>> rules = List.of(
                     Map.of("id", "capture-parent-a-" + suffix,
@@ -72,10 +77,17 @@ class CapturedStreamRuleLiveSmokeTest {
                     captureB, new CapturedStreamBinding(captureB, "generated-source-b", "capture-parent-b-" + suffix,
                             appIdB, "chrome", "tab:b-" + suffix, 0.5, false));
             LevelState unmatchedBefore = levelOf(backend, unmatchedCapture);
-            AtomicReference<Throwable> failure = new AtomicReference<>();
             ApplicationStreamRuleApplier applier = new ApplicationStreamRuleApplier(backend);
-            applier.apply(backend.refresh().get(5, TimeUnit.SECONDS), rules, bindings, false,
-                    (stream, error) -> failure.compareAndSet(null, error)).get(10, TimeUnit.SECONDS);
+            try {
+                applier.apply(backend.refresh().get(5, TimeUnit.SECONDS), rules, bindings, false,
+                        (stream, error) -> { failure.compareAndSet(null, error); System.out.println("RULE-DIAG callback node=" + stream.id() + " error=" + error); }).get(10, TimeUnit.SECONDS);
+                System.out.println("RULE-DIAG future=success");
+            } catch (Exception error) {
+                System.out.println("RULE-DIAG future-error=" + error);
+                throw error;
+            } finally {
+                diagnostic("after-future", diagnosticNodes, failure);
+            }
             assertTrue(failure.get() == null);
 
             LevelState first = waitForLevel(backend, captureA, 0.4, true);
@@ -83,6 +95,7 @@ class CapturedStreamRuleLiveSmokeTest {
             assertTrue(first.muted(), "tab mute must remain separate from saved gain");
             assertTrue(second.muted(), "parent mute must mute the captured stream");
             LevelState unmatched = levelOf(backend, unmatchedCapture);
+            System.out.println("RULE-DIAG unmatched initial=" + unmatchedBefore + " final=" + unmatched);
             assertEquals(unmatchedBefore.volume(), unmatched.volume(), 0.02, "a prefix-near-match is not a binding");
             assertFalse(unmatched.muted());
             // PipeWire reports mute separately from its stored channel level.
@@ -124,11 +137,14 @@ class CapturedStreamRuleLiveSmokeTest {
             assertTrue(failure.get() == null);
             assertEquals(Math.cbrt(0.35), waitForLevel(backend, captureA, 0.35, false).volume(), 0.02,
                     "serialized absolute writes must leave the latest accepted gain");
+            completed = true;
         } finally {
+            if (!completed) diagnostic("failure", diagnosticNodes, failure);
             for (Process stream : streams) stop(stream);
             backend.close();
         }
     }
+
 
     private Process startStream(Path wav, String applicationId, String process, String nodeName) throws IOException {
         String properties = "application.id=" + applicationId + " application.process.binary=" + process

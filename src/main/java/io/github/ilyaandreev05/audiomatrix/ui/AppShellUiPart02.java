@@ -144,15 +144,49 @@ abstract class AppShellUiPart02 extends AppShellUiPart01 {
             if (!Double.isFinite(stream.volume())) slider.setTooltip(new javafx.scene.control.Tooltip(t("PipeWire не сообщил уровень этого потока.", "PipeWire did not report this stream's volume.")));
             HBox.setHgrow(slider, Priority.ALWAYS);
             PauseTransition debounce = new PauseTransition(Duration.millis(180));
+            record ManualVolumeIntent(double volume, String id) {}
+            AtomicReference<ManualVolumeIntent> intent = new AtomicReference<>();
+            Runnable applyManualVolume = () -> {
+                ManualVolumeIntent currentIntent = intent.get();
+                if (currentIntent == null) return;
+                streamRuleApplier.setManualVolume(stream, currentIntent.volume(), currentIntent.id())
+                        .whenComplete((v, err) -> {
+                            ManualVolumeIntent latestIntent = intent.get();
+                            if (err != null && latestIntent != null
+                                    && currentIntent.id().equals(latestIntent.id())) {
+                                streamRuleApplier.clearManualVolume(stream, currentIntent.id());
+                                applyConfiguredStreamRules(backend.current(), store.snapshot());
+                                Platform.runLater(() -> setNotice(rootMessage(err), true));
+                            }
+                        });
+            };
+            debounce.setOnFinished(e -> applyManualVolume.run());
             slider.valueProperty().addListener((obs, old, value) -> {
                 current.setText(volumeLabel(value.doubleValue()));
-                debounce.setOnFinished(e -> backend.setVolume(stream.id(), value.doubleValue()).whenComplete((v, err) -> {
-                    if (err != null) Platform.runLater(() -> setNotice(rootMessage(err), true));
-                })); debounce.playFromStart();
+                intent.set(new ManualVolumeIntent(value.doubleValue(), UUID.randomUUID().toString()));
+                debounce.playFromStart();
             });
-            slider.setOnMouseReleased(e -> saveAppVolume(stream, slider.getValue()));
-            slider.setOnKeyReleased(e -> saveAppVolume(stream, slider.getValue()));
-            Button mute = actionButton(stream.muted() ? t("Включить звук", "Unmute") : t("Выключить звук", "Mute"), () -> backend.setMute(stream.id(), !stream.muted()).whenComplete((v, err) -> Platform.runLater(() -> {
+            Runnable persistManualVolume = () -> {
+                ManualVolumeIntent finalIntent = new ManualVolumeIntent(slider.getValue(), UUID.randomUUID().toString());
+                intent.set(finalIntent);
+                debounce.stop();
+                ApplicationStreamManualSave.applyAndPersist(streamRuleApplier, stream, finalIntent.volume(),
+                        finalIntent.id(), () -> saveAppVolume(stream, finalIntent.volume(), finalIntent.id()),
+                        ignored -> restoreStreamRulesAfterManualSaveFailure())
+                        .whenComplete((v, err) ->
+                                Platform.runLater(() -> {
+                                    if (err != null) {
+                                        setNotice(t("Конфигурация не сохранена: ", "Configuration was not saved: ")
+                                                + rootMessage(err), true);
+                                    } else if (intent.get() != null && finalIntent.id().equals(intent.get().id())) {
+                                        setNotice(t("Изменение сохранено в config.json.", "Change saved to config.json."), false);
+                                        refreshBackend();
+                                    }
+                                }));
+            };
+            slider.setOnMouseReleased(e -> persistManualVolume.run());
+            slider.setOnKeyReleased(e -> persistManualVolume.run());
+            Button mute = actionButton(stream.muted() ? t("Включить звук", "Unmute") : t("Выключить звук", "Mute"), () -> backend.setStreamMute(stream.id(), !stream.muted()).whenComplete((v, err) -> Platform.runLater(() -> {
                 if (err != null) setNotice(rootMessage(err), true); else { saveAppMute(stream, !stream.muted()); refreshBackend(); }
             })));
             ComboBox<AudioNode> destination = new ComboBox<>(); destination.getItems().setAll(physicalSinks());

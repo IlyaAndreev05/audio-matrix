@@ -25,7 +25,8 @@ final class GnomePublicationLane implements AutoCloseable {
     private final Runnable publication;
     private final BooleanSupplier closing;
     private final Object lock = new Object();
-    private final List<CompletableFuture<Void>> barrierQueue = new ArrayList<>();
+    private record Barrier(CompletableFuture<Void> future, Runnable validate) {}
+    private final List<Barrier> barrierQueue = new ArrayList<>();
     private boolean scheduled;
 
     GnomePublicationLane(Runnable publication, BooleanSupplier closing) {
@@ -34,13 +35,22 @@ final class GnomePublicationLane implements AutoCloseable {
     }
 
     CompletableFuture<Void> request(CompletableFuture<Void> barrier) {
+        return request(barrier, null);
+    }
+
+    CompletableFuture<Void> requestValidated(Runnable validate) {
+        return request(new CompletableFuture<>(), java.util.Objects.requireNonNull(validate));
+    }
+
+    private CompletableFuture<Void> request(CompletableFuture<Void> barrier, Runnable validate) {
         CompletableFuture<Void> pending = barrier == null ? new CompletableFuture<>() : barrier;
         if (closing.getAsBoolean()) {
-            pending.complete(null);
+            if (validate == null) pending.complete(null);
+            else pending.completeExceptionally(new IllegalStateException("GNOME publication is closing"));
             return pending;
         }
         synchronized (lock) {
-            barrierQueue.add(pending);
+            barrierQueue.add(new Barrier(pending, validate));
             if (scheduled) return pending;
             scheduled = true;
         }
@@ -53,7 +63,7 @@ final class GnomePublicationLane implements AutoCloseable {
     }
 
     private void drain() {
-        List<CompletableFuture<Void>> barriers;
+        List<Barrier> barriers;
         synchronized (lock) {
             barriers = new ArrayList<>(barrierQueue);
             barrierQueue.clear();
@@ -62,23 +72,36 @@ final class GnomePublicationLane implements AutoCloseable {
         RuntimeException failure = null;
         try {
             if (!closing.getAsBoolean()) publication.run();
+            else if (barriers.stream().anyMatch(barrier -> barrier.validate() != null))
+                failure = new IllegalStateException("GNOME publication is closing");
         } catch (RuntimeException error) {
             failure = error;
         }
-        for (CompletableFuture<Void> barrier : barriers) {
-            if (failure == null) barrier.complete(null);
-            else barrier.completeExceptionally(failure);
+        for (Barrier barrier : barriers) {
+            if (failure != null) {
+                barrier.future().completeExceptionally(failure);
+            } else {
+                try {
+                    if (barrier.validate() != null) barrier.validate().run();
+                    barrier.future().complete(null);
+                } catch (RuntimeException error) {
+                    barrier.future().completeExceptionally(error);
+                }
+            }
         }
     }
 
     void completePending() {
-        List<CompletableFuture<Void>> pending;
+        List<Barrier> pending;
         synchronized (lock) {
             pending = new ArrayList<>(barrierQueue);
             barrierQueue.clear();
             scheduled = false;
         }
-        for (CompletableFuture<Void> barrier : pending) barrier.complete(null);
+        for (Barrier barrier : pending) {
+            if (barrier.validate() == null) barrier.future().complete(null);
+            else barrier.future().completeExceptionally(new IllegalStateException("GNOME publication is closing"));
+        }
     }
 
     @Override

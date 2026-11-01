@@ -112,6 +112,7 @@ public final class OctineSetupCli {
 
     private static AudioNode requireSink(PipeWireBackend backend, String selector) throws Exception {
         List<AudioNode> matches = backend.refresh().get(15, java.util.concurrent.TimeUnit.SECONDS).sinks().stream()
+                .filter(AudioNode::outputAvailable)
                 .filter(node -> node.name().equals(selector) || node.description().equals(selector)).toList();
         if (matches.size() != 1)
             throw new IllegalArgumentException(matches.isEmpty()

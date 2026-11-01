@@ -20,6 +20,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static io.github.ilyaandreev05.audiomatrix.audio.PrivateRuleDiagnostics.diagnostic;
 
 /** Opt-in live rule check using silent streams deliberately left unlinked from every output. */
 class ApplicationStreamRuleLiveSmokeTest {
@@ -33,9 +34,13 @@ class ApplicationStreamRuleLiveSmokeTest {
                 "Set AUDIO_MATRIX_LIVE_PIPEWIRE_SMOKE=1 to run the live application-rule check");
         for (String command : List.of("pw-play", "pw-link", "pw-dump", "wpctl"))
             Assumptions.assumeTrue(commandExists(command), "Requires " + command);
+        ApplicationStreamVolumePcmSmoke.requirePrivateServer();
 
         PipeWireBackend backend = new PipeWireBackend();
         List<Process> playbacks = new ArrayList<>();
+        List<AudioNode> diagnosticNodes = new ArrayList<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        boolean completed = false;
         try {
             PipeWireBackend.Snapshot before = backend.refresh().get(5, TimeUnit.SECONDS);
             Assumptions.assumeTrue(before.connected() && !before.sinks().isEmpty(),
@@ -53,6 +58,9 @@ class ApplicationStreamRuleLiveSmokeTest {
             playbacks.add(startUnlinkedPlayback(wav, telegramId, "telegram-desktop"));
             AudioNode chrome = waitForStream(backend, chromeId, "chrome");
             AudioNode telegram = waitForStream(backend, telegramId, "telegram-desktop");
+            diagnosticNodes.add(chrome);
+            diagnosticNodes.add(telegram);
+            diagnostic("before-apply", diagnosticNodes, failure);
             assertTrue(PipeWireLinkOperations.linksFromNode(run("pw-link", "-l"), chrome.name()).isEmpty(),
                     "Chrome smoke stream must have no output links before applying its rule");
             assertTrue(PipeWireLinkOperations.linksFromNode(run("pw-link", "-l"), telegram.name()).isEmpty(),
@@ -61,9 +69,17 @@ class ApplicationStreamRuleLiveSmokeTest {
             List<Map<String, Object>> rules = List.of(
                     Map.of("id", "chrome-rule-" + suffix, "match", Map.of("process", "chrome"), "volume", 0.37, "mute", true),
                     Map.of("id", "telegram-rule-" + suffix, "match", Map.of("process", "telegram-desktop"), "volume", 0.62, "mute", false));
-            AtomicReference<Throwable> failure = new AtomicReference<>();
-            new ApplicationStreamRuleApplier(backend).apply(backend.refresh().get(5, TimeUnit.SECONDS), rules,
-                    (stream, error) -> failure.compareAndSet(null, error));
+            try {
+                new ApplicationStreamRuleApplier(backend).apply(backend.refresh().get(5, TimeUnit.SECONDS), rules,
+                        (stream, error) -> { failure.compareAndSet(null, error); System.out.println("RULE-DIAG callback node=" + stream.id() + " error=" + error); })
+                        .get(10, TimeUnit.SECONDS);
+                System.out.println("RULE-DIAG future=success");
+            } catch (Exception error) {
+                System.out.println("RULE-DIAG future-error=" + error);
+                throw error;
+            } finally {
+                diagnostic("after-future", diagnosticNodes, failure);
+            }
 
             RuleState adjustedChrome = waitForRuleState(backend, chromeId, "chrome", 0.37, true, failure);
             RuleState adjustedTelegram = waitForRuleState(backend, telegramId, "telegram-desktop", 0.62, false, failure);
@@ -78,6 +94,15 @@ class ApplicationStreamRuleLiveSmokeTest {
             RuleState restoredChrome = waitForRuleState(backend, chromeId, "chrome", 0.37, false, failure);
             assertEquals(Math.cbrt(0.37), restoredChrome.volume(), 0.02, "the saved rule level must survive the mute");
             assertFalse(restoredChrome.muted());
+            ApplicationStreamRuleApplier manual = new ApplicationStreamRuleApplier(backend);
+            for (double level : new double[]{.2, 0, .35}) {
+                manual.setManualVolume(waitForStream(backend, chromeId, "chrome"), level, UUID.randomUUID().toString())
+                        .get(5, TimeUnit.SECONDS);
+                manual.setManualVolume(waitForStream(backend, telegramId, "telegram-desktop"), level, UUID.randomUUID().toString())
+                        .get(5, TimeUnit.SECONDS);
+                assertFalse(waitForRuleState(backend, chromeId, "chrome", level, false, failure).muted());
+                assertFalse(waitForRuleState(backend, telegramId, "telegram-desktop", level, false, failure).muted());
+            }
             String links = run("pw-link", "-l");
             assertTrue(PipeWireLinkOperations.linksFromNode(links, chrome.name()).isEmpty());
             assertTrue(PipeWireLinkOperations.linksFromNode(links, telegram.name()).isEmpty());
@@ -89,10 +114,18 @@ class ApplicationStreamRuleLiveSmokeTest {
             Assumptions.assumeTrue(Math.abs(originalDefaultVolume - currentDefaultVolume) <= 0.01,
                     "The default sink level changed concurrently; physical-output isolation is inconclusive");
             assertEquals(originalDefaultMuted, defaultSinkMuted(), "The system default output mute must remain unchanged");
+            completed = true;
         } finally {
+            if (!completed) diagnostic("failure", diagnosticNodes, failure);
             for (Process playback : playbacks) stop(playback);
             backend.close();
         }
+    }
+
+
+    @Test
+    void zeroAndPoint35ChangeNonzeroPrivateOutputPcm() throws Exception {
+        new ApplicationStreamVolumePcmSmoke(tempDir).verify();
     }
 
     private Process startUnlinkedPlayback(Path wav, String applicationId, String processBinary) throws IOException {

@@ -74,10 +74,35 @@ final class PipeWireSnapshotReader {
         PipeWireBackend.LevelState level = levels.get(id);
         double volume = level == null ? Double.NaN : level.volume();
         boolean muted = level != null ? level.muted() : stateProps.path("mute").asBoolean(false);
+        if (PipeWireBackend.SYSTEM_MIXER_SINK_NAME.equals(name)) {
+            // channelVolumes holds the stored linear OSD target; the Props.volume scalar stays at 1.0.
+            // Follow the existing snapshot aggregation convention and use the maximum channel.
+            JsonNode channelVolumes = stateProps.path("channelVolumes");
+            double storedLinear = Double.NaN;
+            if (channelVolumes.isArray() && !channelVolumes.isEmpty()) {
+                double maximum = 0.0;
+                boolean valid = true;
+                for (JsonNode channel : channelVolumes) {
+                    double value = channel.asDouble(Double.NaN);
+                    if (!Double.isFinite(value) || value < 0.0 || value > 1.0) { valid = false; break; }
+                    maximum = Math.max(maximum, value);
+                }
+                if (valid) storedLinear = maximum;
+            }
+            if (Double.isFinite(storedLinear))
+                volume = storedLinear;
+            else if (muted)
+                volume = Double.NaN;
+        }
+        Map<String, String> deviceProperties = DeviceProperties.read(root, props);
+        DeviceIdentity identity = DeviceIdentity.from(deviceProperties, channels);
+        PortAvailability availability = mediaClass.startsWith("Audio/Sink") && !name.startsWith("audiomatrix_")
+                ? PortAvailability.parse(deviceProperties.get(DeviceProperties.PORT_AVAILABILITY))
+                : PortAvailability.UNKNOWN;
         return new AudioNode(id, name, description, mediaClass, state, app.applicationName(),
-                app.processName(), app.applicationId(), channels, rates, volume, muted, pulseId,
-                DeviceIdentity.from(DeviceProperties.read(root, props), channels));
+                app.processName(), app.applicationId(), channels, rates, volume, muted, pulseId, identity, availability);
     }
+
 
 
     private static void addNode(AudioNode node, String mediaClass, List<AudioNode> sinks,

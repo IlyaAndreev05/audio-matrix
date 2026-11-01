@@ -1,6 +1,7 @@
 package io.github.ilyaandreev05.audiomatrix.ui;
 
 import io.github.ilyaandreev05.audiomatrix.audio.AudioNode;
+import io.github.ilyaandreev05.audiomatrix.audio.GeneratedOutputBinding;
 import io.github.ilyaandreev05.audiomatrix.audio.PipeWireBackend;
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
 import io.github.ilyaandreev05.audiomatrix.graph.DeviceSlotNode;
@@ -132,8 +133,8 @@ final class GnomeGraphNodeTargetResolver {
                     target.instanceKey(), null, instance, gain, binding, "", source.selector());
         }
         if (binding.containsKey("deviceId")) {
-            String bindingId = GnomeGraphNodeDeviceResolver.deviceId(String.valueOf(binding.get("deviceId")));
-            GraphNodeCommand.deviceBinding(config, bindingId);
+            String bindingId = GeneratedOutputBinding.resolve(config, binding, snapshot, sinks)
+                    .orElseThrow(() -> new IllegalArgumentException("Generated output has no unambiguous saved device binding"));
             return new ResolvedTarget(Kind.GENERATED_DEVICE, target.routeId(), target.nodeId(),
                     target.instanceKey(), null, instance, gain, binding, bindingId, "");
         }
