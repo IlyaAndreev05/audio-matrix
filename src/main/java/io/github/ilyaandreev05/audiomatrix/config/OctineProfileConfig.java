@@ -35,7 +35,7 @@ public final class OctineProfileConfig {
         QuickSettingsConfig.pinNode(config, GraphCommonVibro.COMMON_ROUTE_ID, "octine-event-source",
                 "sources", 0, "DEFAULT");
         int order = 0;
-        for (String node : List.of(GraphCommonVibro.VIBRO_MIXER_ID, GraphCommonVibro.VIBRO_GAIN_ID,
+        for (String node : List.of(GraphCommonVibro.VIBRO_GAIN_ID,
                 "octine-vibro-limiter", GraphCommonVibro.VIBRO_OUTPUT_ID))
             QuickSettingsConfig.pinNode(config, GraphCommonVibro.COMMON_ROUTE_ID, node,
                     String.valueOf(tactile.get("id")), order++, "DEFAULT");

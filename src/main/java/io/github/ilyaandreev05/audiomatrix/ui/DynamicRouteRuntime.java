@@ -175,6 +175,16 @@ final class DynamicRouteRuntime implements AutoCloseable {
         }
         Map<String,List<DynamicInstanceRegistry.InstanceSnapshot>> result = new LinkedHashMap<>();
         List<Map<String,Object>> devices = maps(config.get("devices")); diagnostic = hapticDiagnostic(devices);
+        Set<Integer> staticOutputs = new HashSet<>();
+        for (GraphNode node : graph.nodes()) {
+            String ref = node instanceof OutputNode output ? output.deviceId()
+                    : node instanceof DeviceSlotNode slot ? slot.deviceId() : "";
+            if (ref.startsWith("device:")) ref = ref.substring("device:".length());
+            // Keep the existing system-default policy: it is not a stable physical assignment.
+            if (ref.isBlank() || "system_default".equals(ref)) continue;
+            AudioNode resolved = DeviceSelectorMatcher.resolve(snapshot.sinks(), ref, devices);
+            if (resolved != null) staticOutputs.add(resolved.id());
+        }
         List<DynamicGeneratorNode> generators = graph.nodes().stream().filter(DynamicGeneratorNode.class::isInstance).map(DynamicGeneratorNode.class::cast).toList();
         for (DynamicGeneratorNode generator : generators) {
             List<DynamicInstanceRegistry.InstanceSnapshot> items = new ArrayList<>();
@@ -185,7 +195,7 @@ final class DynamicRouteRuntime implements AutoCloseable {
                 if (systemInputPresent(snapshot)) items.add(DynamicInstanceRegistry.systemInput());
             }
             else if ("outputs".equals(generator.registry())) for (AudioNode sink : snapshot.sinks()) {
-                if (!sink.outputAvailable() || AudioMatrixOwnedStream.matches(sink)) continue;
+                if (!sink.outputAvailable() || AudioMatrixOwnedStream.matches(sink) || staticOutputs.contains(sink.id())) continue;
                 String role = exactRole(sink, devices), fingerprint = sink.identity() == null ? "" : sink.identity().fingerprint();
                 // A new physical endpoint is never selected by discovery. Saved instance choices
                 // are restored by the registry's stable identity policy, not by a hardware name.

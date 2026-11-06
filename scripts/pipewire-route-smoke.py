@@ -24,6 +24,7 @@ EVENT_MONITOR = "audiomatrix_private_event_monitor"
 OWNED_NODE_PREFIXES = ("audiomatrix_bus_", "audiomatrix_route_", "audiomatrix_output_", "audiomatrix_app_")
 REGRESSION_TESTS = [
     "io.github.ilyaandreev05.audiomatrix.audio.PipeWireSignedMatrixRouteLiveSmokeTest",
+    "io.github.ilyaandreev05.audiomatrix.audio.PipeWireRearMatrixPcmLiveSmokeTest",
     "io.github.ilyaandreev05.audiomatrix.audio.GraphPipeWireRouteLiveSmokeTest",
     "io.github.ilyaandreev05.audiomatrix.audio.WirePlumberMixerControlTest.privatePipeWireAppliesLinearVolumeAndFastMuteWithoutHardware",
     "io.github.ilyaandreev05.audiomatrix.audio.ApplicationStreamRuleLiveSmokeTest",

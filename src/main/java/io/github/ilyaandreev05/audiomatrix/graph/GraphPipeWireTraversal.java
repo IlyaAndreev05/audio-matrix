@@ -84,17 +84,18 @@ final class GraphPipeWireTraversal {
         if (node instanceof OutputNode output) {
             if (path.protectMixedOutput && path.outputLimiter == null)
                 path.outputLimiter = Map.of("enabled", true, "ceiling_db", -1.0, "lookahead_ms", 5.0, "release_ms", 80.0);
-            Map<String, Object> existingLimiter = outputLimiters.get(output.deviceId());
+            String limiterDevice = GraphPipeWireCompiler.deviceReference(output.deviceId());
+            Map<String, Object> existingLimiter = outputLimiters.get(limiterDevice);
             if (path.outputLimiter != null && existingLimiter != null
                     && !java.util.Objects.equals(existingLimiter, path.outputLimiter))
-                throw new IllegalArgumentException("All paths to physical output '" + output.deviceId()
+                throw new IllegalArgumentException("All paths to physical output '" + limiterDevice
                         + "' must share the same post-mix limiter");
-            if (path.outputLimiter != null) outputLimiters.put(output.deviceId(), path.outputLimiter);
-            else outputLimiters.putIfAbsent(output.deviceId(), null);
+            if (path.outputLimiter != null) outputLimiters.put(limiterDevice, path.outputLimiter);
+            else outputLimiters.putIfAbsent(limiterDevice, null);
             ChannelMatrix channelMatrix = output.channelMatrix();
             String targetChannels = channelMatrix == null
                     ? String.join(",", output.inputs().getFirst().channels()) : String.join(",", channelMatrix.outputs());
-            String targetKey = path.sourceId + "\u0000" + output.deviceId() + "\u0000" + targetChannels;
+            String targetKey = path.sourceId + "\u0000" + limiterDevice + "\u0000" + targetChannels;
             if (path.selected && !sourceOutputs.add(targetKey))
                 throw new IllegalArgumentException("Multiple paths from source '" + path.sourceId
                         + "' are selected for the same channels of output '" + output.deviceId()
@@ -102,7 +103,7 @@ final class GraphPipeWireTraversal {
             String id = stableRouteId(path, output);
             boolean muted = path.muted || !path.selected;
             Map<String, Object> route = GraphPipeWireCompiler.map("id", id, "name", path.sourceId + " → " + output.name(),
-                    "from", path.sourceId, "to", output.deviceId(), "volume",
+                    "from", path.sourceId, "to", limiterDevice, "volume",
                     muted ? 0 : Math.max(0, Math.min(1, path.gain)), "gain_db", 0, "delay_ms", path.delayMs,
                     "mute", muted, "channel_map", "stereo", "enabled", true);
             if (GraphCommonVibro.VIBRO_OUTPUT_ID.equals(output.id())) route.put("role", "vibro");
@@ -134,6 +135,7 @@ final class GraphPipeWireTraversal {
                 Map<String, Object> limiter = new LinkedHashMap<>(filter.parameters());
                 limiter.remove("processor");
                 limiter.remove("enabled");
+                limiter.replaceAll((key, value) -> value instanceof Number number ? number.doubleValue() : value);
                 limiter.put("enabled", true);
                 path.outputLimiter = Map.copyOf(limiter);
             } else if ("delay".equals(filter.processor())) {

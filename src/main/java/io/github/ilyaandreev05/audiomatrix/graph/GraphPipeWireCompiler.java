@@ -50,7 +50,7 @@ public final class GraphPipeWireCompiler {
         if(!offlineControlGraph&&(sources.isEmpty()||!hasOutputNode&&!hasDynamicOutputGenerator))
             throw new IllegalArgumentException("The active route needs at least one source and one output or device slot");
         Map<String,GraphNode> nodes=new LinkedHashMap<>();graph.nodes().forEach(node->nodes.put(node.id(),node));
-        rejectSharedVibroOutput(graph);
+        rejectSharedOutputs(graph);
         for(GraphNode node:graph.nodes())if(node instanceof RouterNode&&node.type().equals("router"))
             throw new IllegalArgumentException("Legacy router node '"+node.name()+"' has no typed switching behavior; replace it with a Switch, Selector or Matrix node");
         List<Map<String,Object>> buses=new ArrayList<>(),routes=new ArrayList<>(),
@@ -115,17 +115,18 @@ public final class GraphPipeWireCompiler {
         return deviceId!=null&&deviceId.startsWith("device:")?deviceId.substring("device:".length()):deviceId;
     }
 
-    private static void rejectSharedVibroOutput(AudioGraph graph){
-        String vibro="";
-        for(GraphNode node:graph.nodes())
-            if(node instanceof DeviceSlotNode slot&&GraphCommonVibro.VIBRO_OUTPUT_ID.equals(slot.id()))
-                vibro=deviceReference(slot.deviceId());
-        if(vibro.isBlank())return;
+    private static void rejectSharedOutputs(AudioGraph graph){
+        Map<String,List<GraphNode>> assigned=new LinkedHashMap<>();
         for(GraphNode node:graph.nodes()){
-            if(GraphCommonVibro.VIBRO_OUTPUT_ID.equals(node.id()))continue;
-            String device=deviceReference(node instanceof DeviceSlotNode slot?slot.deviceId():node instanceof OutputNode output?output.deviceId():"");
-            if(vibro.equals(device))throw new IllegalArgumentException("Physical output '"+device
-                    +"' is assigned to both the Vibro slot and '"+node.name()+"'; choose separate outputs");
+            if(!GraphOutputChannelIsolation.isEndpoint(graph,node))continue;
+            String device=GraphOutputChannelIsolation.deviceReference(node);
+            if(device.isBlank()||"unbound".equals(device))continue;
+            List<GraphNode> previous=assigned.computeIfAbsent(device,ignored->new ArrayList<>());
+            for(GraphNode other:previous)
+                if(!GraphOutputChannelIsolation.disjoint(other,node))
+                    throw new IllegalArgumentException("Multiple paths or endpoint assignments to physical output '"
+                            +device+"' use '"+other.name()+"' and '"+node.name()+"' without proven channel isolation");
+            previous.add(node);
         }
     }
 

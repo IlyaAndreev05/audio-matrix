@@ -67,8 +67,9 @@ final class PipeWireSnapshotReader {
                                        Map<Integer, PipeWireBackend.LevelState> levels, JsonNode root) {
         String description = props.path("node.description").asText(name);
         String state = info.path("state").asText("unknown").toLowerCase();
-        int channels = props.path("audio.channels").asInt(2);
-        List<Integer> rates = sampleRates(info.path("params").path("EnumFormat"));
+        int channels = props.path("audio.channels").asInt(0);
+        if (channels <= 0) channels = PipeWireSinkMetadata.channelCount(props, root, id);
+        List<Integer> rates = PipeWireSinkMetadata.sampleRates(info.path("params").path("EnumFormat"));
         Integer pulseId = props.path("pulse.id").isInt() ? props.path("pulse.id").asInt() : null;
         JsonNode stateProps = activeProps(info.path("params").path("Props"));
         PipeWireBackend.LevelState level = levels.get(id);
@@ -95,6 +96,8 @@ final class PipeWireSnapshotReader {
                 volume = Double.NaN;
         }
         Map<String, String> deviceProperties = DeviceProperties.read(root, props);
+        if (mediaClass.startsWith("Audio/Sink"))
+            PipeWireSinkMetadata.addPortPositions(deviceProperties, root, id, channels);
         DeviceIdentity identity = DeviceIdentity.from(deviceProperties, channels);
         PortAvailability availability = mediaClass.startsWith("Audio/Sink") && !name.startsWith("audiomatrix_")
                 ? PortAvailability.parse(deviceProperties.get(DeviceProperties.PORT_AVAILABILITY))
@@ -224,15 +227,4 @@ final class PipeWireSnapshotReader {
         return com.fasterxml.jackson.databind.node.MissingNode.getInstance();
     }
 
-    private static List<Integer> sampleRates(JsonNode formats) {
-        List<Integer> result = new ArrayList<>();
-        if (formats.isArray()) for (JsonNode format : formats) addSampleRate(result, format.path("rate"));
-        return result.stream().distinct().sorted().toList();
-    }
-
-    private static void addSampleRate(List<Integer> rates, JsonNode rate) {
-        if (rate.isInt()) rates.add(rate.asInt());
-        else if (rate.isObject()) for (String key : List.of("default", "min", "max"))
-            if (rate.path(key).isInt()) rates.add(rate.path(key).asInt());
-    }
 }

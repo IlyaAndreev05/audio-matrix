@@ -104,7 +104,9 @@ class PipeWireChannelMappingTest extends PipeWireRouteManagerTestSupport {
         @SuppressWarnings("unchecked") List<Map<String, Object>> profiles = (List<Map<String, Object>>) config.get("profiles");
         profiles.getFirst().put("active_routes", List.of("matrix-route"));
         profiles.getFirst().put("active_buses", List.of("music"));
-        AudioNode output = sink(90, "test-output", "Test output");
+        AudioNode output = new AudioNode(90, "test-output", "Test output", "Audio/Sink", "running",
+                "", "", "", 2, List.of(48000), 1.0, false, null,
+                DeviceIdentity.from(Map.of("audio.position", "[ FL FR ]"), 2));
         PipeWireBackend.Snapshot snapshot = snapshot(List.of(output), output.id());
 
         PipeWireRouteManager manager = new PipeWireRouteManager();

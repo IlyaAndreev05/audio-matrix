@@ -53,7 +53,8 @@ abstract class PipeWireRoutePart04 extends PipeWireRoutePart03 {
         List<String> warnings = new ArrayList<>();
         unavailableOutputs = 0;
         conflictingOutputs = 0;
-        Set<Integer> vibroSinkIds = new HashSet<>(), ordinarySinkIds = new HashSet<>();
+        Map<String, String> logicalOutputs = new HashMap<>();
+        Map<String, Boolean> vibroRoutes = new HashMap<>();
         List<RoutePlan> routes = new ArrayList<>();
         Map<String, Set<String>> sourceRolesByBus = new HashMap<>();
         for (String busId : activeBuses) {
@@ -102,7 +103,12 @@ abstract class PipeWireRoutePart04 extends PipeWireRoutePart03 {
                     throw new IOException("Channel matrix input positions do not match source bus " + from);
                 List<String> targetPositions = targetBus != null
                         ? positions(text(busConfig.get(targetBus).get("channels"), "stereo"))
-                        : streamPositions(sink.channels());
+                        : sinkPositions(sink);
+                if (targetBus == null && targetPositions.isEmpty()
+                        && sink.channels() <= 2 && (sink.identity() == null
+                        || sink.identity().channelPositions() == null || sink.identity().channelPositions().isBlank())
+                        && List.of("FL", "FR").containsAll(channelMatrix.outputs()))
+                    targetPositions = List.of("FL", "FR"); // final named ports must still prove the mapping
                 if (!targetPositions.containsAll(channelMatrix.outputs())) {
                     warnings.add("route " + id + " channel matrix targets channels unavailable on "
                             + (targetBus != null ? "bus " + targetBus : sink.description()));
@@ -118,11 +124,12 @@ abstract class PipeWireRoutePart04 extends PipeWireRoutePart03 {
                     routeNodeName("dsp_input", id), routeNodeName("dsp_output", id), positions, filters, limiterEnabled(config));
             if (channelMatrix != null) PipeWireFilterChainConfig.renderMatrix("Audio Matrix channel matrix " + id,
                     routeNodeName("matrix_input", id), routeNodeName("matrix_output", id), channelMatrix);
+            logicalOutputs.put(id, to);
             if (sink != null) {
                 Set<String> roots = sourceRolesByBus.getOrDefault(from, Set.of());
                 boolean vibro = "vibro".equals(route.get("role"))
                         || "haptic_output".equals(configuredOutputRole(sink, devices)) || roots.contains("effects");
-                if (vibro) vibroSinkIds.add(sink.id()); else ordinarySinkIds.add(sink.id());
+                vibroRoutes.put(id, vibro);
             }
             routes.add(new RoutePlan(id, from, targetBus, sink, text(route.get("channel_map"), "stereo"), positions, channelMatrix,
                     number(route.get("volume"), 1), gain, number(route.get("delay_ms"), 0),
@@ -130,11 +137,26 @@ abstract class PipeWireRoutePart04 extends PipeWireRoutePart03 {
                     filters, captureNode, playbackNode, routeNodeName("dsp_input", id), routeNodeName("dsp_output", id),
                     routeNodeName("matrix_input", id), routeNodeName("matrix_output", id)));
         }
-        vibroSinkIds.retainAll(ordinarySinkIds);
-        conflictingOutputs = vibroSinkIds.size();
+        Set<Integer> conflicts = new HashSet<>();
+        for (int i = 0; i < routes.size(); i++) {
+            RoutePlan left = routes.get(i);
+            if (left.sink() == null) continue;
+            for (int j = i + 1; j < routes.size(); j++) {
+                RoutePlan right = routes.get(j);
+                if (right.sink() == null || left.sink().id() != right.sink().id()) continue;
+                boolean differentClaim = !logicalOutputs.get(left.id()).equals(logicalOutputs.get(right.id()))
+                        || !vibroRoutes.get(left.id()).equals(vibroRoutes.get(right.id()));
+                if (!differentClaim) continue;
+                Set<String> a = physicalClaim(left), b = physicalClaim(right);
+                if (sinkPositions(left.sink()).isEmpty() || a.isEmpty() || b.isEmpty()
+                        || !sinkPositions(left.sink()).containsAll(a) || !sinkPositions(left.sink()).containsAll(b)
+                        || !java.util.Collections.disjoint(a, b)) conflicts.add(left.sink().id());
+            }
+        }
+        conflictingOutputs = conflicts.size();
         routes.removeIf(route -> {
-            if (route.sink() == null || !vibroSinkIds.contains(route.sink().id())) return false;
-            warnings.add("route " + route.id() + " skipped: Vibro and ordinary audio share physical output; select separate outputs");
+            if (route.sink() == null || !conflicts.contains(route.sink().id())) return false;
+            warnings.add("route " + route.id() + " skipped: physical output channel claims overlap or are ambiguous");
             return true;
         });
         routes.sort(Comparator.comparingInt(RoutePlan::priority).reversed());
@@ -169,7 +191,12 @@ abstract class PipeWireRoutePart04 extends PipeWireRoutePart03 {
             List<Map<String, Object>> filters = outputFilters(route.sink(), devices, config);
             List<Map<String, Object>> limiterFilters = outputLimiterFilters(config, configuredOutputDeviceId(route.sink(), devices));
             if (filters.isEmpty() && limiterFilters.isEmpty()) continue;
-            List<String> positions = streamPositions(route.sink().channels());
+            List<String> positions = sinkPositions(route.sink());
+            if (positions.isEmpty()) {
+                if (route.sink().channels() > 2)
+                    throw new IOException("Output DSP requires unambiguous channel positions for " + route.sink().name());
+                positions = streamPositions(route.sink().channels());
+            }
             String input = outputNodeName("dsp_input", route.sink().name());
             String output = outputNodeName("dsp_output", route.sink().name());
             if (!filters.isEmpty()) PipeWireFilterChainConfig.render("Audio Matrix physical output EQ " + route.sink().description(),
@@ -198,4 +225,5 @@ abstract class PipeWireRoutePart04 extends PipeWireRoutePart03 {
             streams = PipeWireRouteStreamPlanner.plan(config, snapshot, buses, capturedBindings, this::applicationFilters);
         return new Plan(buses, routes, streams, outputPlans, warnings, profileOff, masterVolume, masterMuted);
     }
+
 }

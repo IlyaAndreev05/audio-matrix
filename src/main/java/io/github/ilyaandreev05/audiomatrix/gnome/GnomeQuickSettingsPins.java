@@ -22,7 +22,9 @@ final class GnomeQuickSettingsPins {
                                                    DynamicInstanceRegistry.RuntimeInstance> instances) {
         String routeId = String.valueOf(config.getOrDefault("active_route", ""));
         List<Map<String,Object>> savedPins=QuickSettingsConfig.pins(config).stream()
-                .filter(pin->!Boolean.FALSE.equals(pin.get("pinned"))).toList();
+                .filter(pin->!Boolean.FALSE.equals(pin.get("pinned")))
+                .filter(pin->!(GraphCommonVibro.COMMON_ROUTE_ID.equals(pin.get("route_id"))
+                        && GraphCommonVibro.VIBRO_MIXER_ID.equals(pin.get("node_id")))).toList();
         GnomeQuickSettingsNodeState.Inputs input=new GnomeQuickSettingsNodeState.Inputs(config,snapshot,quickControls,applications,
                 instances==null?Map.of():instances);
         AudioGraph commonGraph = null;
@@ -134,6 +136,8 @@ final class GnomeQuickSettingsPins {
         if(!ancestors.add(composite.id())){state.put("children",children);state.put("available",false);return state;}
         int order=0;
         for(String nodeId:composite.nodeIds()){
+            if(GraphCommonVibro.COMMON_ROUTE_ID.equals(pin.get("route_id"))
+                    && GraphCommonVibro.VIBRO_MIXER_ID.equals(nodeId))continue;
             GraphNode node=graph.nodes().stream().filter(candidate->nodeId.equals(candidate.id())).findFirst().orElse(null);
             if(node==null)continue;
             Map<String,Object> childPin=childPin(pin,nodeId,order++);

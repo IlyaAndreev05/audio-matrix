@@ -99,6 +99,27 @@ abstract class PipeWireRouteStaticSupport01 extends PipeWireRouteTypes {
         };
     }
 
+    /** Empty means unknown or ambiguous, never an inferred multichannel layout. */
+    protected static List<String> sinkPositions(AudioNode sink) {
+        if (sink.identity() == null || sink.identity().channelPositions() == null) return List.of();
+        String raw = sink.identity().channelPositions().trim();
+        if (raw.isEmpty()) return List.of();
+        List<String> result = List.of(raw.toUpperCase(Locale.ROOT).split("[,\\s]+"));
+        if (result.size() != sink.channels() || new HashSet<>(result).size() != result.size()
+                || !Set.of("FL", "FR", "FC", "LFE", "RL", "RR", "RC", "SL", "SR", "MONO").containsAll(result))
+            return List.of();
+        return result;
+    }
+
+    protected static Set<String> physicalClaim(RoutePlan route) {
+        if (route.channelMatrix() != null)
+            return route.positions().contains("MONO") ? Set.of() : Set.copyOf(route.positions());
+        return switch (route.channelMap()) {
+            case "stereo", "swap_lr" -> Set.of("FL", "FR");
+            default -> Set.of();
+        };
+    }
+
     protected static String positionArg(List<String> positions) { return "[ " + String.join(" ", positions) + " ]"; }
 
     protected static String busNodeName(String busId) { return "audiomatrix_bus_" + shortHash(busId); }

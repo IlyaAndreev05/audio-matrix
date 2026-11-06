@@ -1,50 +1,51 @@
 package io.github.ilyaandreev05.audiomatrix.config;
 
 import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
-import io.github.ilyaandreev05.audiomatrix.graph.DeviceSlotNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCommonVibro;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
-import io.github.ilyaandreev05.audiomatrix.graph.OutputNode;
-import java.util.HashSet;
+import io.github.ilyaandreev05.audiomatrix.graph.GraphOutputChannelIsolation;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /** Physical output assignment rules for the saved route library. */
 final class ConfigGraphPhysicalRules {
     private ConfigGraphPhysicalRules() {}
 
-    /**
-     * Two slots in one graph must not share a physical output, and the active route must not
-     * double the always-applied Vibro output. Inactive routes may pre-bind shared hardware so
-     * their outputs stay visible in the controls without becoming part of the applied graph.
-     */
+    /** Inactive routes may pre-bind common hardware, but must be internally consistent. */
     static void validate(Map<String,AudioGraph> graphs,String activeRoute,List<String> errors){
-        String commonId=GraphCommonVibro.COMMON_ROUTE_ID, vibroDevice="";
+        String commonId=GraphCommonVibro.COMMON_ROUTE_ID;
         AudioGraph common=graphs.get(commonId);
-        if(common!=null)for(GraphNode node:common.nodes())
-            if(node instanceof DeviceSlotNode slot&&GraphCommonVibro.VIBRO_OUTPUT_ID.equals(slot.id()))
-                vibroDevice=deviceReference(slot.deviceId());
+        Map<String,List<GraphNode>> commonEndpoints=common==null?Map.of():endpoints(common);
         for(Map.Entry<String,AudioGraph> entry:graphs.entrySet()){
-            String routeId=entry.getKey();Set<String> assigned=new HashSet<>();
-            boolean applied=commonId.equals(routeId)||routeId.equals(activeRoute);
-            for(GraphNode node:entry.getValue().nodes()){
-                String device=deviceId(node);
-                if(device.isBlank()||"system_default".equals(device))continue;
-                if(!assigned.add(device))errors.add("graph "+routeId+" node "+node.id()+" duplicates physical output "+device);
-                if(applied&&!commonId.equals(routeId)&&!vibroDevice.isBlank()&&device.equals(vibroDevice))
-                    errors.add("graph "+routeId+" node "+node.id()+" reuses the Vibro physical output "+device);
+            String routeId=entry.getKey();
+            Map<String,List<GraphNode>> assigned=new HashMap<>();
+            AudioGraph graph=entry.getValue();
+            for(GraphNode node:graph.nodes()){
+                if(!GraphOutputChannelIsolation.isEndpoint(graph,node))continue;
+                String device=GraphOutputChannelIsolation.deviceReference(node);
+                if(device.isBlank()||"unbound".equals(device)||"system_default".equals(device))continue;
+                List<GraphNode> previous=assigned.computeIfAbsent(device,ignored->new ArrayList<>());
+                if(previous.stream().anyMatch(other->!GraphOutputChannelIsolation.disjoint(other,node)))
+                    errors.add("graph "+routeId+" node "+node.id()+" duplicates physical output "+device);
+                previous.add(node);
+                if(!commonId.equals(routeId)&&routeId.equals(activeRoute)
+                        &&commonEndpoints.getOrDefault(device,List.of()).stream()
+                                .anyMatch(other->!GraphOutputChannelIsolation.disjoint(other,node)))
+                    errors.add("graph "+routeId+" node "+node.id()+" reuses the common physical output "+device);
             }
         }
     }
 
-    private static String deviceId(GraphNode node){
-        if(node instanceof DeviceSlotNode slot)return deviceReference(slot.deviceId());
-        if(node instanceof OutputNode output)return deviceReference(output.deviceId());
-        return "";
-    }
-
-    private static String deviceReference(String deviceId){
-        return deviceId!=null&&deviceId.startsWith("device:")?deviceId.substring("device:".length()):deviceId;
+    private static Map<String,List<GraphNode>> endpoints(AudioGraph graph){
+        Map<String,List<GraphNode>> result=new HashMap<>();
+        for(GraphNode node:graph.nodes()){
+            if(!GraphOutputChannelIsolation.isEndpoint(graph,node))continue;
+            String device=GraphOutputChannelIsolation.deviceReference(node);
+            if(device.isBlank()||"unbound".equals(device)||"system_default".equals(device))continue;
+            result.computeIfAbsent(device,ignored->new ArrayList<>()).add(node);
+        }
+        return result;
     }
 }

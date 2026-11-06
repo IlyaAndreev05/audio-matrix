@@ -48,3 +48,24 @@ gnome-extensions enable audio-matrix-quick-settings@ilyaandreev05
 Then log out of GNOME and log back in so the updated Shell integration and session-managed Audio Matrix engine are loaded. If GNOME does not yet recognize a newly installed extension, log in again before enabling it. A manually launched Audio Matrix process must also be closed and reopened to load the new Java code. The user performs all installation, enablement, application restart, and session steps manually; building the archive performs none of them.
 
 The repository's GitHub Actions workflow is manual (`workflow_dispatch`) only: it has no automatic `push` or `pull_request` trigger.
+
+## Проверенная рабочая схема событий (2026-11-07)
+
+Эта схема подтверждена на реальном оборудовании и даёт ощутимый тактильный отклик. Полезно помнить, как она собрана:
+
+1. **Event Sound Studio** принимает ввод через evdev по точным идентификаторам из `/dev/input/by-id`. Список разрешённых устройств лежит в `~/.config/event-sound-studio/config.json` (`settings.input.device_allowlist`). Идентификаторы устройств меняются (например, у USB-донглов встречается символ `̬` в имени), поэтому после замены клавиатуры или перезагрузки устройства список нужно сверять заново. Открытые файловые дескрипторы видны в `jcmd <pid> Thread.print`.
+2. **Громкость события** умножается как `binding × sound × profile`. Разгонять больше 1.0 нельзя: при значениях выше единицы валидация конфигурации отклоняет файл и служба не стартует (`Gain must be between 0 and 1`). Громкость профиля и привязок держим на 1.0.
+3. **Звук события** — короткий удар с резкой атакой (1–2 мс), основным тоном 150 Гц с гармониками и быстрым спадом, длительность около 200 мс. Длинный «тянущийся» тон ощущается хуже, чем удар такой же амплитуды. Пользовательские WAV кладутся в `~/.config/event-sound-studio/assets/sounds/`, а привязки переключаются на нужный `sound` в конфиге.
+4. **Маршрут событий в Audio Matrix** идёт отдельной веткой `octine-event-source → gain → mixer(events) → gain → limiter → device_slot`, без low-pass музыкальной ветки. События уходят в `FL/FR` физического устройства, поэтому попадают на **задний зелёный линейный выход**; ветка `rear-black-output` с матрицей `FL/FR → RL/RR` относится к другому выходу и к событиям не подключена.
+5. **Предел громкости.** Задний зелёный разъём — линейный выход без усилителя наушников. Даже полноуровневый секундный тон на нём ощущается слабо. Если нужен сильный тактильный отклик, вибродинамик подключают к переднему разъёму наушников либо через внешний усилитель. Цифровые регуляторы при этом уже упираются в 100%.
+
+Отдельно: `wpctl` выше 1.0 принимает и повышает `channelVolumes` (например, 1.3 → 2.197), но ALSA `Master` при этом остаётся на 0 dB, то есть запас ограничен аппаратно и приводит к клиппингу, а не к росту отдачи.
+
+Диагностика без воспроизведения на слух: запись монитора физического выхода
+
+```sh
+pw-record --target alsa_output.pci-0000_0b_00.3.analog-surround-40 \
+  --rate 48000 --channels 4 --format s16 -P 'stream.capture.sink=true' /tmp/mon.raw
+```
+
+показывает поканальные пики (`FL FR RL RR`) до аналогового регулятора. Монитор подтверждает цифровую доставку, но не движение диффузора.

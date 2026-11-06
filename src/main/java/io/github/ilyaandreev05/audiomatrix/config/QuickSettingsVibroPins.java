@@ -1,6 +1,8 @@
 package io.github.ilyaandreev05.audiomatrix.config;
 
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCommonVibro;
+import io.github.ilyaandreev05.audiomatrix.graph.AudioGraph;
+import io.github.ilyaandreev05.audiomatrix.graph.FilterNode;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -10,12 +12,19 @@ final class QuickSettingsVibroPins {
     private QuickSettingsVibroPins() {}
 
     static void migrateBassControls(Map<String, Object> config) {
-        if (GraphCommonVibro.graph(config) == null) return;
+        AudioGraph graph = GraphCommonVibro.graph(config);
+        if (graph == null) return;
         String routeId = GraphCommonVibro.COMMON_ROUTE_ID;
         String filterId = "octine-bass-low-pass";
+        if (graph.nodes().stream().noneMatch(node -> filterId.equals(node.id())
+                && node instanceof FilterNode filter && "low_pass".equals(filter.processor()))) return;
         Map<String, Object> mixerPin = QuickSettingsConfig.pins(config).stream()
                 .filter(pin -> routeId.equals(pin.get("route_id"))
                         && GraphCommonVibro.VIBRO_MIXER_ID.equals(pin.get("node_id")))
+                .findFirst().orElse(null);
+        if (mixerPin == null) mixerPin = QuickSettingsConfig.pins(config).stream()
+                .filter(pin -> routeId.equals(pin.get("route_id"))
+                        && GraphCommonVibro.VIBRO_GAIN_ID.equals(pin.get("node_id")))
                 .findFirst().orElse(null);
         if (mixerPin == null) return;
         String groupId = String.valueOf(mixerPin.get("group_id"));
