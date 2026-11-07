@@ -11,7 +11,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
-class RouteInputSignatureTest {
+class RouteInputSignatureTest extends RouteInputSignatureFixture {
     @Test
     void ignoresAudioMatrixOwnedNodesThatAreRecreatedWhenTheGraphIsApplied() {
         Map<String, Object> config = Map.of("active_route", "desktop", "engine", Map.of("apply_on_start", true));
@@ -199,44 +199,15 @@ class RouteInputSignatureTest {
         assertNotEquals(levelsBefore, RouteInputSignature.dynamicLevels(config));
     }
 
-    private static String signature(Map<String, Object> config, List<AudioNode> sinks, List<AudioNode> streams) {
-        PipeWireBackend.Snapshot snapshot = new PipeWireBackend.Snapshot(true, "", sinks, List.of(), streams,
-                List.of(), Map.of(), sinks.isEmpty() ? -1 : sinks.getFirst().id(), 0);
-        return RouteInputSignature.create(config, snapshot, 1);
-    }
-    private static PipeWireBackend.Snapshot snapshot(List<AudioNode> sinks, List<AudioNode> streams) {
-        return snapshot(sinks, List.of(), streams);
-    }
+    @Test
+    void masterVolumeDoesNotChangeRouteLevels() {
+        Map<String, Object> config = DefaultConfig.create();
+        String levels = RouteInputSignature.dynamicLevels(config);
+        Map<String, Object> mixer = section(config, "mixer");
+        mixer.put("global_volume", 0.31);
+        mixer.put("global_mute", true);
 
-    private static PipeWireBackend.Snapshot snapshot(List<AudioNode> sinks, List<AudioNode> sources,
-                                                    List<AudioNode> streams) {
-        return new PipeWireBackend.Snapshot(true, "", sinks, sources, streams,
-                List.of(), Map.of(), sinks.isEmpty() ? -1 : sinks.getFirst().id(), 0);
-    }
-
-    private static AudioNode sinkWithIdentity(int id, String name) {
-        DeviceIdentity identity = DeviceIdentity.from(Map.of(
-                "device.bus-path", "pci-0000:00:01.0", "device.profile.name", "hdmi-stereo",
-                "device.port.name", "hdmi-output-1", "audio.position", "[FL FR]"), 2);
-        return new AudioNode(id, name, name, "Audio/Sink", "running", "", "", "", 2,
-                List.of(48000), 1.0, false, null, identity);
-    }
-
-    private static AudioNode sink(int id, String name) {
-        return new AudioNode(id, name, name, "Audio/Sink", "running", "", "", "", 2,
-                List.of(48000), 1.0, false, null);
-    }
-
-    private static AudioNode eventInput(int id) {
-        return EventInputMonitor.sourceView(sink(id, EventInputMonitor.NODE_NAME));
-    }
-
-    private static AudioNode stream(int id, String name, String applicationId) {
-        return stream(id, name, applicationId, "pw-loopback");
-    }
-
-    private static AudioNode stream(int id, String name, String applicationId, String processName) {
-        return new AudioNode(id, name, name, "Stream/Output/Audio", "running", name, processName,
-                applicationId, 2, List.of(48000), 1.0, false, null);
+        assertEquals(levels, RouteInputSignature.dynamicLevels(config),
+                "A master change is written straight to the route nodes and must not schedule a route apply");
     }
 }

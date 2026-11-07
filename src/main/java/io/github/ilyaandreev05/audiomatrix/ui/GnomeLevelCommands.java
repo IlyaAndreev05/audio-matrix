@@ -13,6 +13,40 @@ import java.util.concurrent.CompletableFuture;
 final class GnomeLevelCommands {
     private GnomeLevelCommands() {}
 
+    private static AudioNode resolveDevice(AppShellUiPart29 shell, String reference) {
+        return GnomeOutputState.resolve(shell.physicalSinks(), reference,
+                AppShellBase.maps(shell.store.snapshot().get("devices")));
+    }
+
+    static CompletableFuture<Void> setDeviceLevel(AppShellUiPart29 shell, String value) {
+        String[] fields = value.split("\\t", 2);
+        AudioNode node = resolveDevice(shell, fields[0]);
+        if (node == null) return CompletableFuture.failedFuture(new IllegalArgumentException("Output is unavailable"));
+        double level;
+        try { level = Double.parseDouble(fields[1]); }
+        catch (RuntimeException invalid) { return CompletableFuture.failedFuture(new IllegalArgumentException("Output volume is invalid")); }
+        if (!Double.isFinite(level)) return CompletableFuture.failedFuture(new IllegalArgumentException("Output volume is invalid"));
+        double target = Math.max(0, Math.min(1, level));
+        return shell.backend.setMute(node.id(), false)
+                .thenCompose(ignored -> shell.backend.setVolume(node.id(), target))
+                .thenCompose(ignored -> shell.store.updateAsync(config -> {
+                    Map<String, Object> device = shell.ensureDevice(config, node);
+                    device.put("volume", target);
+                    device.put("mute", false);
+                })).thenRun(shell::refreshBackend);
+    }
+
+    static CompletableFuture<Void> setDeviceMute(AppShellUiPart29 shell, String value) {
+        String[] fields = value.split("\\t", 2);
+        AudioNode node = resolveDevice(shell, fields[0]);
+        if (node == null) return CompletableFuture.failedFuture(new IllegalArgumentException("Output is unavailable"));
+        boolean muted = Boolean.parseBoolean(fields[1]);
+        return shell.backend.setMute(node.id(), muted)
+                .thenCompose(ignored -> shell.store.updateAsync(config ->
+                        shell.ensureDevice(config, node).put("mute", muted)))
+                .thenRun(shell::refreshBackend);
+    }
+
     static CompletableFuture<Void> setOutputLevel(AppShellUiPart29 shell, String value, boolean toggleMute) {
         String[] fields = value.split("\\t", 2);
         if (fields[0].isBlank()) return CompletableFuture.failedFuture(new IllegalArgumentException("Output name is missing"));

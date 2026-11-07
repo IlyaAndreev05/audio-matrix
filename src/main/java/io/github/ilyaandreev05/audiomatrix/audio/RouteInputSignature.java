@@ -17,6 +17,8 @@ public final class RouteInputSignature {
     private static final List<String> RUNTIME_LEVEL_KEYS = List.of(
             "volume", "mute", "muted", "gain", "global_volume", "global_mute", "tab_gain", "tab_muted",
             "graph_capture_sources");
+    /** The master is written straight to the running route nodes and must never trigger a route apply. */
+    private static final Set<String> MASTER_ONLY_KEYS = Set.of("global_volume", "global_mute");
     private static final Set<String> LEVEL_ID_KEYS = Set.of(
             "id", "node_id", "route_id", "instance_key", "generator_id", "source_id", "profile_id",
             "application_rule_id", "parent_application_id", "parent_process_name", "capture_stream_key", "node_name");
@@ -79,8 +81,9 @@ public final class RouteInputSignature {
             Map<String, Object> identity = new LinkedHashMap<>();
             map.forEach((key, item) -> {
                 String name = String.valueOf(key);
-                if (RUNTIME_LEVEL_KEYS.contains(name) || "gain_db".equals(name)) levels.put(name, item);
-                else if (LEVEL_ID_KEYS.contains(name)) identity.put(name, item);
+                if (RUNTIME_LEVEL_KEYS.contains(name) || "gain_db".equals(name)) {
+                    if (!MASTER_ONLY_KEYS.contains(name)) levels.put(name, item);
+                } else if (LEVEL_ID_KEYS.contains(name)) identity.put(name, item);
                 else {
                     Object child = levelConfig(item);
                     if (child != null) levels.put(name, child);

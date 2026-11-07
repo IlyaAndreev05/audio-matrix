@@ -23,6 +23,10 @@ final class GnomeCommandRouter {
             case "set_quick_matrix_view" -> shell.setGnomeMatrixView(command.value());
             case "set_output_volume" -> shell.setGnomeOutputLevel(command.value(),false);
             case "toggle_output_mute" -> shell.setGnomeOutputLevel(command.value(),true);
+            case "set_master_volume" -> setMasterVolume(shell, command.value());
+            case "set_master_mute" -> setMasterMute(shell, command.value());
+            case "set_device_volume" -> GnomeLevelCommands.setDeviceLevel(shell, command.value());
+            case "set_device_mute" -> GnomeLevelCommands.setDeviceMute(shell, command.value());
             case "set_source_volume" -> shell.setGnomeSourceLevel(command.value(),false);
             case "toggle_source_mute" -> shell.setGnomeSourceLevel(command.value(),true);
             case "set_app_volume" -> shell.setGnomeApplicationLevel(command.value(),false);
@@ -40,6 +44,24 @@ final class GnomeCommandRouter {
             case "set_channel_map" -> shell.setGnomeChannelMap(command.value());
             default -> CompletableFuture.failedFuture(new IllegalArgumentException("Unsupported command: "+command.name()));
         };
+    }
+
+    private static CompletableFuture<Void> setMasterVolume(AppShellUiPart29 shell, String value) {
+        try {
+            shell.setGlobalMasterVolume(Double.parseDouble(value));
+            return CompletableFuture.completedFuture(null);
+        } catch (RuntimeException invalid) {
+            return CompletableFuture.failedFuture(invalid);
+        }
+    }
+
+    private static CompletableFuture<Void> setMasterMute(AppShellUiPart29 shell, String value) {
+        try {
+            shell.setGlobalMasterMute(Boolean.parseBoolean(value));
+            return CompletableFuture.completedFuture(null);
+        } catch (RuntimeException invalid) {
+            return CompletableFuture.failedFuture(invalid);
+        }
     }
 
     private static CompletableFuture<Void> selectProfile(AppShellUiPart29 shell, String value) {

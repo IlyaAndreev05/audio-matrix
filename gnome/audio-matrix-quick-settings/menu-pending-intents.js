@@ -61,7 +61,8 @@ function pinLevel(state, target) {
             return sourceGain;
         const output = pin.output;
         if (output && target.routeId && stringsEqual(pin.routeId, target.routeId)
-            && (stringsEqual(output.graphGainNodeId, target.nodeId) || stringsEqual(output.id, target.nodeId)))
+            && (stringsEqual(output.graphGainNodeId, target.nodeId) || stringsEqual(output.id, target.nodeId)
+                || stringsEqual(pin.nodeId, target.nodeId)))
             return output;
         return null;
     });
@@ -113,6 +114,9 @@ export function observedProperty(state, target, property) {
         return {found: true, value: property === 'volume' ? input.volume : input.muted};
     }
     if (target.nodeId !== undefined) {
+        if (stringsEqual(target.nodeId, 'master') && state?.master) {
+            return {found: true, value: property === 'volume' ? state.master.volume : state.master.muted};
+        }
         const level = pinLevel(state, target);
         if (level) return {found: true, value: property === 'volume' ? level.volume : level.muted};
         const application = (state?.applications || []).find(item =>
@@ -121,6 +125,13 @@ export function observedProperty(state, target, property) {
         const tab = browserTab(state, target);
         if (tab) return {found: true, value: property === 'volume' ? tab.volume : tab.muted};
         return {found: false};
+    }
+    if (target.deviceId !== undefined) {
+        const output = (state?.root?.outputs || state?.outputs || [])
+            .find(item => stringsEqual(item.id, target.deviceId)
+                || stringsEqual(item.nodeName, target.deviceId));
+        if (!output) return {found: false};
+        return {found: true, value: property === 'volume' ? output.volume : output.muted};
     }
     if (target.linkId !== undefined) {
         const control = visitPins(state?.quickPins, pin => {

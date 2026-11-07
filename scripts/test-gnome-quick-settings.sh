@@ -44,6 +44,7 @@ gnome-extensions pack "$extension_source" --force --out-dir "$scratch" \
     --extra-source=menu-pinned-controls.js \
     --extra-source=menu-text.js \
     --extra-source=state-client.js \
+    --extra-source=root-volume.js \
     --extra-source=menu-rows.js \
     --extra-source=menu-applications.js \
     --extra-source=menu-links.js \

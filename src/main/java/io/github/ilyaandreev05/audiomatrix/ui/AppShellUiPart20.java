@@ -70,8 +70,7 @@ abstract class AppShellUiPart20 extends AppShellUiPart19 {
 
     protected List<AudioNode> matchingNodes(Map<String, Object> device) {
         if (device.get("identity") instanceof Map<?, ?>) {
-            List<AudioNode> all = new ArrayList<>(physicalSinks());
-            all.addAll(snapshot.sources());
+            List<AudioNode> all = new ArrayList<>(physicalSinks()); all.addAll(snapshot.sources());
             AudioNode resolved = DeviceDiscovery.resolve(all, device).node();
             return resolved == null ? List.of() : List.of(resolved);
         }
@@ -182,6 +181,7 @@ abstract class AppShellUiPart20 extends AppShellUiPart19 {
                 nextMixer.put("global_volume", Math.round(decision.volume() * 100.0) / 100.0);
             if (decision.writeMute()) nextMixer.put("global_mute", decision.muted());
         });
+        runRuntimeAudio(() -> routeManager.applyMasterLevel(decision.volume(), decision.muted()));
     }
 
     protected void setGlobalMasterVolume(double value) {
@@ -192,6 +192,7 @@ abstract class AppShellUiPart20 extends AppShellUiPart19 {
                 .filter(node -> PipeWireBackend.SYSTEM_MIXER_SINK_NAME.equals(node.name()))
                 .filter(node -> node.id() == snapshot.defaultSinkId()).findFirst().orElse(null);
         if (mixerSink != null) backend.setVolume(mixerSink.id(), level).thenRun(this::refreshBackend);
+        runRuntimeAudio(() -> routeManager.applyMasterLevel(level, false));
     }
 
     protected void setGlobalMasterMute(boolean muted) {
@@ -201,6 +202,12 @@ abstract class AppShellUiPart20 extends AppShellUiPart19 {
                 .filter(node -> PipeWireBackend.SYSTEM_MIXER_SINK_NAME.equals(node.name()))
                 .filter(node -> node.id() == snapshot.defaultSinkId()).findFirst().orElse(null);
         if (mixerSink != null) backend.setMute(mixerSink.id(), muted).thenRun(this::refreshBackend);
+        runRuntimeAudio(() -> routeManager.applyMasterLevel(currentGlobalVolume(), muted));
+    }
+
+    /** The saved master level; the observed system sink value is written there by {@link SystemMasterSync}. */
+    private double currentGlobalVolume() {
+        return SystemMasterSync.clamp(number(map(store.snapshot().get("mixer")).get("global_volume"), 1.0));
     }
 
     protected void refreshBackend() {
@@ -229,11 +236,7 @@ abstract class AppShellUiPart20 extends AppShellUiPart19 {
 
     protected void saveDeviceVolume(AudioNode sink, double volume) {
         backend.setMute(sink.id(),false).thenCompose(ignored->backend.setVolume(sink.id(), volume));
-        updateConfig(config -> {
-            Map<String, Object> device = ensureDevice(config, sink);
-            device.put("volume", volume);
-            device.put("mute", false);
-        });
+        updateConfig(config -> { Map<String, Object> device = ensureDevice(config, sink); device.put("volume", volume); device.put("mute", false); });
     }
 
     protected void saveDeviceMute(AudioNode sink, boolean muted) {

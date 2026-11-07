@@ -146,6 +146,10 @@
     padding: 10px 4px;
 }
 
+.audio-matrix-root-volume {
+    margin-top: 8px;
+}
+
 .audio-matrix-capability-hint {
     opacity: 0.75;
     font-size: 11px;

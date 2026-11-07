@@ -35,6 +35,7 @@ public final class GnomeControlBridge implements AutoCloseable {
             "set_output_volume","toggle_output_mute","set_source_volume","toggle_source_mute","set_app_volume","toggle_app_mute","set_stream_volume",
             "set_graph_output_volume","toggle_graph_output_mute","set_graph_gain","toggle_graph_gain_mute","toggle_stream_mute","set_mixer_input_volume","toggle_mixer_input_mute","set_quick_control","toggle_quick_control","set_quick_control_choice",
             "set_quick_group_collapsed","reorder_quick_group","set_quick_pin_view","set_quick_matrix_view","select_route","select_profile","set_channel_map",
+            "set_master_volume","set_master_mute","set_device_volume","set_device_mute",
             "setNodeVolume","setNodeMuted","setRouteEnabled","setBrowserTabMuted");
     private final Function<Command,CompletableFuture<Void>> commands;
     private final Function<Command,CompletableFuture<Void>> confirmState;

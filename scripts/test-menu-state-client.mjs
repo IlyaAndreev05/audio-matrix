@@ -351,6 +351,20 @@ function gainState(volume, {muted = false, ...rest} = {}) {
     assert.equal(pending(client).length, 0, 'a range within 0.01 settles');
 }
 
+// A DeviceSlotNode pin settles its slider through the pin's own node id.
+{
+    const client = makeClient();
+    const target = {routeId: 'main', nodeId: 'slot-1', instanceKey: ''};
+    const requestId = client.send('setNodeVolume', {target, value: 0.5});
+    const deviceState = volume => ({volume, quickPins: [{id: 'slot-pin', routeId: 'main', nodeId: 'slot-1',
+        output: {id: 'family17h-surround', nodeName: 'alsa_output.test', volume, muted: false, available: true}}]});
+    deliver(client, state('epoch-a', 2, deviceState(0.8)));
+    assert.equal(pending(client).length, 1, 'the old device volume must not drop the intent');
+    deliver(client, state('epoch-a', 3, deviceState(0.5)));
+    assert.equal(pending(client).length, 0, 'the observed device volume settles the slider');
+    assert.equal(request(client, requestId), undefined);
+}
+
 // Mute comparisons are exact: no tolerance can turn 0.99 into "muted".
 {
     const client = makeClient();

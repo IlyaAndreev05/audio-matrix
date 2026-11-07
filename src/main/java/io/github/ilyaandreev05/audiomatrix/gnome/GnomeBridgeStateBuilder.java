@@ -8,6 +8,7 @@ import io.github.ilyaandreev05.audiomatrix.graph.DynamicInstanceRegistry;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** Builds one immutable observable payload before the bridge assigns its epoch/sequence. */
 final class GnomeBridgeStateBuilder {
@@ -36,6 +37,25 @@ final class GnomeBridgeStateBuilder {
         state.put("connected", snapshot.connected());
         state.put("language", language(config));
         state.put("outputs", outputs);
+        Map<String, Object> mixer = object(config.get("mixer"));
+        state.put("master", Map.of(
+                "volume", number(mixer.get("global_volume"), 1.0),
+                "muted", Boolean.TRUE.equals(mixer.get("global_mute"))));
+        Map<String, Object> rootConfig = object(object(config.get("quick_settings")).get("root"));
+        boolean rootEnabled = !Boolean.FALSE.equals(rootConfig.get("enabled"));
+        boolean showMaster = !Boolean.FALSE.equals(rootConfig.get("show_master"));
+        boolean hideNative = Boolean.TRUE.equals(rootConfig.get("hide_native_volume"));
+        List<Map<String, Object>> rootOutputs = outputs;
+        Object selected = rootConfig.get("outputs");
+        if (selected instanceof List<?> list && !list.isEmpty() && !list.contains("all")) {
+            Set<String> wanted = list.stream().map(String::valueOf).collect(java.util.stream.Collectors.toSet());
+            rootOutputs = outputs.stream().filter(output ->
+                    wanted.contains(String.valueOf(output.get("id"))) ||
+                    wanted.contains(String.valueOf(output.get("nodeName")))).toList();
+        }
+        state.put("root", Map.of(
+                "enabled", rootEnabled, "showMaster", showMaster,
+                "hideNativeVolume", hideNative, "outputs", rootOutputs));
         state.put("selectedOutput", active == null ? "system_default" : active.name());
         state.put("muted", active != null && active.muted());
         state.put("mode", profile.getOrDefault("mode", "off"));
@@ -80,6 +100,16 @@ final class GnomeBridgeStateBuilder {
     private static String language(Map<String, Object> config) {
         Object ui = config.get("ui");
         return ui instanceof Map<?, ?> preferences && "en".equals(preferences.get("language")) ? "en" : "ru";
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> object(Object value) {
+        return value instanceof Map<?, ?> map ? (Map<String, Object>) map : Map.of();
+    }
+
+    private static double number(Object value, double fallback) {
+        return value instanceof Number number && Double.isFinite(number.doubleValue())
+                ? number.doubleValue() : fallback;
     }
 
     @SuppressWarnings("unchecked")

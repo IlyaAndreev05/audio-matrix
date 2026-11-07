@@ -111,6 +111,29 @@ function commandShape(name, value, state, pending) {
         return {payload: value, target, property: 'muted',
             desired: !(current?.value ?? Boolean(input?.muted))};
     }
+    if (name === 'set_master_volume') {
+        const desired = Number(value);
+        if (!Number.isFinite(desired) || desired < 0 || desired > 1)
+            throw new TypeError('Master volume must be 0..1');
+        return {payload: String(value), target: {nodeId: 'master'}, property: 'volume', desired};
+    }
+    if (name === 'set_master_mute') {
+        const desired = String(value) === 'true';
+        return {payload: String(desired), target: {nodeId: 'master'}, property: 'muted', desired};
+    }
+    if (name === 'set_device_volume') {
+        const [deviceId, raw] = String(value).split('\t');
+        const desired = Number(raw);
+        if (!deviceId || !Number.isFinite(desired) || desired < 0 || desired > 1)
+            throw new TypeError('Device volume must be 0..1');
+        return {payload: String(value), target: {deviceId}, property: 'volume', desired};
+    }
+    if (name === 'set_device_mute') {
+        const [deviceId, raw] = String(value).split('\t');
+        const desired = String(raw) === 'true';
+        if (!deviceId) throw new TypeError('Device id is required');
+        return {payload: String(value), target: {deviceId}, property: 'muted', desired};
+    }
     return {payload: value, target: null, property: null, desired: null};
 }
 

@@ -59,9 +59,9 @@ class PipeWireMasterVolumeLatencyLiveSmokeTest extends PipeWireChannelMatrixRout
             Map<String, List<Long>> timings = new LinkedHashMap<>();
             try (MasterVolumeLatencyMonitor monitor = MasterVolumeLatencyMonitor.start(playbackNodeId)) {
                 for (int index = 0; index < 3; index++)
-                    exercise(manager, store, backend, monitor, systemSinkId, UI_VOLUMES[index], null, null);
+                    exercise(manager, backend, monitor, systemSinkId, UI_VOLUMES[index], null, null);
                 for (int index = 0; index < MEASURED_SAMPLES; index++)
-                    exercise(manager, store, backend, monitor, systemSinkId,
+                    exercise(manager, backend, monitor, systemSinkId,
                             UI_VOLUMES[index % UI_VOLUMES.length], latencies, timings);
                 assertMutePath(manager, store, backend, monitor);
                 Map<String, Object> result = measurePcmScaling(manager, store, backend, clients, tones);
@@ -86,7 +86,7 @@ class PipeWireMasterVolumeLatencyLiveSmokeTest extends PipeWireChannelMatrixRout
         }
     }
 
-    private void exercise(PipeWireRouteManager manager, ConfigStore store, PipeWireBackend backend,
+    private void exercise(PipeWireRouteManager manager, PipeWireBackend backend,
                           MasterVolumeLatencyMonitor monitor, int systemSinkId, double uiVolume,
                           List<Long> latencies, Map<String, List<Long>> timings) throws Exception {
         double previous = sinkLevel(backend, systemSinkId);
@@ -95,18 +95,20 @@ class PipeWireMasterVolumeLatencyLiveSmokeTest extends PipeWireChannelMatrixRout
         double linear = awaitSinkLevelChange(backend, systemSinkId, previous);
         long detected = System.nanoTime();
         double master = Math.round(linear * 100.0) / 100.0;
-        store.updateAsync(config -> map(config.get("mixer")).put("global_volume", master)).get(5, TimeUnit.SECONDS);
         long configured = System.nanoTime();
-        manager.apply(store.snapshot(), backend.current()).get(30, TimeUnit.SECONDS);
+        manager.applyMasterLevel(master, false).get(5, TimeUnit.SECONDS);
         long applied = System.nanoTime();
         MasterVolumeLatencyMonitor.Sample sample = monitor.awaitVolume(master, 0.005, 3000);
         assertNotNull(sample, "The routed playback node never reached " + master + "; actual=" + sinkLevel(backend, systemSinkId));
-        if (latencies != null) latencies.add(TimeUnit.NANOSECONDS.toMicros(sample.atNanos() - commandCompleted));
+        long observed = sample.atNanos();
+        assertTrue(TimeUnit.NANOSECONDS.toMicros(observed - applied) < 50_000,
+                "The direct master level must reach the routed playback node within 50 ms");
+        if (latencies != null) latencies.add(TimeUnit.NANOSECONDS.toMicros(observed - commandCompleted));
         if (timings != null) {
             timings.computeIfAbsent("detect_ms", ignored -> new ArrayList<>()).add(micros(detected, commandCompleted));
             timings.computeIfAbsent("config_ms", ignored -> new ArrayList<>()).add(micros(configured, detected));
             timings.computeIfAbsent("apply_ms", ignored -> new ArrayList<>()).add(micros(applied, configured));
-            timings.computeIfAbsent("observe_ms", ignored -> new ArrayList<>()).add(micros(sample.atNanos(), applied));
+            timings.computeIfAbsent("observe_ms", ignored -> new ArrayList<>()).add(micros(observed, applied));
         }
     }
 

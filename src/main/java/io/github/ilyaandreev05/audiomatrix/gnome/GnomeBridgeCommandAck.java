@@ -69,6 +69,26 @@ final class GnomeBridgeCommandAck {
                     property = name.endsWith("mute") ? "muted" : "volume";
                     if (fields.length > 1) value = parseValue(fields[1]);
                 }
+                case "set_master_volume" -> {
+                    target.put("nodeId", "master");
+                    property = "volume";
+                    value = parseValue(fields[0]);
+                }
+                case "set_master_mute" -> {
+                    target.put("nodeId", "master");
+                    property = "muted";
+                    value = parseValue(fields[0]);
+                }
+                case "set_device_volume" -> {
+                    target.put("deviceId", fields[0]);
+                    property = "volume";
+                    value = parseValue(fields[1]);
+                }
+                case "set_device_mute" -> {
+                    target.put("deviceId", fields[0]);
+                    property = "muted";
+                    value = parseValue(fields[1]);
+                }
                 case "set_source_volume", "toggle_source_mute" -> {
                     if (fields.length >= 3) {
                         target.put("routeId", fields[0]);
