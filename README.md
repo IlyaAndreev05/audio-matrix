@@ -48,3 +48,31 @@ gnome-extensions enable audio-matrix-quick-settings@ilyaandreev05
 Then log out of GNOME and log back in so the updated Shell integration and session-managed Audio Matrix engine are loaded. If GNOME does not yet recognize a newly installed extension, log in again before enabling it. A manually launched Audio Matrix process must also be closed and reopened to load the new Java code. The user performs all installation, enablement, application restart, and session steps manually; building the archive performs none of them.
 
 The repository's GitHub Actions workflow is manual (`workflow_dispatch`) only: it has no automatic `push` or `pull_request` trigger.
+
+## Диагностика тихого или пропавшего звука: скрытый ALSA-мьют
+
+Если общая громкость GNOME/PipeWire показывает 100%, а звук тихий или отсутствует, слайдер — не последний слой. На Realtek ALC1220 (в этом ПК — card 2) есть отдельные аппаратные регуляторы, которых нет в GNOME Sound:
+
+- `Auto-Mute Mode` может глушить выход при детекции переднего джека;
+- `Headphone` — отдельный усилитель/мьют. При `0%`/`off` сигнал не проходит, даже если `Master`, `PCM`, `Front` и `Surround` стоят на 100%.
+
+Проверка и восстановление:
+
+```bash
+amixer -c 2 sget 'Auto-Mute Mode'
+amixer -c 2 sget Headphone
+amixer -c 2 sset 'Auto-Mute Mode' Disabled
+amixer -c 2 sset Headphone 100% unmute
+amixer -c 2 sset Front 100% unmute
+amixer -c 2 sset Surround 100% unmute
+```
+
+После этого даже низкая общая громкость (например, 22%) уже слышна. Если вернуть `Headphone` в `0%`/`off`, звук снова пропадёт, сколько бы ни было на общем слайдере.
+
+На этом ПК `Headphone` влияет на выход вибродинамика, хотя в GNOME может быть выбран «Линейный выход». Порт `analog-output-headphones` при этом может отображаться как недоступный — это не отменяет влияние `Headphone`.
+
+Важно:
+
+- после запуска Audio Matrix/Event Sound Studio, смены профиля карты или переподключения джека проверять `Headphone` снова: он может сброситься;
+- не лечить это цифровым усилением больше 1.0 — полная шкала уже достигнута, дальше только клиппинг;
+- для прямой проверки в обход Audio Matrix использовать `pw-play --target alsa_output.pci-0000_0b_00.3.analog-surround-40 --volume 1.0 <файл.wav>`; запись monitor sink показывает сигнал до аппаратного регулятора и не доказывает наличие звука на аналоговом выходе.
