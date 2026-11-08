@@ -45,7 +45,9 @@ export default class AudioMatrixStateRenderScheduler {
         }
         callback(value);
         const entry = {value, callback, dirty: false, timer: 0};
-        entry.timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 40, () => {
+        // Keep live updates, but leave the engine enough time to apply and
+        // publish one level before the next slider step arrives.
+        entry.timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
             if (!entry.dirty) {
                 this._sliderTimers.delete(key);
                 return GLib.SOURCE_REMOVE;

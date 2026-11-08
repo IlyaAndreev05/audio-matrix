@@ -10,6 +10,7 @@ import io.github.ilyaandreev05.audiomatrix.graph.GainNode;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphCodec;
 import io.github.ilyaandreev05.audiomatrix.graph.GraphNode;
 import io.github.ilyaandreev05.audiomatrix.graph.SourceNode;
+import io.github.ilyaandreev05.audiomatrix.gnome.GnomeOutputState;
 
 import java.util.List;
 import java.util.Map;
@@ -132,7 +133,9 @@ final class GnomeGraphNodeTargetResolver {
                     target.instanceKey(), null, instance, gain, binding, "", source.selector());
         }
         if (binding.containsKey("deviceId")) {
-            String bindingId = GnomeGraphNodeDeviceResolver.deviceId(String.valueOf(binding.get("deviceId")));
+            String bindingId = savedDeviceId(config, sinks, binding);
+            if (bindingId == null)
+                bindingId = GnomeGraphNodeDeviceResolver.deviceId(String.valueOf(binding.get("deviceId")));
             GraphNodeCommand.deviceBinding(config, bindingId);
             return new ResolvedTarget(Kind.GENERATED_DEVICE, target.routeId(), target.nodeId(),
                     target.instanceKey(), null, instance, gain, binding, bindingId, "");
@@ -180,6 +183,25 @@ final class GnomeGraphNodeTargetResolver {
         Map<String, Object> rule = GnomeApplicationRuleResolver.find(config, selector, parentBinding);
         if (rule == null || !expectedRuleId.equals(text(rule.get("id"))))
             throw new IllegalArgumentException("Generated tab parent application rule is stale");
+    }
+
+    private static String savedDeviceId(Map<String, Object> config, List<AudioNode> sinks,
+                                       Map<String, Object> binding) {
+        if (!(binding.get("nodeId") instanceof Number rawNodeId)) return null;
+        int nodeId = rawNodeId.intValue();
+        List<Map<String, Object>> devices = maps(config.get("devices"));
+        for (Map<String, Object> device : devices) {
+            String id = text(device.get("id"));
+            if (id.isBlank()) continue;
+            AudioNode resolved = GnomeOutputState.resolve(sinks, "device:" + id, devices);
+            if (resolved != null && resolved.id() == nodeId) return id;
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> maps(Object value) {
+        return value instanceof List<?> list ? (List<Map<String, Object>>) list : List.of();
     }
 
     private static String text(Object value) {

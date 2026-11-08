@@ -42,10 +42,20 @@ export function hasAvailableMenuState(snapshot) {
     return Boolean(snapshot?.available && snapshot?.state);
 }
 
+function rootOutputFor(state, pin) {
+    const output = pin.output;
+    if (!output || pin.sharedGain) return null;
+    const id = output.commandId || output.id;
+    if (!id) return null;
+    return (state.root?.outputs || state.outputs || []).find(item =>
+        String(item.id) === String(id) || String(item.nodeName) === String(id)) || null;
+}
+
 export function menuLevelRows(state) {
     const rows = new Map();
     const visit = pin => {
-        const level = pin.sourceGain || pin.sharedGain || pin.gain || pin.output;
+        const level = pin.sourceGain || pin.sharedGain || rootOutputFor(state, pin)
+            || pin.gain || pin.output;
         const parentId = `pin-level:${pin.id}`;
         if (level) rows.set(parentId, level);
         for (const app of pin.applications || []) {

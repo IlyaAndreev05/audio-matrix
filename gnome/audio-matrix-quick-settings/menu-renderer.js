@@ -66,7 +66,7 @@ export default class AudioMatrixMenuRenderer {
                 const row = this._rows.addLevelRow(options, target);
                 this._levelRows.set(String(options.id), row);
                 return row;
-            }, outputIcon, send});
+            }, outputIcon, send, getState: () => this._getSnapshot()});
         this._pinnedControls = new AudioMatrixPinnedControls({rows: this._rows, links: this._links, send,
             disclosures: this._disclosures,
             registerLevelRow: (id, row) => this._levelRows.set(id, row)});
